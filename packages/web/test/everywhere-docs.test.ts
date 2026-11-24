@@ -536,54 +536,35 @@ describe("the owner's go-live guides", () => {
     )
     expect(text.includes("With Vector Local on, the computer declines jobs.")).toBe(guarded)
     expect(page.includes("When the guard goes, say what Vector Local must")).toBe(guarded)
-    // Set it up's step 3 maps repositories, which production cannot do while these gates are named: whoever closes them
-    // rewrites the step with the guides.
-    const port = TRACKERS.every((platform) =>
-      section(guide(platform), "Before you start").includes("production repository port"),
-    )
-    const mapping = (["linear", "jira"] as const).every((platform) =>
-      section(guide(platform), "Before you start").includes("cannot be mapped"),
-    )
-    expect(
-      page.includes(
-        'Rewrite step 3 of "Set it up" when the production repository port and the Linear and Jira mapping route land.',
-      ),
-    ).toBe(port && mapping)
+    expect(text).toContain("Linear team ID")
+    expect(text).toContain("Jira key")
+    expect(text).toContain("Add repository")
     for (const platform of TRACKERS) {
       const before = section(guide(platform), "Before you start")
-      expect({ platform, port: before.includes("production repository port"), pub8: before.includes("PUB-8") }).toEqual(
-        {
-          platform,
-          port: true,
-          pub8: true,
-        },
-      )
+      expect(before).toContain("verified GitHub binding")
+      expect(before).toContain("PUB-8")
     }
     for (const platform of ["linear", "jira"] as const) {
       const before = section(guide(platform), "Before you start")
-      expect({
-        platform,
-        mapping: before.includes("cannot be mapped"),
-        summary: before.includes("`privateResult`"),
-      }).toEqual({ platform, mapping: true, summary: true })
+      expect(before).toContain(platform === "linear" ? "Linear team ID" : "Jira project key")
+      expect(before).toContain("Add repository")
+      expect(before).toContain("`privateResult`")
     }
-    // Wording that promises routes not built is a gate exactly while it is there.
-    for (const platform of ["slack", "linear"] as const)
-      expect({
-        platform,
-        gate: section(guide(platform), "Before you start").includes("(or in GitHub Actions)"),
-      }).toEqual({
-        platform,
-        gate: renderHelp(platform).includes("GitHub Actions"),
-      })
+  })
+
+  test("keep dormant execution routes out of platform help and listing copy", async () => {
+    for (const platform of TRACKERS) {
+      expect(renderHelp(platform)).not.toMatch(/GitHub Actions|opens a draft pull request/i)
+      expect(renderHelp(platform)).toContain("mapped repository")
+    }
+    expect(renderHelp("github")).toContain("configured Vector workflow")
+    expect(renderHelp("github")).not.toContain("run on their computer")
     const manifest = (await Bun.file(path.join(root, "integrations/slack/manifest.json")).json()) as {
       display_information: { description: string }
       features: { agent_view: { agent_description: string } }
     }
-    const promises = /runner/i.test(
-      manifest.display_information.description + manifest.features.agent_view.agent_description,
-    )
-    expect(section(guide("slack"), "Before you start").includes("GitHub runner")).toBe(promises)
+    expect(manifest.display_information.description).not.toMatch(/GitHub|runner|draft pull request/i)
+    expect(manifest.features.agent_view.agent_description).not.toMatch(/GitHub|runner|draft pull request/i)
   })
 
   test("list the legal and privacy texts the owner provides, and draft none", () => {

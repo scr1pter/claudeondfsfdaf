@@ -18,7 +18,6 @@ These gates are in the code or with the lead, not yours. Check that each one is 
 - The decisions are the ones you confirmed on 2026-11-11 (spec §10): Q5 (Slack reads a mention's thread once), Q13 (GitHub laptop-first only if @vector agrees) and Q14 (a platform goes live when its own steps are met).
 - The platform facts here were last read on 2026-11-12 (VE-11 to VE-13); re-read the current platform pages when you register.
 - Laptop-first waits for @vector's R-A6 (the route job's `id-token: write` and the `laptopFirst` option) and for your Q13 decision. R-A5, the OIDC handoff audience and its verifier, is built (EV-31). Until R-A6, the handoff answers 501 `HANDOFF_UNAVAILABLE` with the flag off, 404 `EVERYWHERE_OFF` with it on but `github` unlisted, and `{handled: false}` once `github` is listed.
-- The GitHub `help` line in `renderHelp` (`packages/schema/src/everywhere-policy.ts`) says the binder's mentions can run on their computer. That wording changes before anyone sees it, unless laptop-first ships first.
 
 ## Keys (once, for every platform)
 

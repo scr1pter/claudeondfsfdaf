@@ -5,6 +5,7 @@ import {
   installationPlatform,
   isPlatform,
   isRepositoryName,
+  isTrackerPlace,
   type PlatformId,
 } from "../../../packages/schema/src/everywhere.js"
 import { EVERYWHERE_PAGE, PLATFORM_NAMES } from "../../../packages/schema/src/everywhere-policy.js"
@@ -14,6 +15,7 @@ import { accountGuards, authorizedCommands, authorizedScript, authorityChanged, 
 import type { EverywhereConfig } from "./config.js"
 import { open, openJson, seal, sealJson, type DataKey } from "./crypto.js"
 import { platformFetch, readPlatformJson } from "./fetch.js"
+import type { Ports } from "./ports.js"
 import { KEEP_MS, USER_ID_PATTERNS, everywhereKeys, userIdValid } from "./keys.js"
 import { hmacSha256Hex, sha256Hex } from "./signature.js"
 import {
@@ -1228,6 +1230,7 @@ export type MappingVerdict =
         | "not-connector"
         | "not-linked"
         | "not-allowed"
+        | "repository-unverified"
         | "wrong-platform"
         | "bot"
         | "automation"
@@ -1316,6 +1319,62 @@ export async function setMapping(
   return { ok: true, mapping }
 }
 
+/** Add one verified repository to a tracker place using the connector's own binding. */
+export async function addTrackerRepository(
+  ctx: IdentityContext,
+  input: {
+    readonly account: string
+    readonly installation: string
+    readonly place: string
+    readonly fullName: string
+    readonly verifyRepository: NonNullable<Ports["repository"]>
+  },
+): Promise<MappingVerdict> {
+  const account = accountId(input.account)
+  const platform = platformOf(input.installation)
+  const { installation, place, fullName } = input
+  if (!isTrackerPlace(platform, place)) invalid("Enter the Linear team ID or Jira key.")
+  if (!isRepositoryName(fullName)) invalid("Name the repository as owner/name.")
+  const install = await readInstallSnapshot(ctx.store, installation)
+  if (!install) return { ok: false, code: "not-connected" }
+  if (install.record.connector !== account) return { ok: false, code: "not-connector" }
+  const previous = await readMappingSnapshot(ctx.store, installation, place)
+  const repositories = [...(previous?.record.repositories ?? [])]
+  const name = fullName.toLowerCase()
+  const namedIndex = repositories.findIndex((repo) => repo.fullName.toLowerCase() === name)
+  const id = repositories[namedIndex]?.id
+  await checkInstallAuthority(ctx, installation, install)
+
+  const verified = await input.verifyRepository({ account, fullName, id })
+  if (
+    !verified ||
+    !isRepositoryName(verified.fullName) ||
+    verified.fullName.toLowerCase() !== name ||
+    !Number.isSafeInteger(verified.id) ||
+    verified.id <= 0 ||
+    (id !== undefined && id !== verified.id)
+  )
+    return { ok: false, code: "repository-unverified" }
+  const index = namedIndex >= 0 ? namedIndex : repositories.findIndex((repo) => repo.id === verified.id)
+  const entry = { id: verified.id, fullName: verified.fullName }
+  if (index < 0) {
+    if (repositories.length >= MAX_MAPPED_REPOSITORIES) invalid("Choose at most 20 repositories for this place.")
+    repositories.push(entry)
+  } else {
+    repositories[index] = entry
+  }
+  const mapping: RepoMapping = {
+    revision: randomBytes(16).toString("base64url"),
+    place,
+    repositories,
+    setBy: account,
+    private: previous?.record.private ?? false,
+    setAt: ctx.now,
+  }
+  await writeMapping(ctx, installation, mapping, install.raw, previous?.raw)
+  return { ok: true, mapping }
+}
+
 /**
  * Sets a Slack channel's repository from the `@Vector repo owner/name` word (3.8: "set by the connector (or an allowed
  * requester)"). Slack only: a Linear team's or a Jira project's mapping is set on vectordev.ai by the connector
@@ -1333,6 +1392,7 @@ export async function setMappingByWord(
     readonly userId: string
     readonly actor: LinkActor
     readonly repository: RepoRef
+    readonly verifyRepository?: (account: string) => Promise<RepoRef | undefined>
     /** Whether a Vector account may sponsor runs (the intake's perk check, VE-06). */
     readonly maySponsor: (account: string) => boolean | Promise<boolean>
   },
@@ -1340,8 +1400,8 @@ export async function setMappingByWord(
   if (platformOf(input.installation) !== "slack") return { ok: false, code: "wrong-platform" }
   const place = checkPlace(input.place)
   const userId = checkUser(input.installation, input.userId)
-  const repositories = checkRepositories([input.repository])
-  if (!repositories || repositories.some((repository) => repository.id === undefined)) return { ok: false, code: "not-allowed" }
+  let repositories = checkRepositories([input.repository])
+  if (!repositories || (!input.verifyRepository && repositories[0]?.id === undefined)) return { ok: false, code: "not-allowed" }
   const refusal = actorRefusal(input.actor)
   if (refusal) return { ok: false, code: refusal }
   const install = await readInstallSnapshot(ctx.store, input.installation)
@@ -1354,6 +1414,15 @@ export async function setMappingByWord(
   if ((await input.maySponsor(link.record.account)) !== true) return { ok: false, code: "not-allowed" }
   if (existing && existing.setBy === install.record.connector && link.record.account !== install.record.connector)
     return { ok: false, code: "not-connector" }
+  if (input.verifyRepository) {
+    await checkAccount(ctx, link.record.account)
+    await checkAccount(ctx, install.record.connector)
+    const verified = await input.verifyRepository(link.record.account)
+    repositories = checkRepositories([verified])
+    if (!repositories || repositories[0]?.id === undefined ||
+      repositories[0].fullName.toLowerCase() !== input.repository.fullName.toLowerCase())
+      return { ok: false, code: "repository-unverified" }
+  }
   const mapping: RepoMapping = {
     revision: randomBytes(16).toString("base64url"),
     place,

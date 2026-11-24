@@ -1,6 +1,6 @@
 import { readConfig, type EverywhereConfig } from "./config.js"
 import { codiumAccountAuthority } from "./adapters/account.js"
-import { createCloudPorts, createHandoffBinding, createHandoffVerifier } from "./adapters/cloud-agents.js"
+import { createCloudPorts, createHandoffBinding, createHandoffVerifier, createRepositoryPort } from "./adapters/cloud-agents.js"
 import { createRemotePorts } from "./adapters/remote.js"
 import { createJobEvents } from "./events.js"
 import type { JobsContext } from "./jobs.js"
@@ -18,13 +18,14 @@ import { everywhereStore } from "./store.js"
  * Unwired services remain unavailable; account guards use the actual deletion key. With the feature off this is
  * safePorts exactly, with no new read. With it on, binding, visibility and cloudSource are @vector's (VE-30a,
  * adapters/cloud-agents.ts), but there is still no prepareCloud, so routing reads neither: it needs an enabled platform
- * source (R-C8/R-A8, the owner's) and EV-30's live mode read. The laptop route's presence, offer and plan check (VE-20,
- * adapters/remote.ts) join only once offers can be signed too. Every port is a closure, so building them does no I/O.
+ * source (R-C8/R-A8, the owner's) and EV-30's live mode read. Repository verification uses the sponsor's own binding.
+ * The laptop route's presence, offer and plan check (VE-20, adapters/remote.ts) join once offers can be signed.
+ * Building the ports does no I/O.
  */
 export function productionPorts(config: EverywhereConfig = readConfig(), fetcher?: typeof fetch) {
   const ports = { ...safePorts(config), accountAuthority: codiumAccountAuthority }
   if (!config.enabled) return ports
-  const cloud = { ...ports, ...createCloudPorts() }
+  const cloud = { ...ports, ...createCloudPorts(), repository: createRepositoryPort() }
   if (!config.offer) return cloud
   return { ...cloud, ...createRemotePorts({ config, fetcher }) }
 }

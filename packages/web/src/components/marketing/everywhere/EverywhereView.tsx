@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
-import { useState } from "react"
+import { Everywhere } from "@vectordevai/schema/everywhere"
+import { useId, useState } from "react"
 import {
   EVERYWHERE_COPY,
   PLATFORM_NAMES,
@@ -286,6 +287,13 @@ function JobRow(props: { readonly job: EverywhereJob }) {
           {copy.ending} <code>{job.ending}</code>
         </p>
       )}
+      {job.threadUrl && job.threadUrl !== job.prUrl && (
+        <p className="acct-fine">
+          <a href={job.threadUrl} rel="noopener noreferrer">
+            {copy.githubThread}
+          </a>
+        </p>
+      )}
       {job.prUrl && (
         <p className="acct-fine">
           <a href={job.prUrl} rel="noopener noreferrer">
@@ -551,6 +559,10 @@ function MappingsSection(props: SectionProps) {
   const mapped = open.filter((install) => (state.mappings[install.installation] ?? []).length > 0)
   // A connection whose read failed is named, so "no place" is said only when every read answered.
   const unread = open.filter((install) => state.unread.includes(install.installation))
+  const readable = open.filter(
+    (install) => !state.unread.includes(install.installation) && (install.platform !== "slack" || mapped.includes(install)),
+  )
+  const hasTracker = readable.some((install) => install.platform === "linear" || install.platform === "jira")
   return (
     <section className="acct-section">
       <h2>{EVERYWHERE_COPY.mappingsHeading}</h2>
@@ -561,25 +573,82 @@ function MappingsSection(props: SectionProps) {
           <p className="acct-fine">{EVERYWHERE_COPY.mappingsUnread}</p>
         </div>
       ))}
-      {mapped.map((install) => (
-        <div className="everywhere-group" key={install.installation}>
-          <h3>{installationLabel(install.installation)}</h3>
-          <ul className="everywhere-list">
-            {(state.mappings[install.installation] ?? []).map((mapping) => (
-              <li key={mapping.place}>
-                <MappingRow install={install} mapping={mapping} state={state} model={props.model} />
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+      {hasTracker && <p className="acct-fine">{EVERYWHERE_COPY.trackerMappingHint}</p>}
+      {readable.map((install) => {
+        const mappings = state.mappings[install.installation] ?? []
+        return (
+          <div className="everywhere-group" key={install.installation}>
+            <h3>{installationLabel(install.installation)}</h3>
+            {mappings.length > 0 && (
+              <ul className="everywhere-list">
+                {mappings.map((mapping) => (
+                  <li key={mapping.place}>
+                    <MappingRow install={install} mapping={mapping} state={state} model={props.model} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(install.platform === "linear" || install.platform === "jira") && (
+              <TrackerRepositoryControls install={install} state={state} model={props.model} />
+            )}
+          </div>
+        )
+      })}
       {open.some((install) => install.platform === "slack") && (
         <p className="acct-fine">{EVERYWHERE_COPY.slackMappingHint}</p>
       )}
-      {open.some((install) => install.platform !== "slack") && (
-        <p className="acct-fine">{EVERYWHERE_COPY.trackerMappingHint}</p>
-      )}
     </section>
+  )
+}
+
+function TrackerRepositoryControls(props: { readonly install: EverywhereInstall } & SectionProps) {
+  const fieldId = useId()
+  const [place, setPlace] = useState("")
+  const [repository, setRepository] = useState("")
+  const platform = props.install.platform
+  const linear = platform === "linear"
+  const valid = Everywhere.isTrackerPlace(platform, place.trim()) && Everywhere.isRepositoryName(repository.trim())
+  return (
+    <div className="everywhere-field">
+      <label htmlFor={`${fieldId}-place`}>{linear ? EVERYWHERE_COPY.linearTeamId : EVERYWHERE_COPY.jiraProjectKey}</label>
+      <div className="everywhere-field-row">
+        <input
+          id={`${fieldId}-place`}
+          maxLength={linear ? 36 : 10}
+          autoComplete="off"
+          spellCheck={false}
+          disabled={props.state.busy}
+          value={place}
+          onChange={(event) => setPlace(event.target.value)}
+        />
+      </div>
+      <label htmlFor={`${fieldId}-repository`}>{EVERYWHERE_COPY.githubRepository}</label>
+      <div className="everywhere-field-row">
+        <input
+          id={`${fieldId}-repository`}
+          placeholder="owner/name"
+          maxLength={140}
+          autoComplete="off"
+          spellCheck={false}
+          disabled={props.state.busy}
+          value={repository}
+          onChange={(event) => setRepository(event.target.value)}
+        />
+        <button
+          className="acct-button acct-button-secondary"
+          type="button"
+          disabled={props.state.busy || !valid}
+          onClick={() => {
+            void props.model.addTrackerRepository(props.install.installation, place, repository).then(() => {
+              const state = props.model.state()
+              if (state.kind === "ready" && state.notice === "saved") setRepository("")
+            })
+          }}
+        >
+          {EVERYWHERE_COPY.addRepository}
+        </button>
+      </div>
+    </div>
   )
 }
 
