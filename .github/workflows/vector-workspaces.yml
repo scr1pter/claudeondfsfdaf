@@ -104,6 +104,9 @@ jobs:
       - name: Typecheck hosted API
         working-directory: packages/engine
         run: bun typecheck --project ../../tsconfig.json
+      - name: Typecheck workspace gateway tests
+        working-directory: packages/cloud-workspaces
+        run: bun typecheck --project tsconfig.gateway-tests.json
       - name: Build the actual website and retain its public workspace route
         run: bun --cwd packages/web build && node script/prune-vector-site.mjs
       - name: Install the isolated browser fixture
