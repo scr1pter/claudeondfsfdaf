@@ -57,7 +57,6 @@ import {
 } from "../../../packages/schema/src/everywhere"
 import { ENDINGS, WITHHELD } from "../../../packages/schema/src/everywhere-policy"
 import { githubAppFixture } from "./github-app-fixture"
-import { bindingFields, bindingStore } from "./lib/everywhere-cloud-agents"
 import {
   AUDIT_LIMIT,
   EVERYWHERE_AUDIT_CODES,
@@ -109,7 +108,7 @@ import {
   type TestAccount,
 } from "./lib/everywhere-account"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
-import { BINDING_KEY, bindingFields } from "./lib/everywhere-cloud-agents"
+import { BINDING_KEY, bindingFields, bindingStore } from "./lib/everywhere-cloud-agents"
 import { seedJobAuthority } from "./lib/everywhere-job-authority"
 import { FakeLinear } from "./lib/everywhere-linear"
 import { FakeSlack } from "./lib/everywhere-slack"
