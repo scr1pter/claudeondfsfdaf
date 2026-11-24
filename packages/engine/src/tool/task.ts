@@ -12,6 +12,7 @@ import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+import { ReviewMcp } from "@/review/mcp"
 import { Permission } from "@/permission"
 import {
   GENERAL_SUBAGENT,
@@ -2414,10 +2415,12 @@ export const TaskTool = Tool.define(
           Effect.map((result) => ({ title: result.title, metadata: result.metadata, output: result.output })),
           Effect.scoped,
           (effect) =>
-            sessions.get(ctx.sessionID).pipe(
-              Effect.orDie,
-              Effect.andThen(() => TaskPlace.within(ctx.sessionID)(effect)),
-            ),
+            Effect.gen(function* () {
+              if (yield* ReviewMcp.blocked) throw new Error(ReviewMcp.unavailable)
+              const session = yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)
+              if (yield* ReviewMcp.restrictedFamily(session, sessions.get)) throw new Error(ReviewMcp.unavailable)
+              return yield* TaskPlace.within(ctx.sessionID)(effect)
+            }),
           Effect.orDie,
         ),
     }

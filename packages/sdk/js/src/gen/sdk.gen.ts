@@ -588,6 +588,21 @@ import type {
   QuestionReplyData,
   QuestionReplyErrors,
   QuestionReplyResponses,
+  ReviewFixCancelData,
+  ReviewFixCancelErrors,
+  ReviewFixCancelResponses,
+  ReviewFixExecuteData,
+  ReviewFixExecuteErrors,
+  ReviewFixExecuteResponses,
+  ReviewFixListData,
+  ReviewFixListErrors,
+  ReviewFixListResponses,
+  ReviewFixPrepareData,
+  ReviewFixPrepareErrors,
+  ReviewFixPrepareResponses,
+  ReviewFixPreviewData,
+  ReviewFixPreviewErrors,
+  ReviewFixPreviewResponses,
   ReviewGetData,
   ReviewGetErrors,
   ReviewGetResponses,
@@ -4237,6 +4252,80 @@ export class Question extends HeyApiClient {
   }
 }
 
+export class Fix extends HeyApiClient {
+  /**
+   * List the conversation's open fixes
+   *
+   * Owner-only and experimental. The fixes this engine holds for the conversation, for reconnection.
+   */
+  public list<ThrowOnError extends boolean = false>(options: Options<ReviewFixListData, ThrowOnError>) {
+    return (options.client ?? this.client).get<ReviewFixListResponses, ReviewFixListErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix",
+      ...options,
+    })
+  }
+
+  /**
+   * Prepare a local fix
+   *
+   * Owner-only and experimental. Places a fix checkout detached at the conversation branch's exact head and re-verifies every file of the client's patch. The engine does not verify the findings the fix names. Nothing is applied, committed or pushed and no command runs.
+   */
+  public prepare<ThrowOnError extends boolean = false>(options: Options<ReviewFixPrepareData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewFixPrepareResponses, ReviewFixPrepareErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Offer one fix step
+   *
+   * Owner-only and experimental. Builds the exact apply, checks, commit or push operation and a single-use approval offer bound to the owner, the head, the patch digest and the operation, expiring after five minutes. Nothing runs.
+   */
+  public preview<ThrowOnError extends boolean = false>(options: Options<ReviewFixPreviewData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewFixPreviewResponses, ReviewFixPreviewErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix/{fixID}/preview",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Approve and run one offered fix step
+   *
+   * Owner-only and experimental. Approves exactly the offered step, spending its offer, and runs it once after the executor re-verifies the head and files.
+   */
+  public execute<ThrowOnError extends boolean = false>(options: Options<ReviewFixExecuteData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewFixExecuteResponses, ReviewFixExecuteErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix/{fixID}/execute",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    })
+  }
+
+  /**
+   * Cancel a local fix
+   *
+   * Owner-only. Stops a running check or push and removes the fix checkout; a commit on its new branch is kept.
+   */
+  public cancel<ThrowOnError extends boolean = false>(options: Options<ReviewFixCancelData, ThrowOnError>) {
+    return (options.client ?? this.client).post<ReviewFixCancelResponses, ReviewFixCancelErrors, ThrowOnError>({
+      url: "/experimental/session/{sessionID}/review/fix/{fixID}/cancel",
+      ...options,
+    })
+  }
+}
+
 export class Review2 extends HeyApiClient {
   /**
    * Read the local review target
@@ -4300,6 +4389,11 @@ export class Review2 extends HeyApiClient {
       url: "/experimental/session/{sessionID}/review/{runID}/stop",
       ...options,
     })
+  }
+
+  private _fix?: Fix
+  get fix(): Fix {
+    return (this._fix ??= new Fix({ client: this.client }))
   }
 }
 

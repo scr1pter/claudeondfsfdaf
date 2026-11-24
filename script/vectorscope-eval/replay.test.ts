@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { ReviewClient, ReviewMessage, ReviewModel } from "../../packages/app/src/features/pull-requests/ai-review"
-import { parseReviewConfig } from "../../packages/core/src/review/config"
+import { mergeReviewConfig, parseReviewConfig } from "../../packages/core/src/review/config"
 import { estimateDispatch } from "../../packages/core/src/review/dispatch"
 import { findingKey, VARIANT_KEYS, VARIANT_NAME, type SliceUtilisation } from "../../packages/core/src/review/eval"
 import { TOKEN_KINDS } from "../../packages/core/src/review/eval-report"
@@ -19,7 +19,7 @@ import type {
   ReplayVariant,
   VariantRecord,
 } from "../../packages/engine/src/review/eval"
-import { candidateDiff, desktopReplay, withReviewSettings } from "./desktop"
+import { candidateDiff, desktopReplay, withReviewSettings, type DesktopReplayInput } from "./desktop"
 import {
   ADAPTERS,
   admitReplay,
@@ -317,8 +317,10 @@ describe("replay admission", () => {
     const ledger = Ledger.open({ limits })
     const before = ledger.entries.length
     for (const [variant, detail] of [
-      ["engine:trivial-skip", "registered for VS-24 wiring, which has not landed"],
+      ["desktop:impact-graph", "registered for VS-25's desktop half, after VS-10, which has not landed"],
       ["desktop:cross-family", "registered for VS-29a's desktop half, after VS-10, which has not landed"],
+      ["engine:verify-isolated", "registered for VS-44c wiring (R3), which has not landed"],
+      ["desktop:verify-isolated", "registered for VS-27 desktop guardrail, which has not landed"],
       ["engine:verify", "not a registered variant"],
       ["engine:shared-verify=test/review", "is not a variant name"],
       ["desktop:shared-verify", "admitReplay admits engine replays"],
@@ -449,6 +451,8 @@ describe("the variant registry", () => {
       "engine:verify-cert",
       "engine:explore-slice",
       "engine:receipt-json",
+      // Addendum B §1.10's (VS-44c).
+      "engine:verify-isolated",
     ])
     for (const adapter of ["engine", "desktop"] as const)
       for (const name of variantNames(adapter)) {
@@ -495,7 +499,20 @@ describe("the variant registry", () => {
     expect(built.map((item) => item.name)).toEqual([
       "engine:shared-verify",
       "desktop:shared-verify",
+      "engine:privacy-zdr",
+      "engine:trivial-skip",
+      "engine:impact-graph",
+      "engine:cards-brain",
+      "engine:guardrail-strict",
+      "engine:depth-auto",
+      "engine:lenses-high",
       "engine:cross-family",
+      "engine:holdback-secrets",
+      "desktop:holdback-secrets",
+      "engine:scope-introduced",
+      "engine:rule-strict",
+      "desktop:rule-strict",
+      "engine:verify-cert",
     ])
     for (const item of built) {
       const keys = Object.keys(item.entry.keys ?? {})
@@ -509,7 +526,7 @@ describe("the variant registry", () => {
         return "pending" in half ? [{ name: `${adapter}:${suffix}`, package: half.pending }] : []
       }),
     )
-    expect(pending).toHaveLength(2 * entries.length - 3)
+    expect(pending).toHaveLength(2 * entries.length - built.length)
     for (const item of pending)
       expect(resolveVariant(item.name)).toEqual({
         ok: false,
@@ -523,38 +540,38 @@ describe("the variant registry", () => {
         pending.filter((item) => item.name.startsWith("engine:")).map((item) => [item.name, item.package]),
       ),
     ).toEqual({
-      "engine:privacy-zdr": "VS-23c",
-      "engine:trivial-skip": "VS-24 wiring",
-      "engine:impact-graph": "VS-25b wiring",
-      "engine:cards-brain": "VS-26",
-      "engine:guardrail-strict": "VS-27c",
-      "engine:depth-auto": "VS-28 wiring",
-      "engine:lenses-high": "VS-28 wiring",
       "engine:precise": "VS-31",
-      "engine:holdback-secrets": "VS-34 wiring",
       "engine:team-guarded": "VS-35 wiring",
-      "engine:scope-introduced": "VS-42 wiring",
-      "engine:rule-strict": "VS-43 wiring",
-      "engine:verify-cert": "VS-44 wiring",
       "engine:explore-slice": "VS-49 wiring",
       "engine:receipt-json": "VS-47 runner wiring",
+      "engine:verify-isolated": "VS-44c wiring (R3)",
     })
-    // Addendum A's entries are pending on both runners and set no key yet, and an addendum name whose package has not
-    // begun here is still unknown.
-    for (const suffix of [
-      "holdback-secrets",
-      "team-guarded",
-      "scope-introduced",
-      "rule-strict",
-      "verify-cert",
-      "explore-slice",
-      "receipt-json",
-    ] as const) {
+    // Addendum A's and B's entries but holdback-secrets are pending on both runners and set no key yet, and an addendum
+    // name whose package has not begun here is still unknown.
+    for (const suffix of ["team-guarded", "explore-slice", "receipt-json", "verify-isolated"] as const) {
       const entry: VariantEntry = VARIANTS[suffix]
       expect(Object.hasOwn(entry, "keys") || Object.hasOwn(entry, "models")).toBe(false)
       expect(resolveVariant(`desktop:${suffix}`)).toMatchObject({ ok: false, reason: "pending" })
     }
+    expect(resolveVariant("desktop:verify-cert")).toMatchObject({ ok: false, reason: "pending" })
+    expect(variantRecord("engine:verify-cert")).toMatchObject({
+      record: { name: "engine:verify-cert", keys: { guardrail: "strict", verifyEvidence: "certificate" } },
+    })
+    expect(variantRecord("engine:depth-auto")).toMatchObject({
+      record: { name: "engine:depth-auto", keys: { depth: "auto" } },
+    })
+    expect(variantRecord("engine:lenses-high")).toMatchObject({
+      record: { name: "engine:lenses-high", keys: { depth: "auto", lenses: "high" } },
+    })
+    expect(resolveVariant("desktop:lenses-high")).toMatchObject({ ok: false, reason: "pending" })
+    expect(resolveVariant("desktop:depth-auto")).toMatchObject({ ok: false, reason: "pending" })
+    expect(variantRecord("engine:scope-introduced")).toMatchObject({
+      record: { name: "engine:scope-introduced", keys: { guardrail: "strict", scopeGate: "introduced" } },
+    })
+    expect(resolveVariant("desktop:scope-introduced")).toMatchObject({ ok: false, reason: "pending" })
     expect(resolveVariant("engine:rereview-focused")).toMatchObject({ ok: false, reason: "unknown" })
+    // VS-44c's desktop half is a documented difference until VS-27's desktop guardrail.
+    expect(pending).toContainEqual({ name: "desktop:verify-isolated", package: "VS-27 desktop guardrail" })
     // The cross-family pair is made by its models, never by a key. Its engine half is built (VS-29a); its desktop half
     // waits for VS-10, since the desktop adapter takes one model and refuses a keyless variant.
     expect(VARIANTS["cross-family"]).toMatchObject({ models: "triage-pair" })
@@ -568,6 +585,42 @@ describe("the variant registry", () => {
       frozen: false,
     })
     expect(pending).toContainEqual({ name: "desktop:cross-family", package: "VS-29a's desktop half, after VS-10" })
+    // VS-23c (SF-12b): privacy-zdr's engine half is built and raises privacy. Its desktop half is a documented
+    // difference since VS-23d (SF-15): the engine server holds the desktop's sessions, which a desktop replay through a
+    // recording client cannot show, so the desktop runner does not take the key as a variant.
+    expect(resolveVariant("engine:privacy-zdr")).toEqual({
+      ok: true,
+      name: "engine:privacy-zdr",
+      adapter: "engine",
+      keys: { privacy: "zdr" },
+      frozen: false,
+    })
+    expect(variantProblems("engine", { name: "engine:privacy-zdr", keys: { privacy: "zdr" } })).toEqual([])
+    expect(resolveVariant("desktop:privacy-zdr")).toMatchObject({
+      ok: false,
+      reason: "pending",
+      package:
+        "VS-23d: the engine server's hold on the desktop's review sessions, which only a desktop replay on an engine server can show; a documented difference",
+    })
+    expect(VARIANT_KEYS.desktop).not.toContain("privacy")
+    // VS-34 (SF-14): holdback-secrets' engine half is built and raises holdback, now that Review.run covers the prompt
+    // and the reviewer's read and grep tools; its desktop half since SF-15, with the desktop runner on the same functions.
+    expect(resolveVariant("engine:holdback-secrets")).toEqual({
+      ok: true,
+      name: "engine:holdback-secrets",
+      adapter: "engine",
+      keys: { holdback: "secrets" },
+      frozen: false,
+    })
+    expect(variantProblems("engine", { name: "engine:holdback-secrets", keys: { holdback: "secrets" } })).toEqual([])
+    expect(resolveVariant("desktop:holdback-secrets")).toEqual({
+      ok: true,
+      name: "desktop:holdback-secrets",
+      adapter: "desktop",
+      keys: { holdback: "secrets" },
+      frozen: false,
+    })
+    expect(variantProblems("desktop", { name: "desktop:holdback-secrets", keys: { holdback: "secrets" } })).toEqual([])
   })
 
   test("a variant made by its models needs the review model, then a triage model other than it (VS-29a)", () => {
@@ -631,13 +684,17 @@ describe("the variant registry", () => {
     expect(variantProblems("engine", { name: "engine", keys: {} })).toEqual([
       "its variant record names the frozen pipeline, engine, which has none",
     ])
-    expect(variantProblems("engine", { name: "engine:trivial-skip", keys: {} })[0]).toContain(
-      "registered for VS-24 wiring",
-    )
+    expect(resolveVariant("engine:trivial-skip")).toMatchObject({
+      ok: true,
+      keys: { trivial: "skip" },
+      adapter: "engine",
+    })
+    expect(resolveVariant("desktop:trivial-skip")).toMatchObject({ ok: false, reason: "pending" })
+    expect(variantProblems("engine", { name: "engine:trivial-skip", keys: {} })[0]).toContain("not the registry's")
     expect(variantProblems("engine", { name: "engine:bogus", keys: {} })[0]).toContain("not a registered variant")
-    // A pending name carrying a built variant's keys, which ReviewEval.replay would run, is still pending.
-    expect(variantProblems("engine", { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" } })[0]).toContain(
-      "engine:privacy-zdr is registered for VS-23c, which has not landed",
+    // A built name still requires its own exact settings.
+    expect(variantProblems("engine", { name: "engine:impact-graph", keys: { verifyPolicy: "shared" } })[0]).toContain(
+      "not the registry's",
     )
   })
 
@@ -840,6 +897,23 @@ describe("the desktop replay", () => {
     )
   })
 
+  test("desktop strict rule replay uses isolated trusted settings and records what ran", async () => {
+    const directory = checkoutDirectory(join(root, "desktop-rule-strict"), planned.id)
+    expect(prepareCheckout({ mirror: mirror.dir, view, directory })).toEqual([])
+    const run = async (variant?: DesktopReplayInput["variant"]) => {
+      const { client } = fakeClient(directory)
+      return desktopReplay({ planned, directory, diff: candidateDiff(directory, view), model, client, variant })
+    }
+    const plain = await run()
+    const strict = await run({ name: "desktop:rule-strict", keys: { ruleCheck: "strict" } })
+    expect(strict.error).toBeUndefined()
+    expect(strict.variant?.applied).toBe(true)
+    expect(strict.scope.prompts).not.toBe(plain.scope.prompts)
+    expect(strict.scope.policy).not.toBe(plain.scope.policy)
+    expect(strict.passes.length).toBeGreaterThan(0)
+    expect(strict.passes[0]!.digest).not.toBe(plain.passes[0]!.digest)
+  })
+
   // VS-06: the verify policy replayed as a variant, as the engine replay takes it, so both runners can be compared.
   test("replays a verify policy variant as the case's own review.json would carry it, keeping the base's verify", async () => {
     // The base sets "verify": "blocking", which the desktop's legacy rule reads as "all" and the shared policy does not.
@@ -897,6 +971,65 @@ describe("the desktop replay", () => {
       ["blocking", true],
       ["concern", false],
     ])
+  })
+
+  // VS-34's desktop half (SF-15): desktop:holdback-secrets reaches the runner as the case's review.json would carry it,
+  // and the runner holds a committed credential file back from every prompt, as the engine replay does.
+  test("replays desktop:holdback-secrets: the credential file is held back and the run says it applied", async () => {
+    const held = buildMirror(
+      join(root, "mirror-holdback"),
+      {},
+      { "deploy/.netrc": "machine a login ci password hunter2\n" },
+    )
+    const caseView = { repository: view.repository, base: held.base, head: held.head }
+    const replay = async (name: string, variant?: Pick<VariantRecord, "name" | "keys">) => {
+      const directory = checkoutDirectory(join(root, `desktop-holdback-${name}`), planned.id)
+      expect(prepareCheckout({ mirror: held.dir, view: caseView, directory })).toEqual([])
+      const fake = fakeClient(directory)
+      const artifact = await desktopReplay({
+        planned: { ...planned, case: { ...planned.case, base: held.base, head: held.head } },
+        directory,
+        diff: candidateDiff(directory, caseView),
+        model,
+        // An engine server's client also answers for the user config; a replay never asks it.
+        client: {
+          ...fake.client,
+          global: {
+            config: {
+              get: async () => {
+                throw new Error("a replay read the operator's user config")
+              },
+            },
+          },
+        },
+        ...(variant ? { variant } : {}),
+      })
+      return { artifact, prompts: fake.prompts }
+    }
+    const frozen = await replay("frozen")
+    const resolved = resolveVariant("desktop:holdback-secrets")
+    if (!resolved.ok) throw new Error(resolved.detail)
+    const secrets = await replay("secrets", { name: resolved.name, keys: resolved.keys })
+    for (const run of [frozen, secrets]) expect(run.artifact.error).toBeUndefined()
+    expect(secrets.artifact.variant).toEqual({
+      name: "desktop:holdback-secrets",
+      keys: { holdback: "secrets" },
+      applied: true,
+    })
+    expect(frozen.prompts.some((text) => text.includes("hunter2"))).toBe(true)
+    expect(secrets.prompts.some((text) => text.includes("hunter2"))).toBe(false)
+    expect(secrets.artifact.outcome?.skipped).toContainEqual({ path: "deploy/.netrc", reason: "held-back" })
+    expect(frozen.artifact.outcome?.skipped.some((file) => file.reason === "held-back")).toBe(false)
+    expect(secrets.artifact.scope).toEqual(
+      evidenceScope({
+        adapter: "desktop",
+        config: mergeReviewConfig({ surface: "local", json: { at: "working-tree", text: '{"holdback":"secrets"}' } })
+          .config,
+      }),
+    )
+    expect(secrets.artifact.scope.prompts).not.toBe(frozen.artifact.scope.prompts)
+    // The sessions' rules deny the read tool the credential files and the held path, so their digest moves.
+    expect(secrets.artifact.sessions[0]?.permission).not.toBe(frozen.artifact.sessions[0]?.permission)
   })
 
   // Phase 1 review: the wrapper used to answer every read of review.json, the changed file's own reads included.
@@ -1095,8 +1228,8 @@ describe("projection records (VS-21b)", () => {
         record({ passes: [], files: { reviewed: [], skipped: [] }, egress: { attempts: 0, outside: 0 } }),
       ),
     ).toEqual([])
-    // A pending variant's name carrying a built one's keys is the registry's problem, as in report.ts.
-    const pending = { name: "engine:privacy-zdr", keys: { verifyPolicy: "shared" as const } }
+    // A pending variant carrying a built one's keys is the registry's problem, as in report.ts.
+    const pending = { name: "engine:receipt-json", keys: { verifyPolicy: "shared" as const } }
     expect(variantProblems("engine", pending)).not.toEqual([])
     expect(projectionProblems(record({ variant: pending }))).toEqual(variantProblems("engine", pending))
   })
@@ -1384,9 +1517,19 @@ describe("the entry point's variants and the pilot's limits", () => {
       ok: false,
       detail: "desktop runs on the desktop runner; replays and projections here run the engine.",
     })
-    expect(variantRecord("engine:privacy-zdr")).toEqual({
+    expect(variantRecord("engine:impact-graph")).toEqual({
+      ok: true,
+      name: "engine:impact-graph",
+      record: { name: "engine:impact-graph", keys: { impact: "graph" } },
+    })
+    expect(variantRecord("engine:guardrail-strict")).toEqual({
+      ok: true,
+      name: "engine:guardrail-strict",
+      record: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } },
+    })
+    expect(variantRecord("desktop:guardrail-strict")).toMatchObject({
       ok: false,
-      detail: expect.stringContaining("registered for VS-23c"),
+      detail: expect.stringContaining("VS-27c"),
     })
     expect(variantRecord("not a name")).toEqual({ ok: false, detail: expect.stringContaining("is not a variant name") })
     // admitReplay keeps its own wording for a desktop name, and hands out the same record.
@@ -1858,4 +2001,10 @@ describe("slice utilisation records (VS-49)", () => {
       ],
     )
   })
+})
+
+test("SF-26 registers only the local engine Brain cards variant", () => {
+  expect(resolveVariant("engine:cards-brain")).toMatchObject({ ok: true, adapter: "engine", keys: { cards: "brain" } })
+  expect(resolveVariant("desktop:cards-brain")).toMatchObject({ ok: false, reason: "pending" })
+  expect(VARIANT_KEYS.desktop).not.toContain("cards")
 })

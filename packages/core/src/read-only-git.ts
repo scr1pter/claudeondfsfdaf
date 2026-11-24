@@ -9,6 +9,17 @@ import path from "node:path"
 import os from "node:os"
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
+import { isUtf8 } from "node:buffer"
+
+// The fixed import-line grammar shared by the private impact reader and its collector.
+export const IMPACT_IMPORT_LINE: readonly string[] = Object.freeze([
+  "(^|[^[:alnum:]_$])(import|export|from|require|require_relative|require_once|include|include_once|use|mod)([^[:alnum:]_$]|$)",
+  "(src|href)[[:space:]]*=",
+  "^[[:space:]]*([[:alnum:]_.]+[[:space:]]+)?[\"'`]",
+  "^[[:space:]]*\\)",
+  "^[[:space:]]+[[:alnum:]_]+([[:space:]]+as[[:space:]]+[[:alnum:]_]+)?[[:space:]]*,?[[:space:]]*$",
+  "@generated|DO NOT EDIT",
+])
 
 const LIMIT = {
   index: 64 * 1024 * 1024,
@@ -16,6 +27,9 @@ const LIMIT = {
   refs: 4 * 1024 * 1024,
   objects: 1024 * 1024 * 1024,
   files: 50_000,
+  show: 1024 * 1024,
+  links: 64,
+  linkBytes: 64 * 1024,
 }
 export const INTEGRITY = Object.freeze({
   addressSpace: 512 * 1024 * 1024,
@@ -511,8 +525,7 @@ async function makeCommands(
     typeof process.getuid === "function" && process.getuid() !== 0 && process.getuid() === process.geteuid?.(),
     "this host has no supported unprivileged Git verifier",
   )
-  const signal = opening.signal
-  const image = await DirectoryIdentityReader.pythonImage(opening.expires, signal)
+  const image = await DirectoryIdentityReader.pythonImage(opening.expires, opening.signal)
   requireValue(image, "the fixed Git verifier runtime is unavailable")
   try {
     opening.check()
@@ -529,6 +542,7 @@ async function makeCommands(
     directory = cwd,
     index?: string,
   ) => {
+    const signal = context.signal
     requireValue(index === undefined || path.dirname(index) === cwd, "Git's private observation index is unavailable")
     requireValue(directory === cwd || inside(cwd, directory), "Git's private working directory is unavailable")
     const expires = Math.min(context.expires, performance.now() + INTEGRITY.milliseconds)
@@ -1256,10 +1270,12 @@ export interface Repository {
   readonly head: string
   readonly branch?: string
   readonly shallow: boolean
+  /** Whether the snapshot's info/attributes or info/exclude contains potential rules. */
+  readonly hasInfoRules?: boolean
   /** Synchronous lifetime witness; false as soon as close starts. */
   readonly isOpen: () => boolean
-  readonly status: () => Promise<{ head: string; dirty: boolean }>
-  readonly read: (operation: Read) => Promise<{ code: number; bytes: Buffer }>
+  readonly status: (signal?: AbortSignal) => Promise<{ head: string; dirty: boolean }>
+  readonly read: (operation: Read, signal?: AbortSignal) => Promise<{ code: number; bytes: Buffer }>
   readonly close: () => Promise<void>
 }
 
@@ -1270,6 +1286,8 @@ export type Read =
    * the private snapshot with that prefix. It refuses when a ref has its spelling, when no object or several have the
    * prefix, and when that object peels to no commit. */
   | { readonly kind: "resolve"; readonly revision: string }
+  /** Fixed metadata of a verified commit for trusted local authorship matching. */
+  | { readonly kind: "author-commit"; readonly revision: string }
   | { readonly kind: "merge-base"; readonly left: string; readonly right: string }
   | {
       readonly kind: "diff"
@@ -1292,6 +1310,8 @@ export type Read =
   | { readonly kind: "grep"; readonly revision: string; readonly symbol: string; readonly excludes?: readonly string[] }
   | { readonly kind: "roots"; readonly revision: string }
   | { readonly kind: "history"; readonly revision: string; readonly file: string }
+  /** Up to five base commits for a literal changed path. Each row is a NUL-framed object ID, commit time and subject. */
+  | { readonly kind: "depth-history"; readonly revision: string; readonly file: string }
   | {
       readonly kind: "blame"
       readonly revision: string
@@ -1300,7 +1320,46 @@ export type Read =
       readonly last: number
     }
   | { readonly kind: "tree"; readonly revision: string; readonly file: string }
+  | { readonly kind: "impact-version" }
+  | {
+      readonly kind: "impact-tree"
+      readonly revision: string
+      readonly maxBytes: number
+      readonly namesAndIdsOnly?: true
+    }
+  | {
+      readonly kind: "impact-grep"
+      readonly revision: string
+      readonly maxBytes: number
+      readonly search:
+        | { readonly kind: "manifests"; readonly exclude: readonly string[] }
+        | { readonly kind: "symbols"; readonly names: readonly string[]; readonly exclude: readonly string[] }
+        | { readonly kind: "imports"; readonly files: readonly string[] }
+    }
+  /** Raw bytes of one regular file in an exact commit, subject to maxBytes (at most 1 MiB).
+   * A missing commit or file, another entry type, or an oversized file gives code 1 and no bytes. */
+  | {
+      readonly kind: "show"
+      readonly revision: string
+      readonly file: string
+      readonly maxBytes: number
+      readonly distinguishLarge?: true
+    }
+  /** Case-insensitive literal mentions of the path's basename without its last extension, anywhere in the commit.
+   * Code 0 means found, 1 proves absence, and 2 means unsearchable. No file contents or names are returned. */
+  | { readonly kind: "path-references"; readonly revision: string; readonly file: string }
+  /** Zero only if links and their regular destinations are unchanged between both commits and unrelated to
+   * the supplied changed paths. Ambiguous or incomplete inventories return 2 (or refuse). No output. */
+  | {
+      readonly kind: "unaliased-changes"
+      readonly from: string
+      readonly to: string
+      readonly files: readonly string[]
+    }
   | { readonly kind: "subjects"; readonly from: string; readonly to: string }
+  // VS-34 item 4: which of these work-tree paths the work tree's .gitignore files and the copied info/exclude ignore,
+  // index or not (`check-ignore --no-index`). Global excludes are /dev/null here.
+  | { readonly kind: "check-ignore"; readonly files: readonly string[] }
   /** A branch, remote-tracking branch or tag name answered like `rev-parse --verify --quiet`: its commit in the
    * private snapshot, or code 1 and no bytes when no ref of that name exists and the name cannot be an object id. */
   | { readonly kind: "reference"; readonly name: string }
@@ -1308,17 +1367,89 @@ export type Read =
    * bytes when it is unset. */
   | { readonly kind: "default-branch" }
 
-function relative(file: string) {
-  requireValue(
+/** Whether the port accepts a path as repository-relative; a caller checks before asking, as a refused read poisons. */
+export function repositoryPath(file: string) {
+  return (
     file.length > 0 &&
-      file.length <= 4096 &&
-      !/[\x00\r\n]/.test(file) &&
-      !path.isAbsolute(file) &&
-      !file.includes("\\") &&
-      file.split("/").every((part) => part && part !== "." && part !== ".." && part.toLowerCase() !== ".git"),
-    "repository-relative path is unsupported",
+    file.length <= 4096 &&
+    !/[\x00\r\n]/.test(file) &&
+    !path.isAbsolute(file) &&
+    !file.includes("\\") &&
+    file.split("/").every((part) => part && part !== "." && part !== ".." && part.toLowerCase() !== ".git")
   )
+}
+
+function relative(file: string) {
+  requireValue(repositoryPath(file), "repository-relative path is unsupported")
   return file
+}
+
+type CommitLink = { oid: string; text: string; target: string; entry: string }
+
+// Resolve against exact entries in the captured tree. In particular, "dir/../file" requires a real directory at
+// dir. Lexically simplifying it first could cross a symlink, escape the tree, or accept a dangling component.
+function linkDestination(file: string, text: string, entries: ReadonlyMap<string, string>) {
+  const directory = file.split("/").slice(0, -1)
+  const parts = text.split("/")
+  if (directory.length > 64 || parts.length > 64 || !/^[A-Za-z0-9_./ -]+$/.test(text)) return
+  for (const [index, part] of parts.entries()) {
+    if (!part) return
+    if (part === "." || part === "..") {
+      if (index === parts.length - 1 || (part === ".." && !directory.pop())) return
+      continue
+    }
+    if (part.endsWith(".") || part.endsWith(" ") || part.toLowerCase() === ".git") return
+    directory.push(part)
+    const name = directory.join("/")
+    const entry = entries.get(name)
+    if (index < parts.length - 1) {
+      if (entry !== "040000") return
+      continue
+    }
+    if (entry?.startsWith("100644 ") || entry?.startsWith("100755 ")) return { target: name, entry }
+  }
+}
+
+// No link on disk is opened. The caller supplies only blob bytes from this same integrity-checked snapshot.
+async function commitLinks(list: Buffer, readLink: (oid: string, size: number) => Promise<string | undefined>) {
+  const text = list.toString("utf8")
+  if (!Buffer.from(text).equals(list)) return
+  const rows = text.split("\0")
+  if (rows.pop() !== "" || rows.length > LIMIT.files * 2) return
+  const entries = new Map<string, string>()
+  const names = new Set<string>()
+  const links: { file: string; oid: string; size: number }[] = []
+  let leaves = 0
+  let bytes = 0
+  for (const row of rows) {
+    const tab = row.indexOf("\t")
+    const header = /^(040000|100644|100755|120000) ([0-9a-f]{40}) (-|[0-9]{1,13})$/.exec(row.slice(0, tab))
+    const file = row.slice(tab + 1)
+    if (!header || tab < 0 || !repositoryPath(file)) return
+    const folded = file.normalize("NFC").toLowerCase()
+    if (names.has(folded)) return
+    names.add(folded)
+    const [, mode, oid, size] = header
+    if ((mode === "040000") !== (size === "-")) return
+    entries.set(file, mode === "040000" ? mode : mode + " " + oid)
+    if (mode === "040000") continue
+    if (++leaves > LIMIT.files) return
+    if (mode !== "120000") continue
+    const length = Number(size)
+    if (!Number.isSafeInteger(length) || length <= 0 || length > 4096 || links.length >= LIMIT.links) return
+    bytes += length
+    if (bytes > LIMIT.linkBytes) return
+    links.push({ file, oid, size: length })
+  }
+  const result = new Map<string, CommitLink>()
+  for (const { file, oid, size } of links) {
+    const text = await readLink(oid, size)
+    if (text === undefined) return
+    const destination = linkDestination(file, text, entries)
+    if (!destination) return
+    result.set(file, { oid, text, ...destination })
+  }
+  return result
 }
 
 /** A scoped private Git view for the entire review collection; callers still enforce their own file/read policy. */
@@ -1340,13 +1471,13 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
   const cancel = () => controller.abort()
   options?.signal?.addEventListener("abort", cancel, { once: true })
   if (options?.signal?.aborted) cancel()
-  const operation = (expires: number): Operation => ({
+  const operation = (expires: number, signal = controller.signal): Operation => ({
     expires,
-    signal: controller.signal,
+    signal,
     resources,
     check: () =>
       requireValue(
-        !closed && !cleanupFailed && !controller.signal.aborted && performance.now() < expires,
+        !closed && !cleanupFailed && !signal.aborted && performance.now() < expires,
         "Git inspection was cancelled or expired",
       ),
     unsafe: () => {
@@ -1355,8 +1486,11 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     },
   })
   const startup = operation(opening)
-  const observe = <A>(body: (context: Operation) => Promise<A>) => {
-    const context = operation(performance.now() + INTEGRITY.milliseconds)
+  const observe = <A>(body: (context: Operation) => Promise<A>, signal?: AbortSignal) => {
+    const context = operation(
+      performance.now() + INTEGRITY.milliseconds,
+      signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
+    )
     const pending = Promise.resolve()
       .then(async () => {
         context.check()
@@ -1500,10 +1634,19 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     await step(startup, () =>
       fs.writeFile(path.join(privateGit, "config"), safe.join("\n"), { mode: 0o600, flag: "wx" }),
     )
+    let hasInfoRules = false
     for (const name of ["attributes", "exclude"]) {
       const data = await read(commonHandle, "info/" + name, LIMIT.config, true, startup)
-      if (data)
-        await step(startup, () => fs.writeFile(path.join(privateGit, "info", name), data, { mode: 0o600, flag: "wx" }))
+      if (!data) continue
+      // Missing, blank and full-line comments are inert (including Git's default info/exclude template).
+      if (
+        data
+          .toString("latin1")
+          .split("\n")
+          .some((line) => !line.startsWith("#") && !/^[ \t]*\r?$/.test(line))
+      )
+        hasInfoRules = true
+      await step(startup, () => fs.writeFile(path.join(privateGit, "info", name), data, { mode: 0o600, flag: "wx" }))
     }
     const shallow = await read(commonHandle, "shallow", LIMIT.refs, true, startup)
     if (shallow) {
@@ -1656,6 +1799,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       )
       return value === "HEAD" ? capturedHead : value
     }
+    const linkInventories = new Map<string, Map<string, CommitLink>>()
     const perform = async (operation: Read, context: Operation) => {
       context.check()
       const literal = (file: string) => ":(literal)" + relative(file)
@@ -1670,6 +1814,74 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
       const run = (query: string[], input?: Buffer) => commands.command(context, [...args, ...query], input)
       // Only a regex-checked object id reaches this, and only the private snapshot answers for it.
       const peel = (oid: string) => run(["rev-parse", "--verify", "--quiet", "--end-of-options", oid + "^{commit}"])
+      const isCommit = async (oid: string) => {
+        requireValue(typeof oid === "string" && /^[0-9a-f]{40}$/.test(oid), "an exact commit is required")
+        // The captured HEAD was authenticated at open. A tag that peels to a commit is not itself a commit.
+        if (oid === capturedHead) return true
+        const result = await peel(oid)
+        return result.code === 0 && result.bytes.equals(Buffer.from(oid + "\n"))
+      }
+      const boundedTextRead = async (query: string[], limit: number, input?: Buffer) => {
+        try {
+          // No live worktree is in this process's authority, including for Git's attribute lookups.
+          const result = await commands.command(
+            context,
+            ["--no-pager", "--no-optional-locks", "--git-dir=" + privateGit, "--work-tree=" + temporary, ...query],
+            input,
+            limit,
+          )
+          return commandDiagnostics.get(result)?.stderr === 0 && isUtf8(result.bytes)
+            ? result
+            : { code: 2, bytes: Buffer.alloc(0) }
+        } catch (error) {
+          const cause = error instanceof Unavailable ? (error.cause as CommandDiagnostic | undefined) : undefined
+          if (cause?.reason === "output-limit") return { code: 3, bytes: Buffer.alloc(0) }
+          throw error
+        }
+      }
+      const linksOf = async (commit: string) => {
+        const cached = linkInventories.get(commit)
+        if (cached) return cached
+        if (!(await isCommit(commit))) return
+        // Include directories: an intermediate component of a link must be a real directory in this tree.
+        const tree = await commands.command(
+          context,
+          [
+            ...args,
+            "ls-tree",
+            "-rtz",
+            "--full-tree",
+            "--format=%(objectmode) %(objectname) %(objectsize)%x09%(path)",
+            commit,
+          ],
+          undefined,
+          INTEGRITY.output,
+        )
+        if (tree.code !== 0 || commandDiagnostics.get(tree)?.stderr !== 0) return
+        // Identical blobs across paths and commits share bytes; each link resolves relative to its own parent.
+        const texts = new Map<string, string>()
+        for (const inventory of linkInventories.values())
+          for (const link of inventory.values()) texts.set(link.oid, link.text)
+        const links = await commitLinks(tree.bytes, async (oid, size) => {
+          const cached = texts.get(oid)
+          if (cached !== undefined) return cached
+          const result = await commands.command(
+            context,
+            [...args, "show", "--no-ext-diff", "--no-textconv", oid, "--"],
+            undefined,
+            size,
+          )
+          if (result.code !== 0 || commandDiagnostics.get(result)?.stderr !== 0 || result.bytes.length !== size) return
+          const text = result.bytes.toString("latin1")
+          texts.set(oid, text)
+          return text
+        })
+        if (!links) return
+        // Keep just two revisions' bounded link records; the full entry inventories are released after validation.
+        if (linkInventories.size >= 2) linkInventories.delete(linkInventories.keys().next().value!)
+        linkInventories.set(commit, links)
+        return links
+      }
       // Every place rev-parse looks a name up, in Git's order. Only a branch, remote-tracking branch or tag may
       // answer. A second match, or one anywhere else, refuses where Git would warn or resolve something else.
       const named = async (name: string) => {
@@ -1723,6 +1935,20 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             `--untracked-files=${operation.untracked ?? "all"}`,
             "--ignore-submodules=all",
           ])
+        case "author-commit": {
+          if (!(await isCommit(operation.revision))) return { code: 1, bytes: Buffer.alloc(0) }
+          return boundedTextRead(
+            [
+              "show",
+              "--no-patch",
+              "--no-notes",
+              "--no-show-signature",
+              "--format=%T%n%(trailers:key=Co-authored-by,key=Generated-by,key=Authored-by,valueonly)",
+              operation.revision,
+            ],
+            8192,
+          )
+        }
         case "resolve": {
           const given = operation.revision
           // Git reads an object id's digits in either case; HEAD has none to lowercase.
@@ -1867,6 +2093,26 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           ])
         case "roots":
           return run(["rev-list", "--max-parents=0", revision(operation.revision)])
+        case "depth-history":
+          if (!(await isCommit(operation.revision))) return { code: 2, bytes: Buffer.alloc(0) }
+          return boundedTextRead(
+            [
+              "log",
+              "--no-ext-diff",
+              "--no-textconv",
+              "--no-show-signature",
+              "--no-decorate",
+              "--no-color",
+              "-n",
+              "5",
+              "-z",
+              "--format=%H%x00%ct%x00%s",
+              operation.revision,
+              "--",
+              literal(operation.file),
+            ],
+            64 * 1024,
+          )
         case "history":
           return run([
             "log",
@@ -1904,6 +2150,188 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           ])
         case "tree":
           return run(["ls-tree", "-z", revision(operation.revision), "--", literal(operation.file)])
+        case "impact-version":
+          return { code: 0, bytes: Buffer.from(version.bytes) }
+        case "impact-tree":
+        case "impact-grep": {
+          const { maxBytes, revision: commit } = operation
+          const tree = operation.kind === "impact-tree"
+          requireValue(
+            Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= (tree ? LIMIT.index : 16 * 1024 * 1024),
+            "invalid impact output limit",
+          )
+          if (!(await isCommit(commit))) return { code: 2, bytes: Buffer.alloc(0) }
+          if (operation.kind === "impact-tree")
+            return boundedTextRead(
+              ["ls-tree", "-r", "-z", ...(operation.namesAndIdsOnly ? [] : ["-l"]), "--full-tree", commit],
+              maxBytes,
+            )
+          const search = operation.search
+          const grep = ["grep", "--threads=1", "--no-textconv", "-z", "-I", "--no-color", "--no-column", "--full-name"]
+          const specs = search.kind === "imports" ? search.files : search.exclude
+          requireValue(Array.isArray(specs) && specs.length <= 4096, "invalid impact path count")
+          let chars = 0
+          for (const spec of specs) {
+            requireValue(
+              typeof spec === "string" && spec.isWellFormed() && (chars += spec.length + 1) <= 24_000,
+              "invalid impact paths",
+            )
+            if (search.kind === "imports") relative(spec)
+            else {
+              const prefix = spec.startsWith(":(top,exclude,literal)")
+                ? ":(top,exclude,literal)"
+                : ":(top,exclude,glob)"
+              requireValue(spec.startsWith(prefix), "invalid impact exclusion")
+              relative(spec.slice(prefix.length))
+            }
+          }
+          switch (search.kind) {
+            case "imports":
+              requireValue(specs.length > 0, "an import query must name files")
+              return boundedTextRead(
+                [
+                  ...grep,
+                  "-n",
+                  "-E",
+                  "-e",
+                  IMPACT_IMPORT_LINE.map((rule) => "(" + rule + ")").join("|"),
+                  commit,
+                  "--",
+                  ...specs.map((file) => ":(top,literal)" + file),
+                ],
+                maxBytes,
+              )
+            case "manifests":
+              return boundedTextRead(
+                [
+                  ...grep,
+                  "-n",
+                  "-e",
+                  "",
+                  commit,
+                  "--",
+                  ":(top,glob)**/package.json",
+                  ":(top,glob)**/tsconfig.json",
+                  ":(top,glob)**/jsconfig.json",
+                  ":(top,literal)pnpm-workspace.yaml",
+                  ":(top,exclude,glob)**/node_modules/**",
+                  ...specs,
+                ],
+                maxBytes,
+              )
+            case "symbols": {
+              requireValue(
+                Array.isArray(search.names) && search.names.length > 0 && search.names.length <= 50_000,
+                "invalid impact symbol count",
+              )
+              let bytes = 0
+              for (const name of search.names)
+                requireValue(
+                  typeof name === "string" &&
+                    name.length <= 1024 &&
+                    /^[\p{L}\p{M}\p{N}_$]+$/u.test(name) &&
+                    (bytes += Buffer.byteLength(name) + 1) <= 1024 * 1024,
+                  "invalid impact symbol",
+                )
+              return boundedTextRead(
+                [...grep, "-l", "-w", "-F", "-f", "-", commit, "--", ":/", ...specs],
+                maxBytes,
+                Buffer.from(search.names.join("\n") + "\n"),
+              )
+            }
+            default:
+              throw new Unavailable("unsupported impact search")
+          }
+        }
+        case "show": {
+          const { revision: commit, file, maxBytes } = operation
+          requireValue(typeof file === "string" && file.isWellFormed() && repositoryPath(file), "invalid show path")
+          requireValue(Number.isSafeInteger(maxBytes) && maxBytes >= 0 && maxBytes <= LIMIT.show, "invalid show limit")
+          const missing = { code: 1, bytes: Buffer.alloc(0) }
+          if (!(await isCommit(commit))) return missing
+          // Size the blob before show and reject symlinks, trees and gitlinks. The literal pathspec can select only
+          // this entry; the fixed-size metadata format never asks Git to print a repository-controlled path.
+          const entry = await commands.command(
+            context,
+            [
+              ...args,
+              "ls-tree",
+              "--full-tree",
+              "-z",
+              "--format=%(objectmode) %(objectsize)",
+              commit,
+              "--",
+              literal(file),
+            ],
+            undefined,
+            256,
+          )
+          const regular = /^(?:100644|100755) (0|[1-9][0-9]{0,12})\x00$/.exec(entry.bytes.toString("latin1"))
+          if (entry.code !== 0 || !regular) return missing
+          if (Number(regular[1]) > maxBytes)
+            return operation.distinguishLarge ? { code: 3, bytes: Buffer.alloc(0) } : missing
+          const size = Number(regular[1])
+          const result = await commands.command(
+            context,
+            [...args, "show", "--no-ext-diff", "--no-textconv", commit + ":" + file, "--"],
+            undefined,
+            size,
+          )
+          return result.code === 0 && result.bytes.length === size ? result : missing
+        }
+        case "path-references": {
+          const { revision: commit, file } = operation
+          requireValue(
+            typeof file === "string" && file.isWellFormed() && repositoryPath(file),
+            "invalid reference path",
+          )
+          const unknown = { code: 2, bytes: Buffer.alloc(0) }
+          // Searching the stem also covers literal mentions of the basename, with extension, and the full path.
+          // The private process uses the C locale, so claim a case-insensitive answer only for simple ASCII stems.
+          const stem = path.posix.parse(file).name
+          if (!/^[A-Za-z0-9_.-]{1,255}$/.test(stem)) return unknown
+          const links = await linksOf(commit)
+          if (!links) return unknown
+          // Git grep omits link blobs. Their literal target text is still a possible reference.
+          for (const link of links.values())
+            if (link.text.toLowerCase().includes(stem.toLowerCase())) return { code: 0, bytes: Buffer.alloc(0) }
+          const found = await commands.command(
+            context,
+            [...args, "grep", "--threads=1", "--no-textconv", "-a", "-F", "-i", "-q", "-e", stem, commit, "--"],
+            undefined,
+            256,
+          )
+          if (found.bytes.length || commandDiagnostics.get(found)?.stderr !== 0 || ![0, 1].includes(found.code))
+            return unknown
+          return found
+        }
+        case "unaliased-changes": {
+          const { from, to, files } = operation
+          requireValue(Array.isArray(files) && files.length > 0 && files.length <= 64, "invalid changed path count")
+          const changed = Array.from(files, (file) => {
+            requireValue(
+              typeof file === "string" && file.isWellFormed() && repositoryPath(file),
+              "invalid changed path",
+            )
+            return file.normalize("NFC").toLowerCase()
+          })
+          const unknown = { code: 2, bytes: Buffer.alloc(0) }
+          const before = await linksOf(from)
+          if (!before) return unknown
+          const after = await linksOf(to)
+          if (!after || before.size !== after.size) return unknown
+          const touches = (path: string) => {
+            const name = path.normalize("NFC").toLowerCase()
+            return changed.some((file) => file === name || file.startsWith(name + "/") || name.startsWith(file + "/"))
+          }
+          for (const [name, link] of after) {
+            const prior = before.get(name)
+            if (!prior || prior.oid !== link.oid || prior.target !== link.target || prior.entry !== link.entry)
+              return unknown
+            if (touches(name) || touches(link.target)) return unknown
+          }
+          return { code: 0, bytes: Buffer.alloc(0) }
+        }
         case "subjects":
           return run([
             "log",
@@ -1916,6 +2344,14 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
             "--format=%s",
             revision(operation.from) + ".." + revision(operation.to),
           ])
+        case "check-ignore":
+          requireValue(
+            operation.files.length > 0 && operation.files.length <= 1024,
+            "ignore check scope is unsupported",
+          )
+          // check-ignore takes no pathspec magic, so "./" keeps a leading ":" a path; git echoes each path as given,
+          // one per line, C-quoted when it must be.
+          return run(["check-ignore", "--no-index", "--", ...operation.files.map((file) => "./" + relative(file))])
         case "reference": {
           const name = operation.name
           requireValue(
@@ -1997,7 +2433,8 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
           throw new Unavailable("Git operation is not supported by the read-only port")
       }
     }
-    const safeRead = (operation: Read) => observe((context) => perform(operation, context))
+    const safeRead = (operation: Read, signal?: AbortSignal) =>
+      observe((context) => perform(operation, context), signal)
     let statusQueue: Promise<unknown> = Promise.resolve()
     const status = (context: Operation) => {
       // Keep normalized index stat fields empty. A refreshed Git cache missed a real equal-size edit with restored
@@ -2028,7 +2465,7 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
     await status(startup)
     startup.check()
     transferred = true
-    return Object.defineProperty(
+    return Object.defineProperties(
       {
         directory: root,
         gitDirectory: git,
@@ -2037,13 +2474,16 @@ export async function open(input: Input, options?: { signal?: AbortSignal }): Pr
         head: capturedHead,
         branch,
         shallow: !!shallow?.byteLength,
+        hasInfoRules,
         isOpen: () => !closed && !controller.signal.aborted,
-        status: () => observe(status),
+        status: (signal?: AbortSignal) => observe(status, signal),
         read: safeRead,
         close,
       },
-      "isOpen",
-      { writable: false, configurable: false },
+      {
+        isOpen: { writable: false, configurable: false },
+        hasInfoRules: { writable: false, configurable: false },
+      },
     )
   } catch (error) {
     throw unavailable(error)

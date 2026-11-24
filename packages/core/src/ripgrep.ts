@@ -19,6 +19,10 @@ const ERROR_BYTES = 8 * 1024
 const MAX_RECORD_BYTES = 64 * 1024
 const MAX_SUBMATCHES = 100
 
+// The longest line a grep match carries whole: a longer one is cut to this many characters and marked with "...".
+// The grep tool reads it to tell a cut line from a whole one (VS-34's holdback).
+export const LINE_CAP = 2_000
+
 // Ripgrep gives text that is not valid UTF-8 (a Latin-1 line, a file name in another encoding) as base64 `bytes`.
 const RawText = Schema.Union([Schema.Struct({ text: Schema.String }), Schema.Struct({ bytes: Schema.String })])
 
@@ -238,7 +242,7 @@ const layer = Layer.effect(
               }),
               line: match.line_number,
               offset: match.absolute_offset,
-              text: match.lines.length > 2_000 ? match.lines.slice(0, 2_000) + "..." : match.lines,
+              text: match.lines.length > LINE_CAP ? match.lines.slice(0, LINE_CAP) + "..." : match.lines,
               submatches: match.submatches.map((submatch) => ({ ...submatch })),
             })
           }),

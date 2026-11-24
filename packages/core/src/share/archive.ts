@@ -116,6 +116,11 @@ function screenshots(files: readonly { name?: string; mime: string; url?: string
 }
 
 export function publicArchive(local: Local, options: { includeScreenshots?: boolean } = {}): PublicSession.Archive {
+  if (local.privacy === "owner-only")
+    throw new PublicSession.Error({
+      code: "INVALID",
+      message: "Private conversations cannot be published or publicly exported.",
+    })
   const messages: PublicSession.Message[] =
     "engine" in local
       ? local.messages.flatMap((message): PublicSession.Message[] => {
@@ -693,7 +698,12 @@ const layer = Layer.effect(
       export: exportArchive,
       preview: (input) =>
         exportArchive(input).pipe(
-          Effect.flatMap((value) => Effect.try({ try: () => publicArchive(value, input), catch: invalid })),
+          Effect.flatMap((value) =>
+            Effect.try({
+              try: () => publicArchive(value, input),
+              catch: (error) => (error instanceof PublicSession.Error ? error : invalid()),
+            }),
+          ),
         ),
       import: importArchive,
     })

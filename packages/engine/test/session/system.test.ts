@@ -572,6 +572,15 @@ describe("session.system", () => {
     }),
   )
 
+  it.effect("review sessions omit even a zero-tool server’s instructions", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      for (const internal of ["vectorscope.review", "vectorscope.bound.verify", "vectorscope.fix"])
+        expect(yield* prompt.mcp(build, undefined, internal)).toBeUndefined()
+      expect(yield* prompt.mcp(build, undefined, "research.check")).toBe(yield* prompt.mcp(build))
+    }),
+  )
+
   it.effect("MCP output includes connected server instructions", () =>
     Effect.gen(function* () {
       const prompt = yield* SystemPrompt.Service

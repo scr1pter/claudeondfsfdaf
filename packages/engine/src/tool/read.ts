@@ -14,6 +14,8 @@ import { SessionMemory } from "../session/memory"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { WebFence } from "@vectordevai/core/research/fence"
+import { holdbackLines, holdbackText } from "@vectordevai/core/review/holdback"
+import { holdbackSpelling } from "@vectordevai/core/review/permission"
 import { FileState } from "./file-state"
 
 const DEFAULT_READ_LIMIT = 2000
@@ -23,6 +25,9 @@ const MAX_BYTES = 50 * 1024
 const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 const SAMPLE_BYTES = 4096
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
+// Under VS-34's holdback "secrets", how many lines before the first one read are redacted with it, so that a private
+// key's header still marks the body lines of a read that starts inside the key (a 4096-bit key's body is about 50).
+const HOLDBACK_CONTEXT_LINES = 200
 
 class ReadStop extends Schema.TaggedErrorClass<ReadStop>()("ReadStop", {}) {}
 
@@ -152,9 +157,14 @@ export const ReadTool = Tool.define<
       )
     })
 
-    const lines = Effect.fn("ReadTool.lines")(function* (filepath: string, opts: { limit: number; offset: number }) {
+    const lines = Effect.fn("ReadTool.lines")(function* (
+      filepath: string,
+      opts: { limit: number; offset: number; holdback: boolean },
+    ) {
       const start = opts.offset - 1
       const raw: string[] = []
+      // Under holdback, the lines just before the first one read, cut but not redacted: they are never returned.
+      const before: string[] = []
       const flags = { bytes: 0, count: 0, cut: false, more: false, done: false }
 
       // Note: prefer manual TextDecoder over Stream.decodeText — when the source stream
@@ -170,14 +180,23 @@ export const ReadTool = Tool.define<
           Effect.gen(function* () {
             if (flags.done) return yield* new ReadStop()
             flags.count += 1
-            if (flags.count <= start) return
+            if (flags.count <= start) {
+              if (!opts.holdback) return
+              before.push(text.substring(0, MAX_LINE_LENGTH))
+              // Trimmed in batches, so a read far into a long file does not move the list at every line.
+              if (before.length > 2 * HOLDBACK_CONTEXT_LINES) before.splice(0, before.length - HOLDBACK_CONTEXT_LINES)
+              return
+            }
 
             if (raw.length >= opts.limit) {
               flags.more = true
               return
             }
 
-            const line = text.length > MAX_LINE_LENGTH ? text.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text
+            // Under holdback a line is redacted whole before it is cut, so the cut never leaves part of a value whose
+            // shape no longer reads as one (a token across character 2000 of a minified line, a key on one line).
+            const whole = opts.holdback ? holdbackText(text) : text
+            const line = whole.length > MAX_LINE_LENGTH ? whole.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : whole
             const size = Buffer.byteLength(line, "utf-8") + (raw.length > 0 ? 1 : 0)
             if (flags.bytes + size <= MAX_BYTES) {
               raw.push(line)
@@ -194,7 +213,14 @@ export const ReadTool = Tool.define<
         Effect.catchTag("ReadStop", () => Effect.void),
       )
 
-      return { raw, count: flags.count, cut: flags.cut, more: flags.more, offset: opts.offset }
+      return {
+        raw,
+        before: before.slice(-HOLDBACK_CONTEXT_LINES),
+        count: flags.count,
+        cut: flags.cut,
+        more: flags.more,
+        offset: opts.offset,
+      }
     })
 
     const isBinaryFile = (filepath: string, bytes: Uint8Array) => {
@@ -249,6 +275,8 @@ export const ReadTool = Tool.define<
       ctx: Tool.Context<Metadata>,
     ) {
       const instance = yield* InstanceState.context
+      // VS-34's tool half (SF-14), set by the session runtime for a review session under holdback "secrets".
+      const holdback = ctx.extra?.holdback === "secrets"
       let filepath = params.filePath
       if (!path.isAbsolute(filepath)) {
         filepath = path.resolve(instance.directory, filepath)
@@ -279,12 +307,24 @@ export const ReadTool = Tool.define<
         kind: stat?.type === "Directory" ? "directory" : "file",
       })
 
-      yield* ctx.ask({
-        permission: "read",
-        patterns: [...new Set([spelled, filepath].flatMap((file) => readPatterns(instance.worktree, file)))],
-        always: ["*"],
-        metadata: {},
-      })
+      const patterns = [...new Set([spelled, filepath].flatMap((file) => readPatterns(instance.worktree, file)))]
+      yield* ctx.ask({ permission: "read", patterns, always: ["*"], metadata: {} })
+      // Under holdback the session's read rules are read again with every spelling folded (NFC, lowercased) as the
+      // credential lists and the held paths' folded forms are written, so a case or a Unicode normal form the
+      // platform's rules let through (`config/.ENVRC` on Linux, a case-insensitive or NFD volume on macOS) is refused
+      // too. With no way to read the rules nothing is read.
+      if (holdback) {
+        const folded = patterns.map(holdbackSpelling)
+        const refused = ctx.deniedResources
+          ? yield* ctx.deniedResources({ permission: "read", patterns: folded })
+          : folded
+        if (refused.length)
+          return yield* Effect.fail(
+            new Error(
+              `${title} may hold credentials, so this review does not read it (holdback "secrets"); nothing was read.`,
+            ),
+          )
+      }
       if (!stat) return yield* miss(filepath, ctx)
 
       if (stat.type === "Directory") {
@@ -299,7 +339,8 @@ export const ReadTool = Tool.define<
         const limit = params.limit ?? DEFAULT_READ_LIMIT
         const offset = params.offset || 1
         const start = offset - 1
-        const sliced = items.slice(start, start + limit)
+        const listed = items.slice(start, start + limit)
+        const sliced = holdback ? holdbackLines(listed) : listed
         const truncated = start + sliced.length < items.length
 
         return {
@@ -355,6 +396,13 @@ export const ReadTool = Tool.define<
       const isImage = SUPPORTED_IMAGE_MIMES.has(mime)
 
       if (isImage || isPdfAttachment(mime)) {
+        // An attachment cannot be redacted, so under holdback none is sent (I-4).
+        if (holdback)
+          return yield* Effect.fail(
+            new Error(
+              `${title} is an image or a PDF, which cannot be redacted, so this review does not read it (holdback "secrets"); nothing was read.`,
+            ),
+          )
         const bytes = yield* fs.readFile(filepath)
         const msg = isPdfAttachment(mime) ? "PDF read successfully" : "Image read successfully"
         return {
@@ -437,22 +485,29 @@ export const ReadTool = Tool.define<
         }
       }
 
-      const file = yield* lines(filepath, { limit: params.limit ?? DEFAULT_READ_LIMIT, offset: params.offset || 1 })
+      const file = yield* lines(filepath, {
+        limit: params.limit ?? DEFAULT_READ_LIMIT,
+        offset: params.offset || 1,
+        holdback,
+      })
       if (file.count < file.offset && !(file.count === 0 && file.offset === 1)) {
         return yield* Effect.fail(
           new Error(`Offset ${file.offset} is out of range for this file (${file.count} lines)`),
         )
       }
+      // Each line was redacted whole; under holdback the lines read are then redacted as one text, with the lines just
+      // before them, so that a private key's header still marks its body. Every line stays where it was.
+      const raw = holdback ? holdbackLines([...file.before, ...file.raw]).slice(file.before.length) : file.raw
 
       let output = [`<path>${filepath}</path>`, `<type>file</type>`, "<content>\n"].join("\n")
       // A page a web tool saved whole is web text, so whichever of its lines are read come back fenced again.
       output += WebFence.savedFile(filepath)
         ? WebFence.fenceLines(
             { tool: "read", file: filepath },
-            file.raw.map((text, i) => ({ line: i + file.offset, text })),
+            raw.map((text, i) => ({ line: i + file.offset, text })),
             (line) => `${line.line}: ${line.text}`,
           )
-        : file.raw.map((line, i) => `${i + file.offset}: ${line}`).join("\n")
+        : raw.map((line, i) => `${i + file.offset}: ${line}`).join("\n")
 
       const last = file.offset + file.raw.length - 1
       const next = last + 1
@@ -469,21 +524,21 @@ export const ReadTool = Tool.define<
       yield* warm(filepath)
 
       if (loaded.length > 0) {
-        output += `\n\n<system-reminder>\n${loaded.map((item) => item.content).join("\n\n")}\n</system-reminder>`
+        output += `\n\n<system-reminder>\n${loaded.map((item) => (holdback ? holdbackText(item.content) : item.content)).join("\n\n")}\n</system-reminder>`
       }
 
       return {
         title,
         output,
         metadata: {
-          preview: file.raw.slice(0, 20).join("\n"),
+          preview: raw.slice(0, 20).join("\n"),
           truncated,
           loaded: loaded.map((item) => item.filepath),
           ...(links.length ? { [Instruction.LINKS]: links } : {}),
           display: {
             type: "file" as const,
             path: filepath,
-            text: file.raw.join("\n"),
+            text: raw.join("\n"),
             lineStart: file.offset,
             lineEnd: last,
             totalLines: file.count,

@@ -9,22 +9,32 @@ import {
   IMPACT_TIER_NAMES,
   IMPACT_TIERS,
   barrels,
+  capImpactSlice,
   changedDefinitions,
   changedPaths,
   impactNames,
   impactPacking,
+  impactRecord,
   impactTokens,
   movedNames,
+  orderImpactFiles,
   outboundSpecifier,
   outboundUses,
   packSlice,
   packTiers,
   reexportTargets,
+  samePackageLookups,
+  samePackageUses,
   selectDependents,
+  shrinkImpactDependents,
   wordHits,
   type Definition,
+  type ImpactSlice,
   type ImpactTier,
+  type OutboundUse,
   type Reference,
+  type SamePackageFile,
+  type SamePackageLookup,
   type SourceReference,
   type TierSource,
 } from "@vectordevai/core/review/impact"
@@ -33,6 +43,7 @@ import {
   IMPACT_INSTRUCTION,
   IMPACT_TIER_CAPS,
   IMPACT_TIERS_INSTRUCTION,
+  buildReviewPrompt,
   impactBlock,
 } from "@vectordevai/core/review/prompt"
 import type { Side } from "@vectordevai/core/review/types"
@@ -319,6 +330,23 @@ describe("selectDependents", () => {
       ...(extra.workspace ? { workspace: extra.workspace } : {}),
       ...(extra.ignored ? { ignored: extra.ignored } : {}),
     })
+
+  test("the changed diff follows import graph rank and keeps tie order, rename anchors and line objects", () => {
+    const a = diff("a.ts", { added: [3] })
+    const b = diff("b.ts", { added: [9] })
+    const moved = diff("new.ts", { oldPath: "old.ts", status: "renamed", added: [5] })
+    const files = [b, a, moved]
+    const scanned = select(files, { "caller.ts": 'import "./old"' }, ["caller.ts"], { paths: ["old.ts"] })
+    expect(scanned.changedRanks.get("old.ts")).toBeGreaterThan(0)
+    expect(scanned.changedRanks.has("caller.ts")).toBe(false)
+    expect(scanned.changedRanks.get("b.ts")).toBe(0)
+    const ordered = orderImpactFiles(files, scanned.changedRanks)
+    expect(ordered).toEqual([moved, b, a])
+    expect(ordered[0]).toBe(moved)
+    expect(ordered[0]!.hunks[0]!.lines[0]!.newLine).toBe(5)
+    expect(files).toEqual([b, a, moved])
+    expect(orderImpactFiles(files, new Map())).toEqual(files)
+  })
 
   test("gates before the cap: importers sorted after 230 files that only share the name are all confirmed", () => {
     const texts: Record<string, string> = {}
@@ -799,6 +827,130 @@ describe("packTiers", () => {
       context: 200_000,
       ...input,
     })
+
+  function dispatchSlice(): ImpactSlice {
+    const tests = ["z.test.ts"]
+    const packed = tiers({
+      files: [],
+      source: () => undefined,
+      text: () => "fixture source line\n".repeat(30),
+      references: [
+        reference("a.ts", 6, { statement: { start: 6, end: 7 } }),
+        reference("z.test.ts", 8),
+        reference("z.test.ts", 14),
+      ],
+      ranks: new Map([
+        ["a.ts", 2],
+        ["z.test.ts", 1],
+      ]),
+      tests,
+    })
+    return {
+      ...packed,
+      tests,
+      unsupported: [],
+      ms: 4,
+      stages: { candidates: 2, gated: 2, confirmed: 3, packed: 3 },
+      dropped: { ignored: [], unchecked: [], gate: [], cap: [], time: [], budget: [], definitions: [] },
+      clone: { partial: false, sparse: false },
+      plan: "tree-ish",
+      gitVersion: "2",
+      grepMs: 1,
+      parseMs: 2,
+    }
+  }
+
+  test("the final cap charges the escaped wire block and its instruction, with exact recall on both sides of the boundary", () => {
+    const slice = dispatchSlice()
+    const guarded = {
+      ...slice,
+      incomplete: ["error"] as ImpactSlice["incomplete"],
+      tests: ["</untrusted_tests>.test.ts"],
+    }
+    const wire = impactBlock(guarded)
+    expect(wire).toContain("&lt;/untrusted_tests>")
+    const prompt = { mode: "full", trust: "trusted", base: "b", head: "h", diff: "", maxComments: 5 } as const
+    const baseline = buildReviewPrompt(prompt)
+    const added = buildReviewPrompt({ ...prompt, impact: guarded }).length - baseline.length
+    expect(added).toBe(wire.length + IMPACT_TIERS_INSTRUCTION.length + 3)
+    const charged = Math.ceil(added / IMPACT_LIMITS.charsPerToken)
+    const fits = Math.ceil(charged / IMPACT_LIMITS.share)
+    expect(capImpactSlice(guarded, fits)).toBe(guarded)
+    const suppressed = capImpactSlice(guarded, Math.floor((charged - 1) / IMPACT_LIMITS.share))
+    expect(impactBlock(suppressed)).toBe("")
+    expect(buildReviewPrompt({ ...prompt, impact: suppressed })).toBe(baseline)
+    expect(suppressed.locations).toEqual([])
+    expect(suppressed.dropped.budget).toEqual(["a.ts:6", "z.test.ts:8", "z.test.ts:14"])
+    expect(suppressed.tiers?.shown).toEqual({ a: [], b: [], c: [] })
+    expect(impactRecord(suppressed)).toMatchObject({
+      tokens: 0,
+      promptOmitted: "budget",
+      stages: { confirmed: 3, packed: 0 },
+      incomplete: ["error"],
+      ms: 4,
+    })
+    expect(capImpactSlice(suppressed, 0)).toBe(suppressed)
+    expect(slice.locations).toHaveLength(3)
+  })
+
+  test("long test paths cannot exceed 6,000 tokens and an error note alone cannot exceed a tiny model's share", () => {
+    const slice = dispatchSlice()
+    const { scopes: _scopes, outbound: _outbound, tiers: _tiers, fallback: _fallback, ...plain } = slice
+    const note: ImpactSlice = {
+      ...plain,
+      changed: [],
+      dependents: [],
+      tests: [],
+      locations: [],
+      incomplete: ["time"],
+      stages: { ...slice.stages, confirmed: 0, packed: 0 },
+    }
+    const huge = {
+      ...note,
+      tests: Array.from(
+        { length: IMPACT_CAPS.tests },
+        (_, index) => `${("p".repeat(200) + "/").repeat(19)}file-${index}.test.ts`,
+      ),
+    }
+    expect(impactTokens(huge)).toBeGreaterThan(IMPACT_LIMITS.tokens)
+    expect(capImpactSlice(huge, 1_000_000).promptOmitted).toBe("budget")
+    const tiny = capImpactSlice(note, 1)
+    expect(impactBlock(tiny)).toBe("")
+    expect(tiny.incomplete).toEqual(["time"])
+    expect(capImpactSlice(note, 100_000)).toBe(note)
+  })
+
+  test("a dispatch shrink removes the lowest ranked file and recounts the exact code-free stage record", () => {
+    const slice = dispatchSlice()
+    const tests = slice.tests
+    const next = shrinkImpactDependents(slice)!
+    expect(next.locations).toEqual(["a.ts:6"])
+    expect(next.tiers?.shown.c).toEqual(["a.ts:6-7"])
+    expect(next.tiers!.tokens.c).toBeLessThan(slice.tiers!.tokens.c)
+    expect(next.tests).toEqual([])
+    expect(next.stages).toEqual({ candidates: 2, gated: 2, confirmed: 3, packed: 1 })
+    expect(next.dropped.budget).toEqual(["z.test.ts:8", "z.test.ts:14"])
+    expect(next.tokens).toBe(impactTokens(next))
+    expect(next.tokens).toBeLessThan(slice.tokens)
+    expect(next.fallback).toEqual([])
+    const fullTests = [tests[0]!, ...Array.from({ length: IMPACT_CAPS.tests }, (_, n) => `file-${n}.test.ts`)]
+    const hidden = fullTests.at(-1)!
+    const crowded = { ...slice, tests: fullTests }
+    expect(impactBlock(crowded)).not.toContain(hidden)
+    expect(impactBlock(shrinkImpactDependents(crowded)!)).not.toContain(hidden)
+    const record = impactRecord(next)
+    expect(record.stages).toEqual(next.stages)
+    expect(record.ms).toBe(4)
+    expect(JSON.stringify(record)).not.toContain("fixture source line")
+    for (const key of ["changed", "dependents", "scopes", "outbound", "locations", "budget", "confirmed"])
+      expect(Object.hasOwn(record, key)).toBe(false)
+    const empty = shrinkImpactDependents(next)!
+    expect(empty.locations).toEqual([])
+    expect(empty.tokens).toBe(0)
+    expect(shrinkImpactDependents(empty)).toBeUndefined()
+    expect(slice.locations).toEqual(["a.ts:6", "z.test.ts:8", "z.test.ts:14"])
+    expect(slice.stages.packed).toBe(3)
+  })
 
   test("tier a packs the innermost changed definition with its container's header, never the whole class", () => {
     const text = numbered(200)
@@ -1377,6 +1529,577 @@ describe("packTiers", () => {
         },
       })
       expect(packed.outbound.map((item) => `${item.path}:${item.start}`)).toEqual(["src/lib/impl.ts:4"])
+    })
+
+    // VS-37c: a Go file reaches the other files of its package without an import.
+    describe("same-package Go (VS-37c)", () => {
+      const HANDLER = [
+        "package proxy",
+        "",
+        'import "fmt"',
+        "",
+        "type Handler struct {",
+        "\tUpstreams []*Upstream",
+        "\tPool",
+        "\tRetries   int",
+        "}",
+        "",
+        "func helper() int { return 1 }",
+        "",
+        "func (h *Handler) Provision() error {",
+        '\tif upstream.Dial == "" || get().LookupSRV == "" {',
+        '\t\treturn fmt.Errorf("x %v", newPool(Size, helper(), len(h.Upstreams), nil))',
+        "\t}",
+        "\treturn nil",
+        "}",
+        "",
+      ].join("\n")
+      const handlerSource = {
+        text: HANDLER,
+        definitions: [
+          definition("proxy/handler.go", "Handler", 5, 9, { kind: "struct", signature: "type Handler struct {" }),
+          definition("proxy/handler.go", "helper", 11, 11, { exported: false, signature: "func helper() int" }),
+          definition("proxy/handler.go", "Provision", 13, 18, { kind: "method", container: "Handler" }),
+        ],
+        references: [
+          { name: "fmt", line: 3, column: 8, kind: "import" as const },
+          use(HANDLER, 7, "Pool", "type"),
+          use(HANDLER, 8, "Retries", "value"),
+          use(HANDLER, 8, "int", "type"),
+          use(HANDLER, 14, "upstream", "value"),
+          use(HANDLER, 14, "Dial", "value"),
+          use(HANDLER, 14, "get", "call"),
+          use(HANDLER, 14, "LookupSRV", "value"),
+          use(HANDLER, 15, "fmt", "value"),
+          use(HANDLER, 15, "Errorf", "call"),
+          use(HANDLER, 15, "newPool", "call"),
+          use(HANDLER, 15, "Size", "value"),
+          use(HANDLER, 15, "helper", "call"),
+          use(HANDLER, 15, "len", "call"),
+          use(HANDLER, 15, "h", "value"),
+          use(HANDLER, 15, "Upstreams", "value"),
+          use(HANDLER, 15, "nil", "value"),
+        ],
+      }
+      const PATHS = [
+        "go.mod",
+        "other/x.go",
+        "proxy/README",
+        "proxy/b.go",
+        "proxy/handler.go",
+        "proxy/hosts.go",
+        "proxy/hosts_test.go",
+        "proxy/notes.md",
+        "proxy/sub/deep.go",
+      ]
+      // An iterable that may be walked once only, as a Map's keys are.
+      const once = (paths: readonly string[]) => new Map(paths.map((path) => [path, true])).keys()
+
+      test("lookups: the added lines' names no import binds, and the other Go files of the folder", () => {
+        const files = [diff("proxy/handler.go", { added: [3, 7, 8, 14, 15] })]
+        const found = samePackageLookups({
+          files,
+          source: sourceOf({ "proxy/handler.go": handlerSource }),
+          paths: once(PATHS),
+        })
+        // An import line, an import's name and its members (fmt, fmt.Errorf), a name the file defines (helper),
+        // a predeclared one (len, nil, int) and a field the file's own struct declares (Retries) are left out; an
+        // embedded type (Pool) is a use. A member after a call (get().LookupSRV) is a member.
+        expect(found).toEqual([
+          {
+            path: "proxy/handler.go",
+            package: "proxy",
+            uses: [
+              { line: 7, name: "Pool", member: false },
+              { line: 14, name: "upstream", member: false },
+              { line: 14, name: "Dial", member: true },
+              { line: 14, name: "get", member: false },
+              { line: 14, name: "LookupSRV", member: true },
+              { line: 15, name: "newPool", member: false },
+              { line: 15, name: "Size", member: false },
+              { line: 15, name: "h", member: false },
+              { line: 15, name: "Upstreams", member: true },
+            ],
+            siblings: ["proxy/b.go", "proxy/hosts.go"],
+          },
+        ])
+        // A changed test file also looks in the folder's test files.
+        const test = samePackageLookups({
+          files: [diff("proxy/handler_test.go", { status: "added", added: [14] })],
+          source: sourceOf({ "proxy/handler_test.go": handlerSource }),
+          paths: [...PATHS, "proxy/handler_test.go"],
+        })
+        expect(test.map((item) => item.siblings)).toEqual([
+          ["proxy/b.go", "proxy/handler.go", "proxy/hosts.go", "proxy/hosts_test.go"],
+        ])
+      })
+
+      test("lookups: two folders from one walk of the tree; none for a file alone, removed, binary or not Go", () => {
+        const main = "package main\n\nfunc main() {\n\trun()\n}\n"
+        const found = samePackageLookups({
+          files: [diff("proxy/handler.go", { added: [14] }), diff("cmd/main.go", { added: [4] })],
+          source: sourceOf({
+            "proxy/handler.go": handlerSource,
+            "cmd/main.go": { text: main, references: [use(main, 4, "run", "call")] },
+          }),
+          paths: once([...PATHS, "cmd/main.go", "cmd/run.go"]),
+        })
+        expect(found.map((item) => `${item.path}:${item.package}:${item.siblings.join(",")}`)).toEqual([
+          "cmd/main.go:main:cmd/run.go",
+          "proxy/handler.go:proxy:proxy/b.go,proxy/hosts.go",
+        ])
+        const none = (files: DiffFile[], text = main) =>
+          samePackageLookups({
+            files,
+            source: () => ({ text, definitions: [], references: [use(text, 4, "run", "call")] }),
+            paths: [...PATHS, "cmd/main.go", "cmd/run.go", "solo/main.go", "solo/sub/x.go"],
+          })
+        expect(none([diff("solo/main.go", { added: [4] })])).toEqual([])
+        expect(none([diff("cmd/main.go", { status: "deleted", removed: [4] })])).toEqual([])
+        expect(none([diff("cmd/main.go", { binary: true })])).toEqual([])
+        // A file whose package clause cannot be read (here, none at all) looks nothing up.
+        expect(none([diff("cmd/main.go", { added: [4] })], "func main() {\n\n\n\trun()\n}\n")).toEqual([])
+        // A change with no Go file never walks the tree.
+        const untouchable: Iterable<string> = {
+          [Symbol.iterator]: () => {
+            throw new Error("walked")
+          },
+        }
+        for (const path of ["src/a.ts", "app/main.py", "src/lib.rs", "src/main/java/App.java"])
+          expect(
+            samePackageLookups({
+              files: [diff(path, { added: [4] })],
+              source: () => ({ text: main, definitions: [], references: [use(main, 4, "run", "call")] }),
+              paths: untouchable,
+            }),
+          ).toEqual([])
+      })
+
+      const HOSTS = [
+        "package proxy",
+        "",
+        "// Upstream is one backend.",
+        "type Upstream struct {",
+        '\tHost `json:"-"`',
+        "\tDial      string // the address",
+        "\tLookupSRV string",
+        "\tBuf       [Size]byte",
+        "\tFn        func(ctx int) error",
+        "\tA, B      int",
+        "}",
+        "",
+        "const Size = 4",
+        "",
+        "type Store interface {",
+        "\tLoad(key string) error",
+        "}",
+        "",
+        "type point struct{ x, y int }",
+        "",
+        "func (u Upstream) String() string {",
+        "\tDial := u.Dial",
+        "\treturn Dial",
+        "}",
+        "",
+        "var cfg = Upstream{",
+        '\tDial: "x",',
+        "}",
+        "",
+        "func newPool() int {",
+        "\ttype local struct{ Dial int }",
+        "\treturn 0",
+        "}",
+        "",
+        "type Host struct{}",
+        "",
+      ].join("\n")
+      const at = (name: string, start: number, end: number, extra: Partial<Definition> = {}) =>
+        definition("proxy/hosts.go", name, start, end, extra)
+      // The definitions and the references to the member names, as the parser reports them for this file.
+      const hosts = {
+        text: HOSTS,
+        definitions: [
+          at("Upstream", 4, 11, { kind: "struct", signature: 'type Upstream struct { Host `json:"-"` …' }),
+          at("Size", 13, 13, { kind: "variable", signature: "const Size" }),
+          at("Store", 15, 17, { kind: "interface", signature: "type Store interface { Load(key string) error }" }),
+          at("point", 19, 19, { kind: "struct", exported: false, signature: "type point struct{ x, y int }" }),
+          at("String", 21, 24, {
+            kind: "method",
+            container: "Upstream",
+            signature: "func (u Upstream) String() string",
+          }),
+          at("cfg", 26, 28, { kind: "variable", exported: false, signature: "var cfg" }),
+          at("newPool", 30, 33, { exported: false, signature: "func newPool() int" }),
+          at("local", 31, 31, { kind: "struct", exported: false, signature: "type local struct{ Dial int }" }),
+          at("Host", 35, 35, { kind: "struct", signature: "type Host struct{}" }),
+        ],
+        references: [
+          use(HOSTS, 5, "Host", "type"),
+          use(HOSTS, 6, "Dial", "value"),
+          use(HOSTS, 7, "LookupSRV", "value"),
+          use(HOSTS, 8, "Size", "value"),
+          use(HOSTS, 9, "ctx", "value"),
+          use(HOSTS, 10, "B", "value"),
+          use(HOSTS, 16, "Load", "value"),
+          use(HOSTS, 16, "key", "value"),
+          use(HOSTS, 19, "x", "value"),
+          use(HOSTS, 22, "Dial", "value"),
+          use(HOSTS, 22, "Dial", "value", 1),
+          use(HOSTS, 23, "Dial", "value"),
+          use(HOSTS, 27, "Dial", "value"),
+          use(HOSTS, 31, "Dial", "value"),
+        ],
+      }
+      const EXTERNAL = "package proxy_test\n\ntype Ext struct {\n\tDial string\n}\n"
+      const external = {
+        text: EXTERNAL,
+        definitions: [definition("proxy/ext_test.go", "Ext", 3, 5, { kind: "struct" })],
+        references: [use(EXTERNAL, 4, "Dial", "value")],
+      }
+      const lookup = (
+        uses: SamePackageLookup["uses"],
+        siblings = ["proxy/ext_test.go", "proxy/gone.go", "proxy/hosts.go"],
+      ) => [{ path: "proxy/handler_test.go", package: "proxy", uses, siblings }]
+      const fileOf = (path: string) =>
+        path === "proxy/hosts.go" ? hosts : path === "proxy/ext_test.go" ? external : undefined
+
+      test("uses: bare names bind to top-level declarations, members to fields, interface methods and methods", () => {
+        const bare = (line: number, name: string) => ({ line, name, member: false })
+        const member = (line: number, name: string) => ({ line, name, member: true })
+        const found = samePackageUses({
+          lookups: lookup([
+            bare(20, "newPool"),
+            bare(20, "Size"),
+            bare(21, "Upstream"),
+            bare(21, "local"),
+            bare(21, "String"),
+            member(22, "Dial"),
+            member(22, "Load"),
+            member(23, "String"),
+            member(23, "Size"),
+            member(23, "ctx"),
+            member(23, "key"),
+            member(24, "x"),
+            member(24, "Host"),
+            member(24, "B"),
+            bare(25, "cfg"),
+          ]),
+          file: fileOf,
+        })
+        // Never a function-local type, a method by a bare name, an array length, a func-type or interface method
+        // parameter, a method body, a composite literal's key or another package's declaration (proxy_test).
+        expect(
+          found.map(
+            (item) =>
+              `${item.line}:${item.name}:${item.qualified ? "member" : "bare"}:${item.targets.join(",")}:${item.declaration?.name}:${item.declaration?.kind}:${item.declaration?.start}`,
+          ),
+        ).toEqual([
+          "20:Size:bare:proxy/hosts.go:Size:variable:13",
+          "20:newPool:bare:proxy/hosts.go:newPool:function:30",
+          "21:Upstream:bare:proxy/hosts.go:Upstream:struct:4",
+          "22:Dial:member:proxy/hosts.go:Upstream.Dial:field:6",
+          "22:Load:member:proxy/hosts.go:Store.Load:method:16",
+          "23:String:member:proxy/hosts.go:String:method:21",
+          "24:B:member:proxy/hosts.go:Upstream.B:field:10",
+          "24:Host:member:proxy/hosts.go:Upstream.Host:field:5",
+          "24:x:member:proxy/hosts.go:point:struct:19",
+          "25:cfg:bare:proxy/hosts.go:cfg:variable:26",
+        ])
+        // A field is its own line, so a long doc-commented struct still shows it; nothing is the use's own text.
+        expect(found[3]).toEqual({
+          path: "proxy/handler_test.go",
+          line: 22,
+          name: "Dial",
+          specifier: "",
+          qualified: true,
+          default: false,
+          targets: ["proxy/hosts.go"],
+          declaration: {
+            path: "proxy/hosts.go",
+            side: "RIGHT",
+            name: "Upstream.Dial",
+            kind: "field",
+            start: 6,
+            end: 6,
+            exported: true,
+            signature: "Dial string // the address",
+            container: "Upstream",
+          },
+        })
+        // The lookup's package must match: proxy_test's Ext is never bound, even alone.
+        expect(samePackageUses({ lookups: lookup([member(1, "Dial")], ["proxy/ext_test.go"]), file: fileOf })).toEqual(
+          [],
+        )
+        expect(
+          samePackageUses({
+            lookups: [
+              {
+                path: "proxy_test/a_test.go",
+                package: "proxy_test",
+                uses: [member(1, "Dial")],
+                siblings: ["proxy/ext_test.go"],
+              },
+            ],
+            file: fileOf,
+          }).map((item) => item.declaration?.name),
+        ).toEqual(["Ext.Dial"])
+      })
+
+      // A use pinned to a declaration, as samePackageUses gives it.
+      const pinned = (line: number, name: string, declaration: Definition): OutboundUse => ({
+        path: "proxy/handler.go",
+        line,
+        name,
+        specifier: "",
+        qualified: true,
+        default: false,
+        targets: [declaration.path],
+        declaration,
+      })
+      const field = (path: string, holder: string, name: string, line: number): Definition =>
+        definition(path, `${holder}.${name}`, line, line, {
+          kind: "field",
+          signature: `${name} string`,
+          container: holder,
+        })
+      const handlerFiles = [diff("proxy/handler.go", { added: [14] })]
+      const handlerOnly = sourceOf({ "proxy/handler.go": { text: HANDLER } })
+
+      test("packTiers packs a pinned declaration exactly, exported or not, and each member on its own line", () => {
+        const newPool = at("newPool", 30, 33, { exported: false, signature: "func newPool() int" })
+        const packed = tiers({
+          files: handlerFiles,
+          source: handlerOnly,
+          outbound: {
+            uses: [
+              pinned(14, "newPool", newPool),
+              pinned(14, "Dial", field("proxy/hosts.go", "Upstream", "Dial", 6)),
+              pinned(14, "LookupSRV", field("proxy/hosts.go", "Upstream", "LookupSRV", 7)),
+            ],
+            // A same-named exported definition elsewhere in the file is not what the pin names.
+            definitionsOf: () => [at("newPool", 2, 2), at("Dial", 40, 40)],
+          },
+        })
+        expect(
+          packed.outbound.map((item) => `${item.path}:${item.start}:${item.kind}:${item.name}:${item.signature}`),
+        ).toEqual([
+          "proxy/hosts.go:6:field:Upstream.Dial:Dial string",
+          "proxy/hosts.go:7:field:Upstream.LookupSRV:LookupSRV string",
+          "proxy/hosts.go:30:function:newPool:func newPool() int",
+        ])
+        expect(packed.tiers.shown.b).toEqual(["proxy/hosts.go:6-6", "proxy/hosts.go:7-7", "proxy/hosts.go:30-30"])
+        expect(packed.locations).toEqual(["proxy/hosts.go:6", "proxy/hosts.go:7", "proxy/hosts.go:30"])
+      })
+
+      test("packTiers skips a pinned declaration the diff shows or a scope holds, and keeps three a file", () => {
+        const text = numbered(40)
+        const upstream = at("Upstream", 4, 11, { kind: "struct", signature: "type Upstream struct {" })
+        // hosts.go changed at lines 6 and 9: Dial's line is in the diff, and Upstream is packed whole as a scope.
+        const files = [...handlerFiles, diff("proxy/hosts.go", { added: [6, 9] })]
+        const source = sourceOf({
+          "proxy/handler.go": { text: HANDLER },
+          "proxy/hosts.go": { text, definitions: [upstream] },
+        })
+        const holders = ["A", "B", "C", "D"].map((name, index) =>
+          at(name, 20 + index * 4, 22 + index * 4, { kind: "struct", signature: `type ${name} struct {` }),
+        )
+        const packed = tiers({
+          files,
+          source,
+          outbound: {
+            uses: [
+              pinned(14, "Dial", field("proxy/hosts.go", "Upstream", "Dial", 6)),
+              pinned(14, "LookupSRV", field("proxy/hosts.go", "Upstream", "LookupSRV", 7)),
+              ...holders.map((holder) => pinned(15, holder.name, holder)),
+            ],
+            definitionsOf: () => [],
+          },
+        })
+        expect(packed.scopes.map((scope) => `${scope.path}:${scope.name}`)).toContain("proxy/hosts.go:Upstream")
+        expect(packed.outbound.map((item) => `${item.path}:${item.start}`)).toEqual([
+          "proxy/hosts.go:20",
+          "proxy/hosts.go:24",
+          "proxy/hosts.go:28",
+        ])
+        expect(packed.tiers.dropped.outbound).toEqual(["proxy/hosts.go:32"])
+      })
+
+      test("pinned and import uses sort the same whatever order they come in", () => {
+        // Two holders of one member in one sibling: the same path, line, name, specifier and target.
+        const uses = [
+          pinned(14, "Dial", field("proxy/hosts.go", "A", "Dial", 9)),
+          pinned(14, "Dial", field("proxy/hosts.go", "B", "Dial", 4)),
+          pinned(14, "Dial", field("proxy/hosts.go", "C", "Dial", 13)),
+          pinned(14, "Dial", field("proxy/hosts.go", "D", "Dial", 17)),
+          {
+            path: "proxy/handler.go",
+            line: 14,
+            name: "Dial",
+            specifier: "example.com/app/dial",
+            qualified: true,
+            default: false,
+            targets: ["dial/dial.go"],
+          },
+        ]
+        const definitionsOf = (path: string) => (path === "dial/dial.go" ? [definition(path, "Dial", 1, 3)] : [])
+        const one = tiers({ files: handlerFiles, source: handlerOnly, outbound: { uses, definitionsOf } })
+        const two = tiers({
+          files: handlerFiles,
+          source: handlerOnly,
+          outbound: { uses: uses.toReversed(), definitionsOf },
+        })
+        expect(JSON.stringify(two)).toBe(JSON.stringify(one))
+        // By declaration start, three from hosts.go, then the import's.
+        expect(one.outbound.map((item) => `${item.path}:${item.start}`)).toEqual([
+          "proxy/hosts.go:4",
+          "proxy/hosts.go:9",
+          "proxy/hosts.go:13",
+          "dial/dial.go:1",
+        ])
+        expect(one.tiers.dropped.outbound).toEqual(["proxy/hosts.go:17"])
+      })
+
+      test("no type inference: a common method name binds to every sibling method of that name, in line order", () => {
+        const text = [
+          "package proxy",
+          "",
+          "func run(upstream *Upstream) error {",
+          "\tif err := check(); err != nil {",
+          "\t\treturn errors.New(err.Error())",
+          "\t}",
+          '\treturn upstream.Dial == ""',
+          "}",
+          "",
+        ].join("\n")
+        const errs =
+          'package proxy\n\ntype proxyError struct{}\n\nfunc (e *proxyError) Error() string {\n\treturn ""\n}\n'
+        const lookups = samePackageLookups({
+          files: [diff("proxy/run.go", { added: [4, 5, 7] })],
+          source: sourceOf({
+            "proxy/run.go": {
+              text,
+              definitions: [definition("proxy/run.go", "run", 3, 8, { exported: false })],
+              references: [
+                use(text, 4, "err", "value"),
+                use(text, 4, "check", "call"),
+                use(text, 4, "err", "value", 1),
+                use(text, 4, "nil", "value"),
+                use(text, 5, "errors", "value"),
+                use(text, 5, "New", "call"),
+                use(text, 5, "err", "value"),
+                use(text, 5, "Error", "call"),
+                use(text, 7, "upstream", "value"),
+                use(text, 7, "Dial", "value"),
+              ],
+            },
+          }),
+          paths: ["proxy/errors.go", "proxy/hosts.go", "proxy/run.go"],
+        })
+        const files: Record<string, SamePackageFile> = {
+          "proxy/errors.go": {
+            text: errs,
+            definitions: [
+              definition("proxy/errors.go", "proxyError", 3, 3, { kind: "struct", exported: false }),
+              definition("proxy/errors.go", "Error", 5, 7, { kind: "method", container: "proxyError" }),
+            ],
+            references: [],
+          },
+          "proxy/hosts.go": hosts,
+        }
+        const uses = samePackageUses({ lookups, file: (path) => files[path] })
+        // `errors` is not imported here, so errors.New is looked up too; nothing declares New, so it binds nothing.
+        expect(
+          uses.map((item) => `${item.line}:${item.name}:${item.declaration?.path}:${item.declaration?.name}`),
+        ).toEqual(["5:Error:proxy/errors.go:Error", "7:Dial:proxy/hosts.go:Upstream.Dial"])
+        const packed = tiers({
+          files: [diff("proxy/run.go", { added: [4, 5, 7] })],
+          source: sourceOf({ "proxy/run.go": { text } }),
+          outbound: { uses, definitionsOf: () => [] },
+        })
+        // The method a type the change never names declares is packed first, ahead of the field the change reads.
+        expect(packed.outbound.map((item) => `${item.path}:${item.name}`)).toEqual([
+          "proxy/errors.go:Error",
+          "proxy/hosts.go:Upstream.Dial",
+        ])
+      })
+
+      test("a crafted sibling or changed line costs near-linear time", () => {
+        // Each file is under the parser's 1 MiB cap. Before the bounds, the declaration check over each whole prefix of
+        // the wide line, the body containment check over every pair of functions, the per-name insertion sort of the
+        // methods and the qualifier check over every prefix of the changed line each took seconds to minutes here.
+        const fields = `\t${Array.from({ length: 100_000 }, () => "Dial").join(", ")} int`
+        const wide: SamePackageFile = {
+          text: ["package proxy", "type Wide struct {", fields, "}", "type Late struct {", "\tDial int", "}", ""].join(
+            "\n",
+          ),
+          definitions: [
+            definition("proxy/wide.go", "Wide", 2, 4, { kind: "struct" }),
+            definition("proxy/wide.go", "Late", 5, 7, { kind: "struct" }),
+          ],
+          references: [
+            ...Array.from({ length: 100_000 }, (_, at) => ({
+              name: "Dial",
+              line: 3,
+              column: 1 + at * 6,
+              kind: "value" as const,
+            })),
+            { name: "Dial", line: 6, column: 1, kind: "value" as const },
+          ],
+        }
+        // 30,000 one-line functions, then 25,000 one-line methods of one name.
+        const functions = Array.from({ length: 30_000 }, (_, at) => `func f${at}() {}`)
+        const methods = Array.from({ length: 25_000 }, () => "func (T) Close() {}")
+        const many: SamePackageFile = {
+          text: ["package proxy", ...functions, ...methods, ""].join("\n"),
+          definitions: [
+            ...functions.map((_, at) => definition("proxy/many.go", `f${at}`, at + 2, at + 2)),
+            ...methods.map((_, at) =>
+              definition("proxy/many.go", "Close", at + 30_002, at + 30_002, { kind: "method", container: "T" }),
+            ),
+          ],
+          references: [],
+        }
+        // And a changed line of 15,000 different members, each after a 40-letter name.
+        const line = `\treturn ${Array.from({ length: 15_000 }, (_, at) => `${"q".repeat(40)}.N${at}`).join(" + ")}`
+        const text = ["package proxy", "", "func run() int {", line, "}", ""].join("\n")
+        const references = [...line.matchAll(/(q{40})\.(N\d+)/g)].flatMap((match): SourceReference[] => [
+          { name: match[1], line: 4, column: match.index, kind: "value" },
+          { name: match[2], line: 4, column: match.index + 41, kind: "value" },
+        ])
+        for (const item of [wide.text, many.text, text]) expect(item.length).toBeLessThan(1_048_576)
+        const started = performance.now()
+        const lookups = samePackageLookups({
+          files: [diff("proxy/run.go", { added: [4] })],
+          source: sourceOf({
+            "proxy/run.go": { text, definitions: [definition("proxy/run.go", "run", 3, 5)], references },
+          }),
+          paths: ["proxy/many.go", "proxy/run.go", "proxy/wide.go"],
+        })
+        const uses = samePackageUses({
+          lookups: lookups.map((lookup) => ({
+            ...lookup,
+            uses: [
+              ...lookup.uses,
+              { line: 4, name: "Close", member: true },
+              { line: 4, name: "Dial", member: true },
+              { line: 4, name: "f29999", member: false },
+            ],
+          })),
+          file: (path) => (path === "proxy/wide.go" ? wide : path === "proxy/many.go" ? many : undefined),
+        })
+        const ms = performance.now() - started
+        expect(lookups.map((lookup) => lookup.uses.length)).toEqual([15_001])
+        // Every method of the name, one field line however many names it lists, and the one function of that name.
+        // Late's Dial is the price of the bound: it comes after the first MEMBER_REFERENCES, so it is never seen.
+        expect(uses.slice(0, 25_000).map((item) => item.declaration?.start)).toEqual(
+          Array.from({ length: 25_000 }, (_, at) => at + 30_002),
+        )
+        expect(
+          uses.slice(25_000).map((item) => `${item.targets[0]}:${item.declaration?.name}:${item.declaration?.start}`),
+        ).toEqual(["proxy/wide.go:Wide.Dial:3", "proxy/many.go:f29999:30001"])
+        expect(uses[25_000]?.declaration?.signature).toHaveLength(240)
+        expect(ms).toBeLessThan(3_000)
+      })
     })
   })
 
