@@ -65,6 +65,7 @@ async function start(command: StartCommand) {
       username: "vector",
       password: command.password,
       cors: ["oc://renderer"],
+      everywherePreferencesPath: join(command.userDataPath, "everywhere-preferences.v1.json"),
     })
     parentPort.postMessage({ type: "ready" })
   } catch (error) {

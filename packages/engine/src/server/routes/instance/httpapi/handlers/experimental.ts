@@ -24,6 +24,7 @@ import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Worktree } from "@/worktree"
 import { Config } from "@/config/config"
+import { EverywherePreferences } from "@/config/everywhere-preferences"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 import { FSUtil } from "@vectordevai/core/fs-util"
@@ -604,6 +605,7 @@ const requireOwner = Effect.fnUntraced(function* (message: string) {
 export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, "unattended-worktree", (handlers) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const preferencesPath = yield* EverywherePreferences.StatePath
     const fs = yield* FSUtil.Service
     const store = yield* InstanceStore.Service
     const worktree = yield* Worktree.Service
@@ -633,18 +635,17 @@ export const unattendedWorktreeHandlers = HttpApiBuilder.group(InstanceHttpApi, 
       return yield* Effect.gen(function* () {
         if ((yield* config.trust()).trusted !== true)
           return yield* new ForbiddenError({ message: UNATTENDED_UNTRUSTED })
+        if (Config.lockedKeys().includes("everywhere")) return yield* new ForbiddenError({ message: UNATTENDED_OFF })
         return yield* mapWorktreeError(worktree.createUnattended(ctx.payload))
       }).pipe(Effect.provideService(InstanceRef, instance))
     })
 
-    // Only the user's own config files may enable this, never a project's. They are read afresh for each request, so
-    // turning it off by hand applies at once, and outside the cached copy every other reader uses, so an invalid hand
-    // edit fails this read alone. Any failure to read them, an invalid file's defect included, counts as off, so a
-    // refusal never carries the loader's message or the file's path. A company lock on the key also counts as off.
+    // The sidecar's own state and the user's legacy config are read afresh. Project files cannot grant access here.
+    // Any read or validation failure counts as off, so the refusal never carries a loader error or file path.
     const allowed = Effect.fnUntraced(function* (folder: string) {
       const global = yield* Effect.exit(config.readGlobal())
       if (Exit.isFailure(global) || Config.lockedKeys().includes("everywhere")) return false
-      const block = global.value.everywhere
+      const block = yield* EverywherePreferences.effective(preferencesPath, global.value.everywhere)
       if (block?.enabled !== true) return false
       const listed = yield* Effect.forEach(block.projects ?? [], (project) => Worktree.canonicalPath(project.directory))
       return listed.includes(folder)

@@ -48,7 +48,7 @@ function normalize(hostname: string) {
     .replace(/\.$/, "")
 }
 
-function isLoopback(hostname: string) {
+export function isLoopback(hostname: string) {
   const address = normalize(hostname)
   if (address === "localhost") return true
   if (isIP(address) === 4) return address.startsWith("127.")
