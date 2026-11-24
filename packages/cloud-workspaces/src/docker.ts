@@ -65,7 +65,8 @@ const IMAGE = /^(?:[a-z0-9][a-z0-9./:_-]*@)?sha256:[a-f0-9]{64}$/
 // This is fixed trusted code, passed as one argv element, never a shell command.
 // The repository credential crosses stdin only and exists on a private tmpfs only.
 const INITIALIZE = String.raw`
-import json, pathlib, subprocess, sys
+import json, pathlib, re, subprocess, sys, time
+started = time.monotonic()
 data = json.load(sys.stdin)
 root = pathlib.Path('/data')
 if (root / '.vector-workspace-ready').exists() or (root / 'repository').exists():
@@ -76,9 +77,46 @@ env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/data/home', 'TMPDIR': '
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
        'GIT_TERMINAL_PROMPT': '0', 'GIT_LFS_SKIP_SMUDGE': '1'}
 credential = pathlib.Path('/run/git-credential')
+# No automatic maintenance: newer git starts a detached repack after a fetch, which races the next deepen fetch
+# for shallow.lock and dies, half done, with this container.
 git = ['git', '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null',
        '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never',
-       '-c', 'http.followRedirects=false', '-c', 'submodule.recurse=false']
+       '-c', 'http.followRedirects=false', '-c', 'submodule.recurse=false',
+       '-c', 'maintenance.auto=false', '-c', 'gc.auto=0']
+def valid_branch(name):
+    # protocol.ts validBranch; git check-ref-format --branch also runs before the name reaches a refspec.
+    return (len(name) <= 180 and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', name) is not None
+            and '..' not in name and '//' not in name and '@{' not in name
+            and not name.endswith('/') and not name.endswith('.')
+            and all(not part.startswith('.') and not part.endswith('.lock') for part in name.split('/')))
+def default_history(target):
+    # Name origin's default branch in a loose refs/remotes/origin/HEAD, as branch reviews read it, and fetch enough
+    # of its history and of HEAD's for their merge base. At most 60 s, and never past 150 s from start, so the
+    # init's unchanged 180 s timeout keeps its margin. No blob filter: the export sets GIT_NO_LAZY_FETCH.
+    deadline = min(time.monotonic() + 60, started + 150)
+    def call(args, check=True, output=False):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('history budget spent')
+        result = subprocess.run(git + ['-C', str(target)] + args, env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE if output else subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=remaining, check=check)
+        return result.stdout.decode('utf-8').strip() if output else result.returncode
+    listed = call(['ls-remote', '--symref', 'origin', 'HEAD'], output=True).split('\n')
+    names = [line[len('ref: refs/heads/'):-len('\tHEAD')] for line in listed
+             if line.startswith('ref: refs/heads/') and line.endswith('\tHEAD')]
+    if len(names) != 1 or not valid_branch(names[0]) or call(['check-ref-format', '--branch', names[0]], check=False) != 0:
+        return
+    tracking = 'refs/remotes/origin/' + names[0]
+    head = call(['rev-parse', '--verify', 'HEAD^{commit}'], output=True)
+    # HEAD goes by its id here and both go by id below, so a branch moving on GitHub meanwhile moves nothing deepened.
+    call(['-c', 'protocol.version=2', 'fetch', '--no-tags', '--depth=64', 'origin', '+refs/heads/' + names[0] + ':' + tracking, head])
+    tip = call(['rev-parse', '--verify', tracking + '^{commit}'], output=True)
+    call(['symbolic-ref', 'refs/remotes/origin/HEAD', tracking])
+    for _ in range(4):
+        if call(['merge-base', 'HEAD', tracking], check=False) == 0 or call(['rev-parse', '--is-shallow-repository'], output=True) != 'true':
+            return
+        call(['-c', 'protocol.version=2', 'fetch', '--no-tags', '--deepen=256', 'origin', tip, head])
 try:
     if data.get('credential'):
         credential.write_text(data['credential'], encoding='utf-8')
@@ -92,6 +130,15 @@ try:
         subprocess.run(git + ['-C', str(target), 'remote', 'add', 'origin', url], env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(git + ['-C', str(target), 'fetch', '--no-tags', '--depth=1', 'origin', repository['ref']], env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(git + ['-C', str(target), 'checkout', '--detach', 'FETCH_HEAD'], env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            default_history(target)
+        except Exception:
+            # Best effort: keep the depth-1 clone above. A spent budget kills git mid-fetch, which leaves its locks.
+            try:
+                for lock in [target / '.git/shallow.lock'] + list((target / '.git/refs/remotes/origin').rglob('*.lock')):
+                    lock.unlink(missing_ok=True)
+            except Exception:
+                pass
     model = data['model']
     config = {'model': 'vector-cloud/' + model['id'], 'small_model': 'vector-cloud/' + model['id'],
               'enabled_providers': ['vector-cloud'], 'autoupdate': False,

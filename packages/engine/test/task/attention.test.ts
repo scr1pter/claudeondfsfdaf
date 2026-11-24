@@ -133,7 +133,8 @@ const replacements: LayerNode.Replacements = [
 const it = testEffect(AppNodeBuilder.build(nodes, replacements))
 
 // One running background command, for the case whose wait names it. Listing it tells `listing.entered` and then holds
-// until `listing.open`, as a slow read of the session's commands would; nothing here runs a process.
+// until `listing.open`, as a slow read of the session's commands would; nothing here runs a process. The case makes
+// fresh Deferreds each run, so a second run in the same process still holds the listing.
 const listing = { entered: Deferred.makeUnsafe<void>(), open: Deferred.makeUnsafe<void>() }
 const command = {
   id: "shl_attention",
@@ -644,6 +645,8 @@ describe("waiting on you", () => {
     "task_manage wait ends for a helper that starts waiting while the wait reads its background commands",
     () =>
       Effect.gen(function* () {
+        listing.entered = Deferred.makeUnsafe<void>()
+        listing.open = Deferred.makeUnsafe<void>()
         const { manager, permissions } = yield* setup()
         yield* boot()
         const root = yield* conversation()
@@ -657,7 +660,7 @@ describe("waiting on you", () => {
         yield* awaitWithTimeout(Deferred.await(listing.entered), "the wait never read its background commands")
         const asked = yield* ask(child, "src/parser.ts")
         yield* waitingOn(child, asked.id)
-        yield* Deferred.succeed(listing.open, undefined)
+        expect(yield* Deferred.succeed(listing.open, undefined)).toBe(true)
         const result = yield* awaitWithTimeout(
           Fiber.join(waiting),
           "the wait missed a helper that started waiting while it read its background commands",
