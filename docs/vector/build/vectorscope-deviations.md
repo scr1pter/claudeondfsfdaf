@@ -26536,3 +26536,7 @@ Process tests cover both Node and Bun SQLite drivers, a suspended holder with a 
 Two negative controls removed the exclusive transaction and the release drain in a scratch copy. The suspension and drain tests failed respectively, then passed after restoring the original source.
 
 The focused files passed 61 tests (races 4, pin 37, batch 3, connect-cache 1, strict 13, pr-verdict 3). Core, engine, evaluation and all 27 workspace packages passed typechecking. The SDK and editor schemas matched their checked-in output. The source digest moved from `e9374c25be7600bf` to `102ac0ede06d9bac` at revision 5.
+
+## 2026-11-23 · Merge prep against main `ab4b352d`
+
+Main was already merged, so nothing conflicted. Regenerated the SDK for main's `tightenBudget` prompt field. Typechecks and the at-risk tests passed. Details, including what this machine lacks: `v2-p0/scope-finish.md`.
