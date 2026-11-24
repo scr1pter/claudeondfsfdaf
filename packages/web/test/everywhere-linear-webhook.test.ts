@@ -199,6 +199,26 @@ test("native stop cancels only its sponsor and does not make further context, pl
   expect(native.calls).toHaveLength(before)
 })
 
+test("paused Linear refuses new signed work while native Stop still cancels earlier work", async () => {
+  const f = await ready(true)
+  const config = () => ({ ...f.deps.config(), pausedPlatforms: new Set(["linear"] as const) })
+  harness.mount({ "/linear": createLinearWebhook({ ...f.deps, config }) })
+  const body = f.envelope()
+  expect((await f.send(body)).status).toBe(200)
+  await drainAfter()
+  const calls = native.calls.filter((call) => call.operation === "create")
+  const expected = { content: { type: "error", body: "Vector is paused here." } }
+  expect(calls.map((call) => call.variables.input)).toContainEqual(expect.objectContaining(expected))
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([])
+  expect(await readCounts(f.store, { sponsor: f.account, installation: f.installation, userId: native.user }, f.fake.clock.now))
+    .toMatchObject({ sponsorToday: 0, requesterHour: 0, sponsorLive: 0 })
+
+  const existing = await f.job()
+  expect((await f.send(f.envelope("Stop", { action: "prompted", signal: "stop" }))).status).toBe(200)
+  await drainAfter()
+  expect((await readJob(f.store, existing.view.jid))?.state).toBe("cancelled")
+})
+
 test("ambiguous historical revocation and team removal hold the current generation without deleting it", async () => {
   for (const permission of [false, true]) {
     const f = await ready(true)

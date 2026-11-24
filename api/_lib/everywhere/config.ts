@@ -4,15 +4,15 @@ import { DATA_KEY_BYTES, dataKey, type DataKey } from "./crypto.js"
 import { secretUsable } from "./signature.js"
 
 /*
- * Vector everywhere's server configuration (contract 3.13), read from environment variables only. Every variable
- * missing, malformed or too short turns its piece off: the whole feature without a usable data key, the laptop offer
- * without a usable Ed25519 signing key, and a platform without its own secrets. Nothing here is ever written to a log;
- * `problems` names variables, never their values.
+ * Vector everywhere's server configuration (contract 3.13), read from environment variables only. Missing or invalid
+ * required settings turn their piece off. The feature needs a usable data key, laptop offers need an Ed25519 signing
+ * key, and each platform needs its own settings. `problems` records variable names and omits their values.
  */
 
 export const ENV_NAMES = {
   enabled: "VECTOR_EVERYWHERE_ENABLED",
   platforms: "VECTOR_EVERYWHERE_PLATFORMS",
+  pausedPlatforms: "VECTOR_EVERYWHERE_PAUSED_PLATFORMS",
   allowAccounts: "VECTOR_EVERYWHERE_ALLOW_ACCOUNTS",
   dataKey: "VECTOR_EVERYWHERE_DATA_KEY",
   offerSigningKey: "VECTOR_EVERYWHERE_OFFER_SIGNING_KEY",
@@ -45,6 +45,8 @@ export type EverywhereConfig = {
   readonly enabled: boolean
   /** Platforms listed in VECTOR_EVERYWHERE_PLATFORMS whose own settings are present; empty while the feature is off. */
   readonly platforms: ReadonlySet<PlatformId>
+  /** Configured platforms on this list keep serving existing jobs and controls while new admissions are paused. */
+  readonly pausedPlatforms: ReadonlySet<PlatformId>
   /**
    * Vector accounts the router admits as sponsors (3.4 step 3); empty means nobody. Lowercase. The only sponsor check
    * until the plan joins it: the relay adapter's plan check (adapters/remote.ts, EV-09) grants `everywhere` beside this
@@ -114,6 +116,16 @@ function list(value: string | undefined) {
     .filter(Boolean)
 }
 
+function platformList(env: Env, name: string, problems: string[]) {
+  const platforms = new Set<PlatformId>()
+  for (const value of list(env[name])) {
+    const platform = PLATFORMS.find((candidate) => candidate === value)
+    if (platform) platforms.add(platform)
+    else problems.push(name)
+  }
+  return platforms
+}
+
 /** Reads the configuration. Pass `env` in tests; the server reads `process.env` on every call. */
 export function readConfig(env: Env = process.env): EverywhereConfig {
   const problems: string[] = []
@@ -148,12 +160,8 @@ export function readConfig(env: Env = process.env): EverywhereConfig {
   const linear = complete(linearSettings)
   const jira = complete(jiraSettings)
 
-  const listed = new Set<PlatformId>()
-  for (const name of list(env[ENV_NAMES.platforms])) {
-    const platform = PLATFORMS.find((candidate) => candidate === name)
-    if (platform) listed.add(platform)
-    else problems.push(ENV_NAMES.platforms)
-  }
+  const listed = platformList(env, ENV_NAMES.platforms, problems)
+  const pausedPlatforms = platformList(env, ENV_NAMES.pausedPlatforms, problems)
   const ready: Record<PlatformId, boolean> = {
     github: true,
     slack: slack !== undefined,
@@ -195,6 +203,7 @@ export function readConfig(env: Env = process.env): EverywhereConfig {
   return Object.freeze({
     enabled,
     platforms,
+    pausedPlatforms,
     allowAccounts,
     dataKeys: Object.freeze(enabled && key ? [key] : []),
     ...(offer ? { offer } : {}),
@@ -220,7 +229,7 @@ function settingProblems<T extends Record<string, string | undefined>>(
 }
 
 /**
- * Whether a platform's intake is open: the feature is on and the platform is listed and configured (3.2 step 3).
+ * Whether a platform's routes are open: the feature is on and the platform is listed and configured (3.2 step 3).
  * Routes answer 404 before any store read when it is not.
  */
 export function platformOn(config: EverywhereConfig, platform: PlatformId): boolean {

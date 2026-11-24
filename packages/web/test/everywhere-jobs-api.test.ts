@@ -298,9 +298,10 @@ describe("switches", () => {
     expect(ended.map((item) => item.job.jid).sort()).toEqual([running.jid, jid].sort())
   })
 
-  test("no-new lets work on jobs already taken go on", async () => {
+  test.each(["global no-new switch", "Slack pause"] as const)("%s lets work on jobs already taken go on", async (pause) => {
     const jid = await offered()
-    everywhere = "no-new"
+    if (pause === "global no-new switch") everywhere = "no-new"
+    else env[ENV_NAMES.pausedPlatforms] = "slack"
     const computer = device()
     const claim = await post("claim", { jid, device: computer })
     expect(claim.status).toBe(200)

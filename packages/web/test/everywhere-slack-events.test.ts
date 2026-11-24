@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import { drainAfter } from "../../../api/_lib/everywhere/after"
+import { createJobEvents } from "../../../api/_lib/everywhere/events"
 import { findLink, issueLinkCode, recordInstall, redeemLinkCode, setMapping } from "../../../api/_lib/everywhere/identity"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
-import { claimJob, openReply, readJob, readJobBody, recordSeen } from "../../../api/_lib/everywhere/jobs"
+import { claimJob, offerJob, openReply, readJob, readJobBody, recordSeen, reportJob, settleJob, updateJobReply } from "../../../api/_lib/everywhere/jobs"
+import { readCounts } from "../../../api/_lib/everywhere/limits"
 import { createSlackAdapter } from "../../../api/_lib/everywhere/slack/adapter"
 import { parseSlack, slackInstallations } from "../../../api/_lib/everywhere/slack/parse"
 import { createSlackRoutes } from "../../../api/_lib/everywhere/slack/routes"
@@ -169,6 +171,40 @@ test("a signed linked Slack task reaches its own mapped job and one laptop offer
   expect((await f.send(body)).status).toBe(200)
   await drainAfter()
   expect(offers).toBe(1)
+})
+
+test("paused Slack refuses one signed delivery while previously offered work can claim and post its result", async () => {
+  const f = await ready()
+  const existing = await f.create()
+  expect(await updateJobReply(f.context(), existing.jid, { user: f.trigger.actor.userId })).toBe(true)
+  expect((await offerJob(f.context(), existing.jid)).ok).toBe(true)
+  expect((await setMapping(f.context(), { account: f.account, installation: f.installation, place: "C123",
+    repositories: [{ id: 101, fullName: "acme/app" }], private: false })).ok).toBe(true)
+  await recordSeen(f.context(), f.account, f.computer)
+  const deps = { ...f.deps, config: () => ({ ...f.deps.config(), pausedPlatforms: new Set(["slack"] as const) }) }
+  harness.mount({ "/events": createSlackRoutes(deps).events })
+  const subject = { sponsor: f.account, installation: f.installation, userId: f.trigger.actor.userId }
+  const counts = await readCounts(f.store, subject, f.fake.clock.now)
+  const request = f.envelope("<@U0BOT0001> A second request", { ts: "1731335401.000100" })
+  for (let retry = 0; retry < 2; retry++) {
+    expect((await f.send(request)).status).toBe(200)
+    await drainAfter()
+  }
+  expect(native.calls.filter((call) => call.method === "chat.postEphemeral").map((call) => call.body.text)).toEqual(["Vector is paused here."])
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([existing.jid])
+  expect(await readCounts(f.store, subject, f.fake.clock.now)).toEqual(counts)
+  expect(f.calls).toEqual([])
+
+  const claim = await claimJob(f.context(), { account: f.account, jid: existing.jid, device: f.computer })
+  if (!claim.ok) throw new Error("Previously offered Slack job could not claim")
+  const owner = { account: f.account, device: f.computer }
+  const lease = claim.job.lease.id
+  expect((await reportJob(f.context(), { ...owner, report: { jid: existing.jid, lease, seq: 0, milestone: "started" } })).ok).toBe(true)
+  const settled = await settleJob(f.context(), { ...owner, settle: { jid: existing.jid, lease, outcome: "no-changes", summary: "Checked the login code." } })
+  if (!settled.ok) throw new Error("Previously offered Slack job could not settle")
+  await createJobEvents(f.context, { slack: createSlackAdapter(deps) }).settled!(settled.job)
+  expect((await readJob(f.store, existing.jid))?.state).toBe("settled")
+  expect(native.calls.some((call) => call.method === "chat.postMessage" && String(call.body.text).includes("Checked the login code."))).toBe(true)
 })
 
 test("channel link codes are burned; a new direct-message code links only the verified requester", async () => {
