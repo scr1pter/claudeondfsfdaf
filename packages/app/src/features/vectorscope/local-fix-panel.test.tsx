@@ -425,8 +425,8 @@ function mountPanel() {
         solid.createComponent(Panel, {
           outcome: view.outcome,
           pr: view.pr,
-          dismissed: new Set(),
-          applied: new Set(),
+          dismissed: new Set<string>(),
+          applied: new Set<string>(),
           parentID: "ses_parent",
           directory: "/repo",
         }),
