@@ -2,12 +2,14 @@ import { createHash, randomUUID } from "node:crypto"
 import { Clock, Context, Deferred, Effect, Layer, Schema, Semaphore } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { TaskMailbox } from "@vectordevai/core/task-mailbox"
+import { RunBudget } from "@vectordevai/schema/run-budget"
 import { Task } from "@vectordevai/schema/task"
 import { TaskBridge } from "@vectordevai/schema/task-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { Storage } from "@/storage/storage"
+import { isRecord } from "@/util/record"
 
 export * as DesktopTasks from "./desktop"
 
@@ -97,7 +99,7 @@ const layer = Layer.effect(
         Effect.orDie,
       )
       if (raw === undefined) return undefined
-      const parsed = Schema.decodeUnknownOption(Stored)(raw)
+      const parsed = Schema.decodeUnknownOption(Stored)(knownCostKinds(raw))
       if (parsed._tag === "None")
         return yield* new Error({
           code: "invalid",
@@ -460,5 +462,32 @@ const layer = Layer.effect(
     })
   }),
 )
+
+// A stored record a newer engine wrote may name a cost kind this one does not know (F6). Desktop and engine ship
+// together, so only a downgrade, or a stale record left behind, meets one; it reads as "unknown", as a desktop's own
+// report would, instead of marking the whole record damaged. Only string values are mapped: any other malformed
+// field still fails the decode.
+function knownCostKinds(raw: unknown) {
+  if (!isRecord(raw) || !Array.isArray(raw.tasks)) return raw
+  return {
+    ...raw,
+    tasks: raw.tasks.map((task) => {
+      if (!isRecord(task)) return task
+      const scopes = task.budgetScopes
+      return {
+        ...knownCostKind(task),
+        ...(Array.isArray(scopes)
+          ? { budgetScopes: scopes.map((scope) => (isRecord(scope) ? knownCostKind(scope) : scope)) }
+          : {}),
+      }
+    }),
+  }
+}
+
+const knownKind = Schema.is(RunBudget.CostKind)
+
+function knownCostKind(value: Record<string, unknown>) {
+  return typeof value.costKind === "string" && !knownKind(value.costKind) ? { ...value, costKind: "unknown" } : value
+}
 
 export const node = LayerNode.make({ service: Service, layer, deps: [Session.node, Storage.node] })

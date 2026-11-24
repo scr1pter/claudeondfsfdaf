@@ -1460,6 +1460,62 @@ test("x64 diagnostics reuse bounded native checks and isolated scenarios without
     expect(JSON.stringify(value)).not.toContain("computer-helper-windows-units")
 })
 
+test("both Windows dispatch lanes warm the protected PowerShell 7 compiler right before their unchanged overlay proofs", () => {
+  const reference = steps(job("windows-build")).find(
+    (step) => step.name === "Warm the protected PowerShell 7 compiler",
+  )!
+  const lanes = [
+    {
+      job: "computer-helper-windows-overlay",
+      after: "Install the exact pinned Electron runtime",
+      before: "Run real Electron overlay properties and controller lifecycle",
+      if: undefined,
+    },
+    {
+      job: "computer-helper-windows-units",
+      after: "Build the source-bound x64 native overlay diagnostic stage",
+      before: "Run the actual medium-token staged overlay diagnostic",
+      if: "${{ success() && steps.required_protocol.outcome == 'success' }}",
+    },
+  ]
+  for (const lane of lanes) {
+    const current = steps(record(record(main.document.jobs)[lane.job]))
+    const index = (name: string) => current.findIndex((step) => step.name === name)
+    const warm = index("Warm the protected PowerShell 7 compiler")
+    expect(
+      current.filter((step) => step.name === "Warm the protected PowerShell 7 compiler"),
+      lane.job,
+    ).toHaveLength(1)
+    expect(warm, lane.job).toBe(index(lane.after) + 1)
+    expect(index(lane.before), lane.job).toBe(warm + 1)
+    const step = current[warm]!
+    expect(step.run, lane.job).toBe(reference.run)
+    expect(step.run, lane.job).toBe("bun --no-env-file ./scripts/computer-overlay-smoke-region-warm.ts")
+    expect(step["timeout-minutes"], lane.job).toBe(2)
+    expect(step["continue-on-error"], lane.job).toBeUndefined()
+    expect(step.env, lane.job).toBeUndefined()
+    expect(step.shell, lane.job).toBeUndefined()
+    expect(step.if, lane.job).toBe(lane.if)
+  }
+  // The units lane's warm-up runs on both matrix legs whenever the required protocol checks passed.
+  const units = steps(record(record(main.document.jobs)["computer-helper-windows-units"]))
+  const warm = units.find((step) => step.name === "Warm the protected PowerShell 7 compiler")!
+  for (const mode of ["baseline", "move-probe"])
+    for (const successful of [false, true])
+      for (const outcome of ["success", "failure", "skipped", "cancelled"])
+        expect(
+          expression(
+            String(warm.if),
+            {},
+            "workflow_dispatch",
+            "refs/heads/hands",
+            {},
+            { success: successful, steps: { required_protocol: { outcome } }, matrix: { diagnostic: mode } },
+          ),
+        ).toBe(successful && outcome === "success")
+  expect(main.source.match(/computer-overlay-smoke-region-warm\.ts/g)).toHaveLength(2)
+})
+
 test("a fresh-VM movement probe cannot contaminate or waive the independent unchanged baseline Stop", () => {
   const diagnostic = record(record(main.document.jobs)["computer-helper-windows-units"])
   const current = steps(diagnostic)
@@ -1690,6 +1746,80 @@ test("successful direct Windows checks forward only deduplicated fixed Caller co
   expect(calls).toBe(4)
   expect(emitted).toEqual([receipt + "\n", second + "\n", unknown + "\n", generic + "\n", repaired + "\n"])
   expect(emitted.join("")).not.toContain("PRIVATE")
+})
+
+test("the per-architecture native build window report runs after the build, reads only and cannot fail the job", () => {
+  const current = steps(job("windows-build"))
+  const build = current.findIndex((step) => step.name === "Build both channel helper architectures")
+  const report = current[build + 1]
+  expect(build).toBeGreaterThan(-1)
+  expect(report?.name).toBe("Report the per-architecture native build window")
+  expect(report!.if).toBe("always()")
+  expect(report!["continue-on-error"]).toBe(true)
+  expect(report!["timeout-minutes"]).toBe(1)
+  expect(report!.shell).toBe("pwsh")
+  expect(record(report!.env)).toEqual({ VECTOR_HELPER_RESTORED: "${{ steps.restore.outputs.restored == 'true' }}" })
+  const script = String(report!.run)
+  expect(script).toContain('foreach ($arch in "x64", "arm64") {')
+  expect(script).toContain('$tree = "native/build/win32-$arch"')
+  expect(script).toContain('Write-Output ("computer-helper-build-window " + ($window | ConvertTo-Json -Compress))')
+  // Measurement only: no write, no output variable, no native/out path, no build or digest input.
+  expect(script).not.toMatch(
+    /native\/out|Out-File|Set-Content|Add-Content|New-Item|Remove-Item|Copy-Item|Move-Item|GITHUB_OUTPUT|GITHUB_ENV|>>|cmake|bun |exit|throw/,
+  )
+  // The digest-bound build step itself keeps its deadline, parallelism and command.
+  expect(current[build]!["timeout-minutes"]).toBe(20)
+  expect(lines(current[build]!.run)).toEqual([
+    'Write-Output "logical processors: $env:NUMBER_OF_PROCESSORS"',
+    "bun --no-env-file ./scripts/build-computer-helper.ts --platform win32 --arch x64,arm64 --channel $env:VECTOR_CHANNEL --out native/out/win32",
+    'if ($LASTEXITCODE -ne 0) { throw "The Windows native build failed." }',
+  ])
+})
+
+test("each Windows architecture prints its helper identity right after its version check, logging only", () => {
+  for (const [name, arch, check] of [
+    ["windows-build", "x64", "Run Windows unit and fresh version/probe checks"],
+    ["windows-arm64-test", "arm64", "Run ARM64 unit and fresh version/probe checks"],
+  ] as const) {
+    const current = steps(job(name))
+    const label = arch === "x64" ? "x64" : "ARM64"
+    const print = current.find((step) => step.name === `Print the Windows ${label} helper identity`)
+    expect(print, name).toBeDefined()
+    // Before the staged Stop or any later step can skip it, and only once the version check passed.
+    expect(current.indexOf(print!)).toBe(current.findIndex((step) => step.name === check) + 1)
+    for (const key of ["if", "continue-on-error", "id"]) expect(print![key], `${name} ${key}`).toBeUndefined()
+    expect(print!["timeout-minutes"]).toBe(1)
+    expect(print!.shell).toBe("bash")
+    const body = String(print!.run)
+      .split("<<'NODE'\n")[1]!
+      .replace(/\nNODE\s*$/, "")
+      .replace(/^import .*$/gm, "")
+    expect(body).not.toMatch(/throw|exit|GITHUB_OUTPUT|GITHUB_STEP_SUMMARY|spawnSync/)
+    const written: string[] = []
+    const read: string[] = []
+    runInNewContext(
+      body,
+      {
+        readFileSync(file: string) {
+          read.push(file)
+          // The real Windows toolchain is multi-line (cmake, msvc, vc-tools, windows-sdk).
+          return JSON.stringify({
+            helperVersion: "1.0.15",
+            sourceDigest: "fixture-digest",
+            toolchain: "cmake version 3.31.6\nmsvc:19.44\nvc-tools:14.44\nwindows-sdk:10.0.26100.0",
+          })
+        },
+        process: { stdout: { write: (text: string) => written.push(text) } },
+      },
+      { timeout: 1000 },
+    )
+    expect(read).toEqual([`native/out/win32/${arch}/computer-helper.json`])
+    // One log line: the multi-line toolchain stays JSON-quoted on it.
+    expect(written).toEqual([
+      `vector-helper-identity platform=win32 arch=${arch} version=1.0.15 sourceDigest=fixture-digest toolchain="cmake version 3.31.6\\nmsvc:19.44\\nvc-tools:14.44\\nwindows-sdk:10.0.26100.0"\n`,
+    ])
+    expect(written.join("").split("\n")).toHaveLength(2)
+  }
 })
 
 test("the fast macOS certificate lane shares the real fixture and cleanup without native build or release credit", () => {

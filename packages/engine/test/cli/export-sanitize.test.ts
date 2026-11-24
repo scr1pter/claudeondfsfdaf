@@ -757,3 +757,171 @@ describe("sanitizeLegacy lifecycle text", () => {
     expect(leaked(portable)).toEqual([])
   })
 })
+
+// F44b: the pass-throughs a sanitized export used to keep. Each private value appears once, so a leak names its field,
+// and the sanitized archive must still decode as an archive.
+describe("sanitized export pass-throughs (F44b)", () => {
+  const PRIVATE = {
+    toolError: "ENOENT: /home/alice/secret-plan.md",
+    retryMessage: "Rate limited for org alice-private",
+    retryBody: "error: key sk-private-123 over quota",
+    retryHeader: "x-request-id private-header-value",
+    assistantMessage: "Provider rejected the prompt about the merger",
+    assistantBody: "detail: merger memo text",
+    structured: "The answer names the acquisition target",
+    formatSchema: "acquisitionTarget",
+    sessionPath: "/home/alice/projects/merger",
+    permissionPattern: "/home/alice/projects/merger/**",
+    shareURL: "https://share.example.test/private-share",
+  }
+  const user = {
+    info: {
+      id: "msg_user",
+      sessionID: "ses_export",
+      role: "user",
+      time: { created: 1 },
+      agent: "build",
+      model: { providerID: "lmstudio", modelID: "test-model" },
+      format: {
+        type: "json_schema",
+        schema: { type: "object", properties: { [PRIVATE.formatSchema]: { type: "string" } } },
+        retryCount: 2,
+      },
+    },
+    parts: [],
+  }
+  const assistant = (() => {
+    const base = message("msg_failed", "lmstudio")
+    return {
+      info: {
+        ...base.info,
+        error: {
+          name: "APIError",
+          data: {
+            message: PRIVATE.assistantMessage,
+            statusCode: 400,
+            isRetryable: false,
+            responseBody: PRIVATE.assistantBody,
+          },
+        },
+        structured: { answer: PRIVATE.structured },
+      },
+      parts: [
+        ...base.parts,
+        {
+          id: "prt_tool_error",
+          messageID: "msg_failed",
+          sessionID: "ses_export",
+          type: "tool",
+          callID: "call_1",
+          tool: "read",
+          state: { status: "error", input: {}, error: PRIVATE.toolError, time: { start: 1, end: 2 } },
+        },
+        {
+          id: "prt_retry",
+          messageID: "msg_failed",
+          sessionID: "ses_export",
+          type: "retry",
+          attempt: 1,
+          error: {
+            name: "APIError",
+            data: {
+              message: PRIVATE.retryMessage,
+              statusCode: 429,
+              isRetryable: true,
+              responseBody: PRIVATE.retryBody,
+              responseHeaders: { "x-request-id": PRIVATE.retryHeader },
+            },
+          },
+          time: { created: 1 },
+        },
+        {
+          id: "prt_compaction",
+          messageID: "msg_failed",
+          sessionID: "ses_export",
+          type: "compaction",
+          auto: true,
+          tail_start_id: "msg_user",
+        },
+      ],
+    }
+  })()
+  const source = () => {
+    const base = archive({ messages: [user, assistant] })
+    return Schema.decodeUnknownSync(SessionArchive.Legacy)({
+      ...Schema.encodeSync(SessionArchive.Legacy)(base),
+      info: {
+        ...Schema.encodeSync(SessionArchive.Legacy)(base).info,
+        workspaceID: "wrk_private",
+        path: PRIVATE.sessionPath,
+        share: { url: PRIVATE.shareURL },
+        permission: [{ permission: "edit", pattern: PRIVATE.permissionPattern, action: "allow" }],
+      },
+    })
+  }
+  const present = (value: unknown) => {
+    const text = JSON.stringify(value)
+    return Object.entries(PRIVATE)
+      .filter((entry) => text.includes(entry[1]))
+      .map((entry) => entry[0])
+  }
+
+  test("the source archive holds every private value, so the checks below can see a leak", () => {
+    expect(present(source())).toEqual(Object.keys(PRIVATE))
+    expect(String(source().info.workspaceID)).toBe("wrk_private")
+  })
+
+  test("a sanitized export redacts each of them and still decodes as an archive", () => {
+    const sanitized = sanitizeLegacy(source())
+    expect(present(sanitized)).toEqual([])
+    const decoded = Schema.decodeUnknownSync(SessionArchive.Legacy)(JSON.parse(JSON.stringify(sanitized)))
+    expect(decoded.info.share).toBeUndefined()
+    expect(decoded.info.workspaceID).toBeUndefined()
+    expect(decoded.info.path).toBe("[redacted:session-path:ses_export]")
+    expect(decoded.info.permission).toEqual([
+      { permission: "edit", pattern: "[redacted:permission-pattern:ses_export-0]", action: "allow" },
+    ])
+    const [userMessage, assistantMessage] = decoded.messages
+    expect(userMessage?.info.role === "user" && userMessage.info.format).toMatchObject({
+      type: "json_schema",
+      schema: { redacted: "format-schema:msg_user" },
+    })
+    if (assistantMessage?.info.role !== "assistant") throw new Error("expected the assistant message")
+    expect(assistantMessage.info.error).toEqual({
+      name: "APIError",
+      data: {
+        message: "[redacted:error-message:msg_failed]",
+        statusCode: 400,
+        isRetryable: false,
+        responseBody: "[redacted:error-responseBody:msg_failed]",
+      },
+    })
+    expect(assistantMessage.info.structured).toEqual({ redacted: "structured:msg_failed" })
+    const parts = Object.fromEntries(assistantMessage.parts.map((part) => [part.id, part]))
+    expect(parts.prt_tool_error).toMatchObject({
+      state: { status: "error", error: "[redacted:tool-error:prt_tool_error]" },
+    })
+    expect(parts.prt_retry).toMatchObject({
+      attempt: 1,
+      error: {
+        name: "APIError",
+        data: {
+          statusCode: 429,
+          isRetryable: true,
+          message: "[redacted:error-message:prt_retry]",
+          responseBody: "[redacted:error-responseBody:prt_retry]",
+          responseHeaders: { redacted: "error-responseHeaders:prt_retry" },
+        },
+      },
+    })
+    // An unnamed kind keeps only its identity, kind and non-text fields.
+    expect(JSON.parse(JSON.stringify(parts.prt_compaction))).toEqual({
+      id: "prt_compaction",
+      messageID: "msg_failed",
+      sessionID: "ses_export",
+      type: "compaction",
+      auto: true,
+      tail_start_id: "msg_user",
+    })
+  })
+})

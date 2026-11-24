@@ -510,6 +510,7 @@ and the package log and decisions are in
   `docs/vector/build/v2-notes/v2-complete-plan.md` §4.5) still tracks SPAWN-2 as
   "Remains", and says `/bin/ps` fails under the hosted sandbox's empty `/proc`. That
   contradicts the NQ-2 addendum. It is a lead item, and that file is not edited here.
+- Reconciled 21 Nov 2026 (v2-closeout-ci): v2-complete-plan.md §4.5 now lists SPAWN-2 as "not reachable; tracked, no code change", citing `github.sandbox.ts:812`, with the three re-check triggers above.
 
 **§6 Q3:** NQ-2's code-reading answer stands. Background shells are reachable in a hosted
 legacy `@vector` run on Linux:
@@ -529,7 +530,7 @@ fails closed.
 
 - Owned cleanup of the plain group under `required()` is covered by
   `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts:187`. That test has
-  NQ-2's local passes only: `test.yml` has no run on `native-qualify`.
+  NQ-2's local passes only: `test.yml` has no run on `native-qualify`. 21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").
 - Two more POSIX S4-2 tests exist only on `origin/review-fixes`, in `fa5a5639`, not merged
   here:
   - a floor-on case in `packages/core/test/process/owned-process.test.ts`
@@ -598,3 +599,130 @@ review-fixes lane.
 
 Both native build switches and FLOOR stay false; no production activation is authorized
 by this addendum.
+
+## Addendum, 21 November 2026: Q4 closed (legacy floor shell wrap quotes its arguments)
+
+§6 item 4 noted that the legacy floor's shell wrap joined argv with spaces. It is closed on branch
+`engine-core-fixes`:
+
+- `packages/core/src/process-isolation.ts` `decide()`, floor branch: `file` stays as written (the shell tool's
+  whole command line, with no args) and each element of `args` is POSIX single-quoted (`'` becomes `'\''`) before
+  the join. The unguarded and non-floor branches are unchanged: they pass `shell` through to cross-spawn, as Node
+  documents.
+- Callers checked before the change: `ProcessIsolation.launch` is reached from the spawner (`shell: opts.shell`),
+  `engine/util/process.ts` (`shell: opts.shell`), `pty.ts`, `mcp/stdio.ts`, `untrusted-git.ts`, `brain/document/ocr.ts`
+  and `cli/cmd/github.bundle.ts` (no `shell`). Every engine and core caller that sets `shell` passes `args: []`
+  (`tool/shell.ts:1265`/`:1285`, `tool/shell/sandbox.ts` unwrapped plans), so today's single-word case is unchanged.
+- Tests (`packages/core/test/process-isolation.test.ts`): the floor case now expects `echo 'ordinary'`; a pure case
+  expects `printf '%s\n' 'a b' 'it'\''s' '$HOME' '`x`'` (REFUSAL where bwrap is unusable or off Linux); and, where a
+  root-owned bwrap runs (owned-process.test.ts's skip pattern, kept in this file rather than the native
+  `process-isolation-linux.test.ts`), `printf '%s|'` through the plan prints `a b|it's|$HOME|`x`|`. On the old join
+  all three fail (7 pass, 3 fail; bwrap exit 2). FLOOR stays false; nothing is activated.
+- Review note (21 November 2026): with this change the floor branch quotes `args` while the unguarded and non-floor
+  branches still let cross-spawn join them unquoted, so `launch(file, args, { shell: true })` with non-empty args
+  would build different command lines with and without the floor. No caller does that today (all pass `args: []`). A
+  check that shell mode is only used with empty args (in `ProcessIsolation.launch` or spawn-inventory) is left as a
+  follow-up.
+
+## Addendum, 21 November 2026: F7 (Windows taskkill through PATH) closed for core and the engine
+
+- New `packages/core/src/windows-system.ts`: `TASKKILL` is `C:\Windows\System32\taskkill.exe` (the fixed
+  `C:\Windows`, as `config/managed.ts` reads REG and POWERSHELL; SystemRoot is the user's to change) and
+  `taskkillArgs(pid)` is `["/pid", pid, "/T", "/F"]`.
+- `core/cross-spawn-spawner.ts` killGroup: `NodeChildProcess.exec` of a `taskkill …` string (a shell, PATH and the
+  working folder) is now `execFile(TASKKILL, taskkillArgs(pid), { windowsHide: true, env: untrustedChildEnvironment(),
+  shell: false })`, with the same error mapping. killGroup stays the only signaller on this path, and the fallbacks
+  are unchanged. `core/shell.ts` killTree and `engine/util/process.ts` stop use the same constant (the latter through
+  `run`, whose cross-spawn starts an absolute `.exe` directly, with no `cmd`).
+- Tests: `packages/core/test/windows-system.test.ts` pins the constant and argv; `packages/engine/test/spawn-inventory.test.ts`
+  updates the shell.ts row and the spawner's HELPER_CALLS row, and adds "no core or engine source starts a bare
+  taskkill" (only `windows-system.ts` may name it; red on the old source, and red again with `util/process.ts`'s old
+  line put back). The Windows core and engine shards are the runtime proof.
+- Follow-ups, not changed here: `packages/sdk/js/src/process.ts:8` (the SDK copy cannot import core; after the
+  regeneration PR, inline the absolute path and a minimal environment), `packages/desktop/src/main/github-clone.ts:560`
+  (`execFileSync("taskkill", …)`) and `packages/desktop/src/main/external-agents.ts:1033` (`"taskkill"`).
+- Known limit, now handled (review note, 21 November 2026): a Windows installed outside `C:\Windows` (another drive or
+  folder) has no `C:\Windows\System32\taskkill.exe`, so with the fixed path alone a tree kill there failed where the old
+  bare name still resolved, and the process tree was left running. The three call sites now run
+  `WindowsSystem.taskkill()`, found once on the first Windows kill (never at import, so other platforms never look) by
+  the pure `findTaskkill(env, exists)`: `C:\Windows\System32\taskkill.exe` when it exists; otherwise
+  `<SystemRoot>\System32\taskkill.exe`, only when SystemRoot is an absolute drive path (`path.win32.isAbsolute` plus a
+  drive letter, so no UNC, `\\?\`, `\\.\` or drive-less `\Windows`, and unchanged by `path.win32.normalize`, so no `.`
+  or `..` parts) and that file exists; otherwise the fixed path, with the failure behaviour above (killGroup's kill
+  PlatformError, killTree's `error` handler, stop()'s nothrow failure). Never PATH, the working folder or a shell.
+  SystemRoot is read only when `C:\Windows` has no copy, from the user's own environment (the build sets
+  `autoloadDotenv: false`, so a repository's `.env` cannot set it); its folder's owner is not checked.
+  `config/managed.ts` keeps its fixed paths: company policy must not be read through a tool the user points at, while
+  a tree kill only stops Vector's own children as the user. Tests: `windows-system.test.ts` "findTaskkill" (C:\Windows
+  wins; a `D:\Windows` SystemRoot is used when C:\Windows has none; twelve relative, drive-relative, drive-less, UNC,
+  device, `..`, `.`, forward-slash and garbage values are rejected while every other file exists; nothing found keeps
+  the fixed path). Red on the old source (4 of 5 fail without `findTaskkill`; against a stub that returns the fixed
+  path, the `D:\Windows` case fails), green after; with the drive-letter check removed the rejection case is red
+  (`\Windows`, UNC, `\\?\` and `\\.\` accepted). The spawner's HELPER_CALLS row is now
+  `NodeChildProcess.execFile(taskkill(`, since the scan's call text ends at the first `)`.
+
+## Addendum, 21 November 2026: F8 (the PTY foreground read used a `ps` from PATH) closed
+
+- `packages/core/src/pty/process.ts` `foreground()` runs `/bin/ps -o tpgid= -p <pid>` (fixed path, as
+  `owned-process.ts`'s group check already assumes for macOS and usrmerged Linux) with `untrustedChildEnvironment()`,
+  `killSignal: "SIGKILL"` and `maxBuffer: 4096`; the existing catch still answers the program's own pid when `/bin/ps`
+  is missing. The inventory row in `packages/engine/test/spawn-inventory.test.ts` says so; the stance stays
+  fixed-helper.
+- Test: new `packages/core/test/pty/pty-process.test.ts` (skipped on Windows, as foreground() is). A child Bun process
+  started with a fake `ps` first on PATH (Bun resolves a bare name from the PATH it started with, so the parent's
+  PATH change would not reach it; a probe under `/tmp/vector-v2/engine-core-fixes/probe/` showed Node does honour it)
+  calls foreground(its own pid): the answer is a positive integer and the fake's marker is absent. On the old
+  `execFileSync("ps", …)` the marker appears (1 pass, 1 fail). Pids -1 and 0 come back unchanged.
+
+## Addendum, 21 November 2026: F9 (hardware read environment) and F10 (dependency-internal spawns)
+
+**F9, closed.** `packages/core/src/local-mode/hardware.ts` `run()` (vm_stat, nvidia-smi) now passes
+`env: untrustedChildEnvironment()`, so Vector's vault, bridge and Actions secrets no longer reach it; PATH and
+SystemRoot stay, so nvidia-smi on Windows is unaffected. The stricter minimal environment (as `config/managed.ts` uses)
+was not chosen: Windows GPU detection has no CI runner and would fail quietly to "no GPU". The inventory row says so,
+and `spawn-inventory.test.ts` "the hardware read starts its tool with the untrusted-child environment" is red without
+the option.
+The check allows whitespace and line breaks between `execFile(` and its arguments, so the prettier-wrapped call
+(21 November 2026 style commit) still matches; it stays red with the option removed.
+
+**F10, Dependency-internal spawns (inventory).** The direct-spawn lint cannot see processes a dependency starts inside
+itself. These are the ones core and the engine load, read from the installed packages:
+
+| Dependency | Spawning file | What starts it | Vector call sites | Stance |
+|---|---|---|---|---|
+| `google-auth-library` 10.5.0 | `build/src/auth/googleauth.js:606` (`exec("gcloud config config-helper --format json")`) | `getDefaultServiceProjectId`, from `findAndCacheProjectId` when no project id comes from the environment, the key file or the metadata server | `core/plugin/provider/google-vertex.ts:45`, `engine/provider/provider.ts:806` (`GoogleAuth` for Vertex's OpenAI-compatible fetch) | The person's own Google Cloud setup, in the engine's environment; it runs only for a configured Vertex provider. Not isolated; record before any hosted use. |
+| `google-auth-library` 10.5.0 | `build/src/auth/pluggable-auth-handler.js:68` (`spawn` of the configured executable) | A pluggable (executable-sourced) external account credential, and only with `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1` (`pluggable-auth-client.js:170`) | as above | The person opts in twice (credential file and the variable). |
+| `@aws-sdk/credential-provider-process` 3.972.41 | `dist-cjs/index.js:43` (`exec(credential_process)`) | `fromNodeProviderChain` reading a profile whose config names `credential_process` | `core/plugin/provider/amazon-bedrock.ts:100`, `engine/provider/provider.ts:601` (`@aws-sdk/credential-providers`) | The person's own AWS config; only for a configured Bedrock provider. |
+| `@npmcli/arborist` 9.4.0 | lifecycle scripts through `@npmcli/run-script`; git specs through pacote's git fetcher | `reify` of a plugin or package install | `core/npm.ts:159` | `ignoreScripts: true` is always set (`npm.ts:176`), so no lifecycle script runs; a git dependency still runs `git` for its fetch. |
+
+`spawn-inventory.test.ts` "every file that loads a dependency which spawns inside itself is listed (F10)" pins the set
+of core and engine source files that load these specifiers (`DEPENDENCY_SPAWNERS`); an unlisted importer, or a listed
+file that stops loading one, makes it red (checked by emptying the arborist row).
+
+## Addendum, 21 November 2026: HF-2's Windows line, S6-2 and the S6-5 shell halves
+
+The HF-8 note above is left as written; this closes what it left open.
+
+- **HF-8's "has not run yet" (`:334`) and S6-7's "(pending)" inherited-environment variant: closed.** Main run
+  44848275007, engine (windows, shard 8/12), job 136673698450, ran `test\mcp\computer-policy-isolation.test.ts` and
+  printed `MCP_REQUIRED_ISOLATION_LAUNCH=refused childElapsedMs=2583` before "(pass) required isolation keeps the
+  computer policy first and ends launch-floor refusals as failed MCP statuses" (log read with get_job_logs). That is the
+  Windows branch, which expects the literal REFUSAL with the inherited environment.
+- **Windows background REFUSAL wins by design.** `ShellJobs.isolationRefusal` (`engine/task/shells.ts:96`, called in
+  `start` at admission) refuses a hosted Windows background command before the recheck, the lease or any row, because
+  the holder never reaches `ProcessIsolation.launch`. S6-5's "a dying beforeSpawn yields its own message, not REFUSAL"
+  therefore holds on POSIX and the PTY/MCP paths, and is inverted on purpose for Windows background shells.
+- **S6-5, Windows background shell half: added.** `packages/engine/test/task/shell-required-isolation.test.ts` gains
+  "Windows background admission refuses required isolation before the authority recheck", in its own child process
+  (`VECTOR_TEST_SHELL_REQUIRED_ISOLATION=before-recheck`, the same 25 s kill and 30 s budget as the existing case, which
+  is unchanged). The child passes a `beforeSpawn` that would die, and asserts a REFUSAL cause, that the recheck never
+  ran, `list` is `[]` and `full` is false, then prints `WINDOWS_BACKGROUND_REFUSAL_BEFORE_RECHECK`, which the parent
+  checks. Windows-only (skipped on Linux locally: 0 pass, 2 skip); the Windows engine shard is its proof.
+- **S6-2 at the spawner layer, POSIX: added.** `packages/engine/test/task/shells.test.ts` "the authority recheck runs
+  right before the spawner starts an owned command" wraps the real CrossSpawnSpawner in a recording layer. The order is
+  `["recheck", "recheck", "spawn"]` (the recheck runs once before any durable row and again immediately before the
+  spawn, `shells.ts` start and the POSIX branch of `run`), and the one spawn carries `OwnedProcess.options`. With the
+  pre-spawn recheck removed from the POSIX branch it fails. Skipped on Windows, where the ChildProcessSpawner is not
+  used; the Windows order is "allowed authority rechecks bracket durable admission before the command starts".
+- **Owed:** S6-5's foreground-shell half (the ShellTool harness under `requireIsolation()` in a child) is not added
+  here. `hands-current-state.md` is left to the Hands lane, which records HF-2 there.

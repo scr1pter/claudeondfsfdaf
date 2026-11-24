@@ -194,6 +194,11 @@ export const everywhereKeys = {
   linearHeader: (installationKey: string, delivery: string) => key("linear", "delivery", installation(installationKey), matching(delivery, UUID)),
   /** VE-05: the live jobs on an installation, so erasing it finds them without scanning (E13). */
   installationJobs: (installationKey: string) => key("livejobs", installation(installationKey)),
+  /**
+   * EV-23: the jobs on an installation that ended in the last 30 days (jid → when it ended), so erasing it reaches the
+   * sealed summary an ended job's record still holds (E13). It holds jids only.
+   */
+  installationEnded: (installationKey: string) => key("endedjobs", installation(installationKey)),
   /** VE-05: every job an account sponsored in the last 30 days, for its job list and for account erase. */
   jobHistory: (sponsor: string) => key("history", account(sponsor)),
   /**

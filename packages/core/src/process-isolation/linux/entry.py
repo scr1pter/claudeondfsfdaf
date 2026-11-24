@@ -957,13 +957,16 @@ def keeper_log_classification(data):
     if phase is None and any(line.startswith(b"VECTOR_NATIVE_KEEPER_STAGE") for line in data.splitlines()):
         return "invalid"
     # Exact fatal labels and formatting from bubblewrap v0.9.0, commit
-    # 8e51677abd7e3338e4952370bf7d902e37d8cbb6 (bubblewrap.c and utils.c:warnv).
+    # 8e51677abd7e3338e4952370bf7d902e37d8cbb6 (bubblewrap.c and utils.c:warnv). Ubuntu's 0.9.0-1ubuntu0.3 Debian patch
+    # rewrites only the userns-denied message; its exact text, read from that package's /usr/bin/bwrap, is the second
+    # bwrap-userns-denied label (NQ-D4).
     # Only the closed category leaves this parser. Error prose, paths and unknown errno text remain private;
     # keeper_destination_stage maps only six exact errno texts after a fixed target to a closed suffix.
     labels = (
         ("bwrap-initial-caps", b"bwrap: Unexpected capabilities but not setuid, old file caps config?", True),
         ("bwrap-capset", b"bwrap: capset failed: ", False),
         ("bwrap-userns-denied", b"bwrap: No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces. On e.g. debian this can be enabled with 'sysctl kernel.unprivileged_userns_clone=1'.", True),
+        ("bwrap-userns-denied", b"bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>.", True),
         ("bwrap-clone", b"bwrap: Creating new namespace failed: ", False),
         ("bwrap-clone", b"bwrap: Creating new namespace failed, likely because the kernel does not support user namespaces.  bwrap must be installed setuid on such systems.", True),
         ("bwrap-uid-map", b"bwrap: setting up uid map: ", False),

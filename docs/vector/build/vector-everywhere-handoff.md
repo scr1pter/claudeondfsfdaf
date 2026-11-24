@@ -288,6 +288,7 @@ Each item below is also in the deviations log.
   - **Instruction files in a continued session.** A session continued from a job reads the folder's AGENTS.md and CLAUDE.md with the owner's permissions from its first prompt. The page says so. Holding those files until the folder is trusted is not built; decide before listing the perk. Review round four recommends that engine-side hold, with an engine test that a continued session's system prompt leaves out a job-written AGENTS.md. Nothing in code enforces the gate today.
   - **Continue while a job runs.** Continue is disabled only while the app has heard that the job is still running, so a job running since before the window opened still offers it.
   - **Docs sweep.** The wiring's `refresh()` has no caller, and its doc comment still names the settings page. index.ts's comment above `startRemote` is still stale (EV-17).
+    *2026-11-21 (v2-closeout-ci):* closed. index.ts's comment above `startRemote` now adds "or this computer takes Vector everywhere jobs", `refresh()`'s doc comment says nothing calls it yet and that it is kept for the deferred write path, and the `needs-remote` line no longer says the settings page asks for consent. `refresh()` is kept (its tests at everywhere-wiring.test.ts:890 and :901 use it). Comments only; no code change.
   - **The jobs link.** The vectordev.ai jobs link needs /everywhere out of packages/web/src/drafts/ before the perk is listed.
     *2026-11-20 (EV-23):* the page exists as packages/web/src/drafts/everywhere.astro and reads `?job=vej_…` to mark one job (`focusJob`); the desktop's `jobsPage` links the page without it today. The precondition stands: the draft moves to src/pages at 2.0.0.
   - **Listing the perk.** The four preconditions sit under the spec's "Codium listing" owner action and in "Owner decisions" above.
@@ -357,7 +358,7 @@ Each item below is also in the deviations log.
   Deviations log, "2026-11-20, EV-26", Left open.
 - **The body route's loose ends (EV-27, open).**
   - **For the lead:**
-    - add `api/everywhere/jobs/[jid]/body.ts` to test/api-module-loading.test.ts's second test (the fresh Node probe ran in the receipt; that file is outside the brief);
+    - add `api/everywhere/jobs/[jid]/body.ts` to test/api-module-loading.test.ts's second test (the fresh Node probe ran in the receipt; that file is outside the brief); *2026-11-21: done on `codium-api-fixes`, appended as the last `entries` element (13 fresh Node rotations, body.ts first in one); `api-module-loading.test.ts` 4 pass, no TDZ or cycle.*
     - rule on a lost start event (below);
     - decide how EV-30's settle listener finds a job (below);
     - outside scope and not fixed: the production jobs routes (jobs-api.ts:320) and account routes (account-api.ts:494) build `everywhereStore()` with no account authority, so once the flag is on they would answer 503 `EVERYWHERE_ACCOUNT_UNVERIFIED`. The body route defaults to `codiumAccountAuthority`.

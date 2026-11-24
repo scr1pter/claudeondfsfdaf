@@ -2529,7 +2529,8 @@ bun/own-key diagnostic cell on `ubuntu-24.04` 20261111.127.1 only:
 - the complete eight-cell matrix (four baseline cells and the four fresh Engine-death
   cells), with owned cleanup on every path (never dispatched);
 - the native `owned` refusal case (it does not exist);
-- witness obligations 1 and 2, D34 and D4;
+- witness obligations 1 and 2 (21 Nov 2026: witnessed for Node, Bun open), D4, and D34 (moved to known limits by
+  D108, 21 Nov 2026);
 - a hosted `test.yml` run of the lane's Bun tests;
 - the reader integration clause of "Remaining qualification" (not verified here);
 - a reviewed reader re-pin before any post-merge native dispatch (D95).
@@ -2591,6 +2592,7 @@ stays refused (`packages/core/src/cross-spawn-spawner.ts:405-411`, the throw at 
       sandbox's empty `/proc`.
     - NQ-2's C9 addendum shows that no shipped or CI build reaches it.
     - The lead reconciles the two; that file is not edited here.
+    - Reconciled 21 Nov 2026 (v2-closeout-ci): v2-complete-plan.md §4.5 row SPAWN-2 now reads "not reachable; tracked, no code change" with the re-check triggers (spawn review, NQ-2 addendum).
 
 ### Evidence (local)
 
@@ -2634,7 +2636,7 @@ From the worktree, read-only except for the four documents:
 
 ### Deferred verification
 
-- `test.yml` has no run on `native-qualify`. The branch's PR gives the first hosted run of:
+- `test.yml` has no run on `native-qualify`. The branch's PR gives the first hosted run of (21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").):
   - `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts` (renamed, D106);
   - `packages/engine/test/spawn-inventory.test.ts`;
   - `packages/engine/test/cli/github.isolation.test.ts`;
@@ -2955,3 +2957,121 @@ shard passed.
   - `bun typecheck` in `packages/engine`: exit 0; full `bun turbo typecheck --concurrency=2`:
     27 of 27 tasks successful.
 - Both native build switches and `FLOOR` stay false.
+
+## 21 November 2026: the stock-noble reader fix, a source-level record (NQ-READER)
+
+Read on branch `engine-core-fixes` (main `4fc245b6` merged). Source only; no CI run is claimed.
+
+- `56e568f4` ("attest stock Python builtin struct profile") and `7a7a3d57` ("accept verified stock Python builtin
+  struct") are the same change: their `directory-identity.ts` diffs have one stable patch-id, `2f1da105`. Neither commit
+  is an ancestor of main, but every line the change adds is in main's `packages/core/src/directory-identity.ts`:
+  - `:36-37`: the reader refuses (`os._exit(125)`) unless `_struct` is in `sys.builtin_module_names`;
+  - `:537-542`: `extensionProfile` accepts exactly one dynamic extension, `_ctypes.cpython-312-<arch>-linux-gnu.so`
+    under `/usr/lib/python3.12/lib-dynload/`, and names `_struct` as compiled in;
+  - `:620`: the extension scan matches `_ctypes` or `_struct` shared objects;
+  - `:626`: `const extension = extensionProfile(extensions, arch)`;
+  - `:669`: the loader branch ends in `verify(interpreter)`.
+  The change's own `await verify(extension)` line was folded later into `Promise.all([verify(PYTHON),
+  verify(extension)])` (`:676`), which still verifies the extension.
+- `READER_SHA` in `packages/engine/test/fixture/native-shell-ci/common.ts:11` is
+  `33c834a9f7b10dfb0962c510db14a53ca92c5645f19d57c64ab5aac9fbc9a762`, and `sha256sum` of the file at this head gives
+  the same value, so the native-shell CI build's check (`build.ts:58`) accepts this reader.
+- Still open: the CI step-12 qualification of the stock-noble reader. This record proves presence in source, not a
+  qualified run. Both native build switches and `FLOOR` stay false.
+
+## 21 November 2026: the first hosted test.yml run of the lane's Bun tests (NQ-TESTYML)
+
+Main push run 44848275007 of `test.yml`, at `f3d7ac74` (after the native-qualify work merged), all jobs read with
+get_job_logs:
+
+- engine (linux, shard 1/6), job 136673698344: `test/task/shell-required-isolation-posix-owned.test.ts` printed
+  `POSIX_OWNED_BACKGROUND_CLEANUP_CONFIRMED_UNDER_REQUIRED_ISOLATION {"elapsed":3066,"reaping":true,"ended":["ESRCH","ESRCH"]}`
+  and "(pass) owned background cleanup is confirmed under required isolation (Linux)"; the shard ended 1757 pass,
+  28 skip, 0 fail (1785 tests, 112 files).
+- engine (linux, shard 3/6), job 136673698359: `test/cli/github.isolation.test.ts` ran and passed; 1876 pass, 5 skip,
+  0 fail (1881 tests, 111 files).
+- engine (linux, shard 6/6), job 136673698427: `test/spawn-inventory.test.ts` ran and passed; 1229 pass, 19 skip,
+  0 fail (1248 tests, 111 files).
+- unit (linux), job 136673698207: `@vectordevai/core:test` "Ran 5507 tests across 416 files", 0 fail. `git ls-tree` at
+  `f3d7ac74` lists exactly 416 core test files, among them `process-isolation.test.ts`,
+  `process-isolation-linux.test.ts`, `process-isolation-runtime.test.ts`, `effect/process-isolation-spawn.test.ts` and
+  `process/owned-process.test.ts`, so they ran; this is inferred from the count, since the log tail read does not
+  name each file.
+
+This is a per-SHA record on main with both native build switches and `FLOOR` false; it is not a native qualification.
+
+## 21 November 2026: Native Shell runs 18 and 19 (NQ-RUNS-18-19)
+
+"Genuine native Shell seam" (`native-shell.yml`) on `native-qualify`, read with the job listings and get_job_logs.
+Per-SHA records only: not main, no qualification, both native build switches and `FLOOR` false.
+
+- Run 18, [43841399673](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43841399673), at `47db73cd`
+  (2026-11-16 09:37 UTC): all eight cells failed at step 16, "Actual ShellTool and command lifecycle witness before any
+  UID sweep", with steps 1-15 green and step 18 ("Preserve every earlier failure") failing after it. Jobs:
+  node codium engine-death 133210692826, node codium baseline 133210693226, bun codium baseline 133210693299,
+  node own-key baseline 133210693332, bun codium engine-death 133210693350, bun own-key engine-death 133210693369,
+  bun own-key baseline 133210693379, node own-key engine-death 133210693546.
+- Run 19, [43867414546](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/43867414546), at `c9a8e489`
+  (2026-11-16 12:31 UTC): the four Node cells passed every step: node own-key engine-death 133299448949, node codium
+  engine-death 133299449031, node own-key baseline 133299449128, node codium baseline 133299449236. The four Bun
+  cells failed at step 16: bun own-key baseline 133299448739, bun own-key engine-death 133299449093, bun codium
+  baseline 133299449146, bun codium engine-death 133299449404. Job 133299448739's host line is
+  `VECTOR_NATIVE_SHELL_FAILURE {"v":1,"host":"host-close",…,"driverExit":134,"probe":"probe-empty-abort-own-zero","probeNode":"probe-node-zero",…}`,
+  and both runtimes' preflight printed `readerSHA256` `33c834a9…a762` for source revision `c9a8e489`.
+- This supersedes `native-isolation-status.md:474` ("No Node cell was dispatched"); a dated note is added there.
+
+## 21 November 2026: runner-home witness obligations 1 and 2 for Node (NQ-WITNESS-1-2)
+
+The two obligations `native-isolation-status.md` kept open (the runner-home canaries are exactly `ENOENT` through the
+mask, `native-shell-payload.ts:701-719`; `/home/runner/work` cannot be rebuilt, `EROFS`, `:731-743`) are checks in the
+payload's `inspect` mode. They are witnessed for Node at `c9a8e489` by run 43867414546's baseline cells
+"node, own-key, baseline" (job 133299449128) and "node, codium, baseline" (job 133299449236), both green at step 16.
+The derivation, from the fixtures at `c9a8e489`:
+
+- A baseline cell runs every case: the engine selects `CASES` unless the family is engine-death
+  (`native-shell-engine.ts:183`), and the host expects `[...CASES]` (`native-shell-host.ts:495`); `CASES` starts with
+  `inspect` (`native-shell-payload.ts:17-18`).
+- The host passes a baseline cell only with `rounds === CASES.length`, exit code 0 and `driverExit` 0
+  (`native-shell-host.ts:951`, with the summary check at `:810`), and each round needs the case it expected
+  (`:762`), so the `inspect` round completed.
+- The engine accepts the `inspect` round only when the ShellTool result has `exit === 0` and both
+  `native-inspect-stdout` and `native-inspect-stderr` (`native-shell-engine.ts:237-241`). The payload prints those
+  only after its `need(...)` checks, the canary `ENOENT` and `EROFS` checks among them, have all held; a failed
+  `need` exits non-zero first.
+
+So both checks held in both Node baseline cells. Main's copies of the three fixtures differ from `c9a8e489` only in
+`native-shell-payload.ts`'s sandbox `runError` regex (it also accepts "exited N"), which these checks do not use. A
+Bun witness stays open: run 19's four Bun cells failed at step 16 before any case. Per-SHA on `native-qualify`, not
+main; not a qualification; both native build switches and `FLOOR` false.
+
+## 21 November 2026: D108, D34 moves to known limits (NQ-D34)
+
+- D108. D34 (which of `/home/runner` and `/home/runner/work` the keeper cannot search) leaves the open list and is a
+  known limit. Flagged for the lead in the PR: this is a lane decision taken on the lead's behalf from the fix plan.
+  - Why it is moot now: the shipped design masks the runner home as a whole (the runner-home mask the NQ-5 obligations
+    describe), so no mask needs the keeper to search either ancestor; which one blocks changes nothing that ships. The
+    runner-home obligations that do matter are witnessed for Node (NQ-WITNESS-1-2 above) and open for Bun.
+  - What it becomes: a precondition. Any narrower mask (one that leaves `/home/runner` or `/home/runner/work`
+    reachable and masks below it) needs a per-ancestor witness first, for example D34's declined option (a), a
+    `prepare-mask-host-temp-keeper-search-runner-home`/`-runner-work` label, before it can be qualified.
+  - Edited to say so: `native-isolation-status.md` (the two "still unproven" sentences and the Open list) and this
+    file's Open list. No code, workflow or label changed; both native build switches and `FLOOR` stay false.
+
+## 21 November 2026: D4, Ubuntu's rewritten userns-denied message gets its closed label (NQ-D4)
+
+- `packages/core/src/process-isolation/linux/entry.py` `keeper_log_classification`: a second exact
+  `bwrap-userns-denied` label, directly after the upstream one, for Ubuntu 0.9.0-1ubuntu0.3's Debian-patched text:
+  "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user
+  namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>." The bytes were
+  read from that package's `/usr/bin/bwrap` (`dpkg -s bubblewrap`: 0.9.0-1ubuntu0.3) with
+  `grep -ao 'No permissions to create new namespace[^\x00]*'`. The category is unchanged, so the closed vocabulary and
+  the TypeScript side (`github.isolation.ts`) need nothing; the pin comment names the Ubuntu package.
+- `packages/core/test/fixture/native-mask-origins.py`: the pinned-label table gains the line (21 to 22 labels, 18
+  categories), so the existing generic checks run on it too (prefix, `Bwrap:` case, private suffix, missing final LF,
+  doubled line), and `test_ubuntu_userns_denied_text_is_exact` adds the exact match, a lowercased copy, a copy cut after
+  "See <https://deb.li/bubblewrap>", a trailing private suffix (no-marker), and the line without its LF or doubled
+  (invalid).
+- Not run locally: the fixture refuses to run outside its approved CI job (`CI=true`), and that guard was respected;
+  both Python files parse. The proof is the `native-guard-unit.yml` run on this branch's PR. Locally,
+  `process-isolation-linux.test.ts` (18 pass), `process-isolation-runtime.test.ts` (11 pass) and the native-shell
+  `policy.test.ts` (11 pass) stay green. Both native build switches and `FLOOR` stay false.

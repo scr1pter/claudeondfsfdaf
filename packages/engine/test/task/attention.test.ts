@@ -1,7 +1,7 @@
 import path from "node:path"
 import { rm } from "node:fs/promises"
 import { describe, expect } from "bun:test"
-import { Cause, Clock, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { ConfigV1 } from "@vectordevai/core/v1/config/config"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
@@ -34,6 +34,7 @@ import { SessionTaskSize } from "@/session/task-size"
 import { TaskAttention } from "@/task/attention"
 import { TaskManager } from "@/task/manager"
 import { TaskSignals } from "@/task/signals"
+import { ShellJobs } from "@/task/shells"
 import { SubagentLifecycle } from "@/tool/subagent-lifecycle"
 import { isRecord } from "@/util/record"
 import { provideInstanceEffect, tmpdirScoped, TestInstance } from "../fixture/fixture"
@@ -101,36 +102,63 @@ const mcp = Layer.succeed(
   }),
 )
 
-const it = testEffect(
-  AppNodeBuilder.build(
-    LayerNode.group([
-      TaskAttention.node,
-      TaskSignals.node,
-      InstanceHooks.node,
-      TaskManager.node,
-      SessionPrompt.node,
-      Session.node,
-      SessionStatus.node,
-      Permission.node,
-      Question.node,
-      Config.node,
-      Ripgrep.node,
-      FSUtil.node,
-      Database.node,
-      BackgroundJob.node,
-      BackgroundJobStore.node,
-      CrossSpawnSpawner.node,
-      LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
-    ]),
-    [
-      [SessionSummary.node, summary],
-      [LSP.node, lsp],
-      [MCP.node, mcp],
-      // Notes reach an idle root after 50 ms of quiet here, held at most 300 ms while its helpers run.
-      [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true, noteQuietMs: 50, noteHoldMs: 300 })],
-    ],
-  ),
+const nodes = LayerNode.group([
+  TaskAttention.node,
+  TaskSignals.node,
+  InstanceHooks.node,
+  TaskManager.node,
+  SessionPrompt.node,
+  Session.node,
+  SessionStatus.node,
+  Permission.node,
+  Question.node,
+  Config.node,
+  Ripgrep.node,
+  FSUtil.node,
+  Database.node,
+  BackgroundJob.node,
+  BackgroundJobStore.node,
+  CrossSpawnSpawner.node,
+  LayerNode.make({ service: TestLLMServer, layer: TestLLMServer.layer, deps: [] }),
+])
+
+const replacements: LayerNode.Replacements = [
+  [SessionSummary.node, summary],
+  [LSP.node, lsp],
+  [MCP.node, mcp],
+  // Notes reach an idle root after 50 ms of quiet here, held at most 300 ms while its helpers run.
+  [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true, noteQuietMs: 50, noteHoldMs: 300 })],
+]
+
+const it = testEffect(AppNodeBuilder.build(nodes, replacements))
+
+// One running background command, for the case whose wait names it. Listing it tells `listing.entered` and then holds
+// until `listing.open`, as a slow read of the session's commands would; nothing here runs a process. The case makes
+// fresh Deferreds each run, so a second run in the same process still holds the listing.
+const listing = { entered: Deferred.makeUnsafe<void>(), open: Deferred.makeUnsafe<void>() }
+const command = {
+  id: "shl_attention",
+  title: "Build the parser",
+  command: "bun run build",
+  status: "running",
+  startedAt: Date.now(),
+  outputBytes: 0,
+}
+const shells = Layer.succeed(
+  ShellJobs.Service,
+  ShellJobs.Service.of({
+    start: () => Effect.die("unexpected background command"),
+    list: () =>
+      Deferred.succeed(listing.entered, undefined).pipe(
+        Effect.andThen(Deferred.await(listing.open)),
+        Effect.as([command]),
+      ),
+    stop: () => Effect.succeed(undefined),
+    wait: () => Effect.never,
+    full: () => Effect.succeed(false),
+  }),
 )
+const withShells = testEffect(AppNodeBuilder.build(nodes, [...replacements, [ShellJobs.node, shells]]))
 
 const ref = { providerID: ProviderV2.ID.make("lmstudio"), modelID: ModelV2.ID.make("test-model") }
 
@@ -577,6 +605,69 @@ describe("waiting on you", () => {
         expect(again.timedOut).toBe(true)
         expect(again.attention).toBeUndefined()
         expect(again.tasks[0]?.status).toBe("waiting_on_user")
+        yield* permissions.reply({ requestID: asked.id, reply: "once" })
+      }),
+    30_000,
+  )
+
+  it.instance(
+    "task_manage wait ends for a helper that starts waiting while the wait reads its board",
+    () =>
+      Effect.gen(function* () {
+        const { manager, permissions } = yield* setup()
+        yield* boot()
+        const root = yield* conversation()
+        const child = yield* helper(root, { title: "Fix the parser" })
+
+        // The wait reads its board under the control lock. Held here, the helper starts waiting and is signalled before
+        // that read, as on a slow runner, and the wait still ends for it. The lock is SubagentLifecycle's process-global
+        // one, safe to hold because the tests in a file run one after another.
+        const started = yield* Effect.gen(function* () {
+          const waiting = yield* manager
+            .wait({ sessionID: root.id, taskIDs: [child], timeout: 20_000 })
+            .pipe(Effect.forkScoped)
+          const asked = yield* ask(child, "src/parser.ts")
+          yield* waitingOn(child, asked.id)
+          return { waiting, asked }
+        }).pipe(SubagentLifecycle.controlLock.withPermits(1))
+        const result = yield* awaitWithTimeout(
+          Fiber.join(started.waiting),
+          "the wait missed a helper that started waiting as it began",
+        )
+        expect(result.timedOut).toBe(false)
+        expect(result.attention).toEqual([child])
+        yield* permissions.reply({ requestID: started.asked.id, reply: "once" })
+      }),
+    30_000,
+  )
+
+  withShells.instance(
+    "task_manage wait ends for a helper that starts waiting while the wait reads its background commands",
+    () =>
+      Effect.gen(function* () {
+        listing.entered = Deferred.makeUnsafe<void>()
+        listing.open = Deferred.makeUnsafe<void>()
+        const { manager, permissions } = yield* setup()
+        yield* boot()
+        const root = yield* conversation()
+        const child = yield* helper(root, { title: "Fix the parser" })
+
+        // The wait reads the session's background commands before its board. Held there, the helper starts waiting and
+        // is signalled before either read, and the wait still ends for it.
+        const waiting = yield* manager
+          .wait({ sessionID: root.id, taskIDs: [child, command.id], timeout: 20_000 })
+          .pipe(Effect.forkScoped)
+        yield* awaitWithTimeout(Deferred.await(listing.entered), "the wait never read its background commands")
+        const asked = yield* ask(child, "src/parser.ts")
+        yield* waitingOn(child, asked.id)
+        expect(yield* Deferred.succeed(listing.open, undefined)).toBe(true)
+        const result = yield* awaitWithTimeout(
+          Fiber.join(waiting),
+          "the wait missed a helper that started waiting while it read its background commands",
+        )
+        expect(result.timedOut).toBe(false)
+        expect(result.attention).toEqual([child])
+        expect(result.shells).toEqual([command])
         yield* permissions.reply({ requestID: asked.id, reply: "once" })
       }),
     30_000,

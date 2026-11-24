@@ -181,7 +181,7 @@ The status of the rest:
 
 - The NQ-2 Linux test `packages/engine/test/task/shell-required-isolation-posix-owned.test.ts`
   has no hosted run yet. `test.yml` has not run on `native-qualify`, so the Linux engine
-  shard of the branch's PR is its first hosted run.
+  shard of the branch's PR is its first hosted run. 21 Nov 2026: `test.yml` ran on main after the native-qualify merge: run 44848275007 at `f3d7ac74` (jobs 136673698344, 136673698359, 136673698427, 136673698207; see native-qualify-notes.md, "21 November 2026: the first hosted test.yml run of the lane's Bun tests").
 - Two more POSIX tests for the same contract are on `origin/review-fixes` (`fa5a5639`, not
   merged here). One of them is
   `packages/engine/test/task/shell-required-isolation-posix.test.ts`, the path the NQ-2

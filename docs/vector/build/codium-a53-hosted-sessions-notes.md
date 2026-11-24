@@ -191,3 +191,41 @@ and the desktop's bar and the phone's Cloud computer page offer the files from i
 `hostedComputers` now share `knownComputers` and the margin constant; their behaviour is unchanged. `kept` is a hosted
 API field added by H1c rather than H1a (D2, for the lead). `codium-deviations.md` "Codium finish: H1 clients (15 Nov
 2026)".
+
+**Status, 21 Nov 2026 (v2 leftover P0, branch `hosted-download-billing`).** The files flow of `recordHeartbeat` changed
+on the server. The build record, with its red and green runs and mutations, is `v2-p0/hosted-download-billing.md`.
+- O1 (`codium-deviations.md` "Codium finish: H1 computer (15 Nov 2026)", Observations) is closed. A beat with no
+  upload decides between pack and upload from its own `archiveBytes`, never from the size an earlier beat left, so a
+  job session's hostd that dropped its copy is asked to pack again instead of being handed a link for a copy it no
+  longer has. The size kept from earlier beats is still what an `uploaded` beat's HEAD is checked against. The HEAD now
+  reads as confirmed (200 with that length), rejected (404, or 200 with another length) or unknown (a failure, a
+  timeout, another status or no length, `checkUpload`). For a job session an unknown check answers a fresh upload link,
+  so hostd keeps its copy and the next beat checks again, and a rejected one answers nothing, so hostd drops the copy
+  and its next beat is asked to pack. Download-only sessions are unchanged by this line. Signing the PUT, with the
+  archives key's SADD first, is one helper (`signUpload`).
+- O4 is closed. For a download-only session a rejected upload (404, or another size) answers `pack`, which H1b's hostd
+  takes as a rejection, packing the disk again and uploading anew. A check that cannot tell answers nothing and the
+  next beat checks again. `readyAt` is set only on a confirmed upload, as before.
+- PR3 and O6 (the 15 Nov "Not done" defect above, and `owner-actions/hosted-computer.md`'s 16 Nov PR3 gate) are closed
+  on the server. `launchSession` no longer charges the retention, and the `launch.download.{final, snapshot, due}`
+  plumbing only it used is gone (the launch keeps `download: true` for the block's hold). The retention is charged by
+  `chargeDownloadRetention` inside the confirmation guard, after the egress waiver: it reads the plan as the start does
+  (`readEntitlement`), charges `chargeRetention` unchanged for access `final` or `current` with the disk's deletion date
+  from `readDiskDue` (none when no date is set), and a charge that fails leaves the confirmation standing. A start that
+  fails, a session that delivers nothing and a disk made before signed heartbeats now charge no retention; the block's
+  minutes are still charged (M8). Lead call, defaulted and accepted: the daily-share check moved from the start to the
+  confirmation, so a refusal there leaves the disk kept at Vector's cost instead of refusing the start. Four cases in
+  `test/hosted-sessions-api.test.ts` that pinned the charge at the start now pin "no line before an upload, exactly one
+  after" on purpose. Comments left with the old wording, outside this branch's files: `test/codium-pool.test.ts`'s
+  reviewed-producer comment still says the retention's daily share is checked "against its start's snapshot" (it is
+  now the confirmation's), `api/_lib/hosted-entitlement.ts` (`hostedDiskPolicy`) and `api/_lib/hosted-ledger.ts`'s
+  header still say the first download-only start charges it, `test/hosted-lifecycle.test.ts:176` says the same, and
+  `MODEL-PLANS.md`'s Provisioner bullet says "once a download-only start runs on them".
+- O2's server half is built. A beat may carry `packFailed: "too-large"` (`Hosted.Heartbeat`; `parseHeartbeat` keeps
+  that value only). It marks the session's request `download.failed` (shown on `SessionView.download.failed`), after
+  which the files flow asks nothing more. `requestDownload` answers 409 `HOSTED_DOWNLOAD_UNAVAILABLE`, "This computer's
+  files are over 5 GB, too large to pack for download.", and the reaper's `reapDownload` ends a download-only session
+  as `finished` at its next pass instead of at its block's end, with no retention charged. The app's `reasonLine` shows
+  the same sentence. Computers report it only once their disk is made from a rebuilt image (the a54 line, R4(d)); an
+  older hostd keeps being asked to pack until its block ends, as before. `test/hosted-copy.test.ts`'s field list has no
+  `failed` because none of its answers carries it; add it there if a case ever does.

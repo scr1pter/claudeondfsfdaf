@@ -2,8 +2,9 @@
 
 This folder is the source of the Vector v2 redesign: every concept board, plus the specs behind them.
 
-- **Live canvas (claude.ai, private to the owner's account):** https://claude.ai/artifact/H5htgm9tPE9WnxNoKMDwAG. It has 22 interactive boards in 8 rows, and each board's Tweaks switch its states.
-- **Status (2026-11-14):** concept approved by the owner. Nothing is implemented yet.
+- **Live canvas (claude.ai, private to the owner's account):** https://claude.ai/artifact/H5htgm9tPE9WnxNoKMDwAG. It has 32 interactive boards in 12 rows, and each board's Tweaks switch its states.
+- **Status (2026-11-20):** the whole app is laid out. The owner approved the concept, and wants the newer boards (the blend round, the places round and the whole-app round) built 1:1 as "a better Vector" that looks about the same whichever agent runs a session. Main and Sidebar are superseded. Nothing is implemented yet.
+- **Start here:** `specs/5-app-map.md` maps every screen in today's app to the board that draws it, settles the More menu, and splits the build between Fable, Opus and Sonnet (section 5).
 - **Order of work:**
   1. Finish and merge every in-flight feature into `main`. See `docs/vector/build/v2-handoff.md`.
   2. Build this redesign behind a flag (`shell.signature`).
@@ -40,8 +41,9 @@ This folder is the source of the Vector v2 redesign: every concept board, plus t
 | `specs/2-blend.md` | The blend of Signature with today's app: header, composer, Changes, browser concepts A/B/C, one-row chips (section 4.4), browser reference (section 6.G), open decisions |
 | `specs/3-screens.md` | Vectorscope, Settings, Tasks, Search, Connected tools and Automations screens |
 | `specs/4-places.md` | Where the future features live: panes, On-call, commands, walkthrough. Section 7 has 13 open decisions |
+| `specs/5-app-map.md` | The whole app: the final More menu, every screen and which board draws it, the ten whole-app boards, the build split, decisions D1-D13, and where the boards depart from the spec |
 | `canvas/canvas.json` | Canvas layout: board positions, row titles, notes |
-| `canvas/*.dc.html` | The boards: Main, Sidebar, Chat, Changes, Tasks, Browser-A/B/C, Vectorscope-Home/Review, Settings-General/Models/Account, Search, Connections, Automations, Plan, Artifacts, Simulator, Oncall, Commands, Walkthrough |
+| `canvas/*.dc.html` | The boards: Main, Sidebar, Chat, Changes, Tasks, Browser-A/B/C, Vectorscope-Home/Review, Settings-General/Models/Account, Search, Connections, Automations, Plan, Artifacts, Simulator, Oncall, Commands, Walkthrough, and the whole-app round: More, AgentDashboard, Workflows, Models, Codium, Brain, Onboarding, SessionTools, Research, Settings-More |
 
 The `.dc.html` files use the Design canvas format: an `<x-dc>` template plus one `class Component extends DCLogic` script. They render on the canvas above, not as plain web pages.
 
@@ -55,6 +57,7 @@ The `.dc.html` files use the Design canvas format: an `<x-dc>` template plus one
   - the purple or neutral active state;
   - and others.
 - **Screens spec section 10:** 12 items.
+- **App map section 6:** D1-D13, for example keeping Vector Cloud in More as "Deploy", and Terminal and the code editor leaving More.
 - **Places spec section 7:** 13 items:
   - the Panels button;
   - On-call as a sidebar item;

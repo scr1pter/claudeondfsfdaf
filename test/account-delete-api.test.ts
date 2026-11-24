@@ -58,6 +58,11 @@ beforeEach(async () => {
         response.end(JSON.stringify({ result: [] }))
         return
       }
+      // The ops account list, read when the ops Worker is not set up (A46): this account never used ops.
+      if (command[0] === "ZSCORE") {
+        response.end(JSON.stringify({ result: null }))
+        return
+      }
       if (command[0] === "DEL") {
         const removed = command.slice(1).reduce((count, key) => count + (store.delete(key) ? 1 : 0), 0)
         response.end(JSON.stringify({ result: removed }))

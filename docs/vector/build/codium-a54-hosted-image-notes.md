@@ -160,3 +160,18 @@ adds `/usr/share/vector` to the root-owned `find`, and checks the folder's mode,
 the agent can read each file. `test/image.test.ts` has 1 new case (22 pass, 3 skip). `boot.sh`, its base archive,
 hostd and the firewall are unchanged. As with every image change, a computer gets the files only when its disk is made
 from a newer image. `codium-deviations.md` "Codium finish: H2 image notices (15 Nov 2026)".
+
+**Status, 21 Nov 2026 (v2 leftover P0, branch `hosted-download-billing`).** O2's hostd and daemon half
+(`codium-deviations.md` "Codium finish: H1 computer (15 Nov 2026)", O2 and review finding F4). `packWork` now rejects
+with `PackTooLarge` (exported from `daemon.ts`) once the packed output passes one upload's limit (5 GiB), after killing
+the packer and removing the partial file; it waits for the file to be closed first, so no partial file is left. Any
+other failure still rejects with an ordinary error. It takes an options object (`maxBytes`, `packer`, `dir`); the
+default packer is today's `setpriv` + `tar` as the agent user, and the default folder `PACK_DIR`, so a test can stream
+past the limit with a fake packer in a temporary folder. The daemon latches `packFailed: "too-large"` on
+`PackTooLarge`, carries it in every later report and never packs again in the session (job and download paths alike);
+other pack failures stay retryable. `boot.sh`, the image, the firewall and `BINARIES` are unchanged, and no image or
+source pin moves (`test/image.test.ts`, `script/bake-snapshot.ts` and `test/bake-snapshot.test.ts` checked). This
+reaches a computer only once the owner rebuilds the image and the computer's disk is made from it (R4(d)). Tests:
+`daemon.test.ts` 18 pass (1 new), `hostd.test.ts` 19 pass (2 new), `source.test.ts`, `bake-snapshot.test.ts` and
+`recording.test.ts` unchanged; typecheck and `bun run build` clean (no Node on the build machine, so `node --check` was
+not run). The build record is `v2-p0/hosted-download-billing.md`.

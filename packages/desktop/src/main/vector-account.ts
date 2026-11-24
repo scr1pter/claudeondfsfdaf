@@ -531,6 +531,8 @@ export function createVectorAccount(deps: Dependencies) {
               code: url.searchParams.get("code"),
               state: pending.state,
               verifier: pending.verifier,
+              // Only narrows: the server refuses a code saved for another purpose before consuming it (A16).
+              expect: reauth ? "delete" : "sign-in",
             }),
             redirect: "error",
             signal: AbortSignal.timeout(15_000),

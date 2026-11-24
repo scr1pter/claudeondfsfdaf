@@ -361,6 +361,12 @@ jobs:
         run: |
           bun --no-env-file ./scripts/diagnose-build-computer-overlay-smoke.ts --platform win32 --helper native/out/win32/x64 --out native/out/overlay-win32
           if ($LASTEXITCODE -ne 0) { throw "The x64 native overlay diagnostic stage failed to build." }
+      # As in computer-helper.yml: PowerShell 7's first Add-Type in a fresh VM pays a cold Roslyn cost inside the
+      # 15-second region observer. This separate fixed compile grants nothing; the observer still compiles its own source.
+      - name: Warm the protected PowerShell 7 compiler
+        if: ${{ success() && steps.required_protocol.outcome == 'success' }}
+        timeout-minutes: 2
+        run: bun --no-env-file ./scripts/computer-overlay-smoke-region-warm.ts
       - name: Run the actual medium-token staged overlay diagnostic
         id: staged_native
         if: ${{ success() && steps.required_protocol.outcome == 'success' && matrix.diagnostic == 'baseline' }}
@@ -445,6 +451,11 @@ jobs:
         run: |
           node node_modules/electron/install.js
           if ($LASTEXITCODE -ne 0) { throw "The pinned Electron installation failed." }
+      # As in computer-helper.yml: PowerShell 7's first Add-Type in a fresh VM pays a cold Roslyn cost inside the
+      # 15-second region observer. This separate fixed compile grants nothing; the observer still compiles its own source.
+      - name: Warm the protected PowerShell 7 compiler
+        timeout-minutes: 2
+        run: bun --no-env-file ./scripts/computer-overlay-smoke-region-warm.ts
       - name: Run real Electron overlay properties and controller lifecycle
         timeout-minutes: 3
         run: |
@@ -591,6 +602,18 @@ jobs:
           fi
           rg --version
 
+      # OCR needs native tesseract and pdftoppm, which the published installers do not ship, so the OCR cases in
+      # packages/core/test/brain/document-ocr.test.ts skip without them. Linux installs both for the OCR step below.
+      - name: Install OCR tools
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-eng poppler-utils
+          tesseract --version
+          pdftoppm -v
+
       # Without rg on PATH the core search tests download it from its releases page while they run, and in run
       # 41968211015 that download hung past their 60-second preparation deadline. Install it as the Windows engine
       # shards do.
@@ -621,6 +644,24 @@ jobs:
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+      # The OCR cases run with the tools configured in their own step, not job-wide, so the other brain tests keep
+      # running with OCR unconfigured in the turbo run above. A skipped case fails the step: a skipIf regression would
+      # otherwise pass silently.
+      - name: Run document OCR tests
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        timeout-minutes: 5
+        working-directory: packages/core
+        env:
+          VECTOR_OCR_TESSERACT: /usr/bin/tesseract
+          VECTOR_OCR_PDFTOPPM: /usr/bin/pdftoppm
+        run: |
+          set -o pipefail
+          GITHUB_ACTIONS=false bun test --timeout 30000 test/brain/document-ocr.test.ts 2>&1 | tee "$RUNNER_TEMP/document-ocr.log"
+          if grep -Eq '^ *[0-9]+ skip' "$RUNNER_TEMP/document-ocr.log"; then
+            echo "::error::document OCR cases were skipped"
+            exit 1
+          fi
+
       # Desktop tests otherwise run only in the release workflow (turbo has no vector-desktop#test task). The
       # computer-use build contract runs desktop main's computer tests on both unit lanes, so they run here even when
       # an earlier package failed. Each file gets its own Bun process, as scripts/test.ts does, because Electron and
@@ -648,10 +689,30 @@ jobs:
             node ./test/computer/helper-node.ts "$RUNNER_TEMP/computer-helper.mjs" "$RUNNER_TEMP/computer-fake-helper.mjs" || status=1
           exit $status
 
+      # packages/cloud has no turbo test task, so on Linux its compliance file runs in the lane workflows only. This
+      # one case starts Bun and git with the Codium picker's explicit environment, so it also runs here on Windows,
+      # where PATH uses ';' and only the named system variables pass through.
+      - name: Run the Codium dispatch-input compliance case
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        timeout-minutes: 5
+        working-directory: packages/cloud
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern "reach the picker only as step environment" src/workflow-compliance.test.ts
+
       - name: Check generated client
         if: runner.os == 'Linux'
         working-directory: packages/client
         run: bun run check:generated
+
+      # turbo has no test task for packages/client or packages/sdk/js, so their suites (import boundaries, contract
+      # identity, server startup, wire compatibility) ran nowhere. Both run here on both systems, and both report.
+      - name: Run client and SDK tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          status=0
+          (cd packages/client && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1
+          (cd packages/sdk/js && GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000) || status=1
+          exit $status
 
       - name: Run HttpApi exerciser gates
         if: runner.os == 'Linux'
@@ -685,6 +746,7 @@ jobs:
           status=0
           GITHUB_ACTIONS=false bun test --timeout 30000 test/cloud-workspaces-page.test.ts || status=1
           GITHUB_ACTIONS=false bun test --timeout 30000 test/account-page.test.ts || status=1
+          GITHUB_ACTIONS=false bun test --timeout 30000 test/support-report.test.ts || status=1
           exit $status
 
       # script/ is not a workspace either, so turbo skips the VectorScope eval tooling's tests: the dataset contract,
@@ -749,11 +811,11 @@ jobs:
   engine-linux:
     needs: validate-dispatch
     if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
-    name: engine (linux, shard ${{ matrix.shard }}/6)
+    name: engine (linux, shard ${{ matrix.shard }}/8)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -792,27 +854,25 @@ jobs:
 
       - name: Run Engine shard
         # Sharding keeps each Bun process to part of the suite; one process for all of it crashed in Bun.
-        # Bun's --shard sends sorted test file i to shard i%N+1. Green main run 43896073886 (2034e1da) took
-        # 17.6/14.5/15.8/10.9 min of test time in 4 shards. Measured slow runs stretched shards 1.3-2.0x, more
-        # toward a shard's end: main 33fc9fbc shard 3/4 (job 133346297374) and connect 1d944dd9 shard 3/4
-        # (job 133464471365) hit 30 min with every test passing, at 1.63x and 1.71x the green run's times.
-        # From those per-file times, 1d944dd9's largest shard is 19.5 min in 4 (37 min at 1.9x), 16.9 in 5
-        # (32 min at 1.9x) and 13.9 in 6 (shard 1/6; 26 min at 1.9x), so six. Replace this estimate with the
-        # first green 6-shard run's step times; if its largest shard tops about 15 min, also raise this to 45.
+        # Bun's --shard sends sorted test file i to shard i%N+1. Green 6-shard main runs took, per shard in minutes:
+        # 44848275007 (f3d7ac74) 16.3/8.1/8.9/13.2/15.0/12.5, 44822880542 (3670461a) 14.4/8.2/10.4/18.1/10.6/11.8 and
+        # 44869120445 (3e90df62) 11.4/7.8/9.7/10.5/15.5/8.1. The largest shard moves between runs (1/6, 4/6 or 5/6)
+        # and reached 15.5-18.1 min, which slow runs (measured 1.3-2.0x) would push past this limit. The timeout is
+        # not to be raised, so the same round-robin runs over eight shards instead.
         timeout-minutes: 30
         working-directory: packages/engine
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/6
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/8
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
 
   engine-windows:
     needs: validate-dispatch
     if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
-    name: engine (windows, shard ${{ matrix.shard }}/12)
+    name: engine (windows, shard ${{ matrix.shard }}/18)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     runs-on: windows-latest
     defaults:
       run:
@@ -853,10 +913,14 @@ jobs:
         # The shard holding isolation, task sizing and the prompt loop ran its tests in 19 minutes in run 41925753700.
         # In runs 41943664010 and 41959395503 the same files ran 1.5 to 2 times slower and hit 30 minutes, the second
         # with every test it reached passing. 45 leaves room for a slow Windows runner; no test's own deadline changes.
+        # Eighteen shards since 22 November 2026: main runs 44937950225 (b87cc462) and 44957526120 (23d09a96) hit this
+        # limit in shard 7/12 with every test passing. In green run 44968700872 the twelve shards took 5.3-25.9 min of
+        # test time (isolation.test.ts alone 17.7); replaying that run's per-file times over Bun's round-robin gives a
+        # largest shard of 20.9 min and a next-largest of 12.5 min at 18 shards. The limit and deadlines stay as they are.
         timeout-minutes: 45
         working-directory: packages/engine
         # Whole-file shards retain the configured preloads and per-test deadlines; print passes to locate any stall.
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/12
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/18
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
 

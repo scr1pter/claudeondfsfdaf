@@ -8,7 +8,7 @@ import { engineEventSource } from "./keep-awake"
 import { createRemoteLink, type RemoteLink, type RemoteSocket, type RemoteStatus } from "./remote-link"
 import { createRemoteNotify, type RemoteNotify } from "./remote-notify"
 import { computerName, phoneAppOrigin, relayName } from "./remote-host"
-import type { EngineRequest } from "./remote-routes"
+import { engineRequest } from "./remote-engine"
 import { getStore } from "./store"
 import { vaultSecrets } from "./vault-secrets"
 import { onVectorAccountChanged, vectorAccount } from "./vector-account-runtime"
@@ -139,33 +139,4 @@ export const REMOTE_STARTING: RemoteStatus = {
   limit: 5,
   viewers: 0,
   pairing: { state: "idle" },
-}
-
-/** One request to the local engine over its authenticated loopback server. */
-async function engineRequest(base: string, authorization: string, request: EngineRequest) {
-  const url = new URL(request.path, base)
-  for (const [name, value] of Object.entries(request.query)) url.searchParams.set(name, value)
-  const response = await fetch(url, {
-    method: request.method,
-    headers: {
-      authorization,
-      accept: "application/json",
-      ...(request.body !== undefined ? { "content-type": "application/json" } : {}),
-    },
-    ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}),
-    redirect: "error",
-    signal: AbortSignal.timeout(30_000),
-  })
-  const text = await response.text()
-  let body: unknown = null
-  if (text) {
-    try {
-      body = JSON.parse(text)
-    } catch {
-      body = {
-        error: { code: "REMOTE_ENGINE_ANSWER", message: "Vector's engine answered with something other than JSON." },
-      }
-    }
-  }
-  return { status: response.status, body }
 }

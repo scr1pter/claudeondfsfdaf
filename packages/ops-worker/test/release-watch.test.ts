@@ -296,3 +296,57 @@ describe("intake", () => {
       expect({ body, status: (await harness.release(body)).status }).toEqual({ body, status: 400 })
   })
 })
+
+// R46-17: the run state is one meta row, and Cloudflare refuses a value over 2 MB. An Ultra account at its largest
+// (10 monitors and 10 domains, every URL at the longest allowed, and the most watches it may run at once, each with five
+// such paths, a baseline that passed on all of them and a failure recorded for each) stays under the bound, and one
+// more release is recorded without a watch and answered, never failed.
+describe("the run state's size (R46-17)", () => {
+  const long = (host: string, tag: string) => {
+    const base = `https://${host}/${tag}-`
+    return base + "a".repeat(OPS_LIMITS.urlMaxLength - base.length)
+  }
+  const stored = (harness: Harness) =>
+    harness.rows<{ v: string }>("SELECT v FROM meta WHERE k = 'run'").map((row) => Buffer.byteLength(row.v))[0] ?? 0
+
+  test("an Ultra account at its largest stays under the bound, and a release past the watch cap is answered unwatched", async () => {
+    const harness = new Harness()
+    const hosts = Array.from({ length: OPS_LIMITS.maxDomains }, (_, index) => `d${index}.vector-fixture.com`)
+    // One minute watches so the baselines pass quickly; a watch's size does not depend on its length.
+    await harness.plan(planFor("vector-200", { releaseGuard: { perDay: 100, watchMin: 1, paths: 5 } }))
+    await harness.config(
+      hosts,
+      hosts.map((host, index) => ({ id: `monitor-${index}`, url: long(host, "monitor") })),
+    )
+    const repos = Array.from({ length: OPS_LIMITS.maxConcurrentWatches }, (_, index) => 1_000 + index)
+    const paths = (repo: number) =>
+      Array.from({ length: OPS_LIMITS.maxReleasePaths }, (_, index) =>
+        long(hosts[repo % hosts.length]!, `${repo}-${index}`),
+      )
+    for (const repositoryId of repos)
+      expect((await harness.release({ repositoryId, sha: SHA("1"), urls: paths(repositoryId) })).body).toMatchObject({
+        accepted: true,
+      })
+    await harness.runFor(4 * 60_000)
+    expect(harness.rows("SELECT repo FROM releases WHERE state = 'passed'")).toHaveLength(repos.length)
+    // Every path now fails: one step records a failure for each, and no watch has failed twice yet.
+    for (const repositoryId of repos)
+      for (const url of paths(repositoryId)) harness.net.sites.set(url, () => new Response("down", { status: 500 }))
+    for (const repositoryId of repos)
+      expect((await harness.release({ repositoryId, sha: SHA("2"), urls: paths(repositoryId) })).body).toMatchObject({
+        accepted: true,
+      })
+    await harness.runFor(60_000)
+    expect(harness.rows("SELECT repo FROM releases WHERE state = 'watching'")).toHaveLength(repos.length)
+    const size = stored(harness)
+    expect(size).toBeGreaterThan(OPS_LIMITS.maxRunStateBytes * 0.8)
+    expect(size).toBeLessThan(OPS_LIMITS.maxRunStateBytes)
+
+    const extra = 1_000 + repos.length
+    const answer = await harness.release({ repositoryId: extra, sha: SHA("3"), urls: paths(extra) })
+    expect(answer).toEqual({ status: 200, body: { accepted: false, reason: "daily-limit" } })
+    expect(harness.rows("SELECT state FROM releases WHERE repo = ?", extra)).toEqual([{ state: "skipped" }])
+    expect(harness.rows("SELECT repo FROM releases WHERE state = 'watching'")).toHaveLength(repos.length)
+    expect(stored(harness)).toBeLessThan(OPS_LIMITS.maxRunStateBytes)
+  })
+})

@@ -37,6 +37,7 @@ import {
   transcriptFailureReason,
   validateCoreTranscript,
   waitForLifecycleExit,
+  warmLifecycleInspection,
   type Command,
   type CommandResult,
   type NativeChannel,
@@ -340,7 +341,6 @@ test("ARM diagnostics retain apps reply codes and the original affinity and list
       "x >= 0 && y >= 0 && x < fit.width && y < fit.height && source_x >= 0 && source_y >= 0 && source_x < display->bounds.width && source_y < display->bounds.height",
     ],
     ["affinity-plan-request", "next < 999'999"],
-    ["affinity-plan-current", "value->current()"],
     ["affinity-plan-current-context", "state->available()"],
   ] as const
   const ordered = guards.map(([name, predicate]) => {
@@ -352,12 +352,21 @@ test("ARM diagnostics retain apps reply codes and the original affinity and list
   })
   expect(ordered).toEqual([...ordered].sort((left, right) => left - right))
   expect(plan.indexOf("const auto phase = session()")).toBeLessThan(ordered[0]!)
+  // HF-6: the single plan freshness read names its first stale term between the request and context guards.
+  const stale = [
+    "const auto stale = value->first_stale();",
+    "if (stale != WindowsAffinityStale::none) diagnostic_stage(windows_privileged_affinity_stale_stage(stale, false), [&] { require(false); });",
+  ].map((text) => plan.indexOf(text))
+  expect(stale).not.toContain(-1)
+  expect(stale[0]!).toBeGreaterThan(ordered.at(-2)!)
+  expect(stale[1]!).toBeLessThan(ordered.at(-1)!)
   for (const [text, count] of [
     ["session()", 1],
     ["state->available()", 2],
     ["target->current()", 1],
     ["state->captures->current(frame, phase)", 1],
-    ["value->current()", 1],
+    ["value->current()", 0],
+    ["value->first_stale()", 1],
     ["std::find_if(", 2],
     ["fit_capture(", 1],
   ] as const)
@@ -389,20 +398,126 @@ test("ARM diagnostics retain apps reply codes and the original affinity and list
     "while (native->state->available() && target->current() && !detector->listener_health_ready() && GetTickCount64() < deadline)",
   )
   const final = [
-    ["input-health-context", "native->state->available()"],
-    ["input-health-target", "target->current()"],
-    ["input-health-ready", "detector->listener_health_ready()"],
-  ].map(([name, predicate]) => {
-    const text = `diagnostic_stage(L"${name}", [&] { require(${predicate}); })`
-    expect(health).toContain(text)
-    expect(WINDOWS_NATIVE_STAGES).toContain(name!)
-    return health.indexOf(text)
+    ...[
+      ["input-health-context", "native->state->available()"],
+      ["input-health-target", "target->current()"],
+    ].map(([name, predicate]) => {
+      expect(WINDOWS_NATIVE_STAGES).toContain(name!)
+      return `diagnostic_stage(L"${name}", [&] { require(${predicate}); })`
+    }),
+    // HF-6: the one unchanged readiness re-check, then one closed classification of the failure.
+    "if (!detector->listener_health_ready()) diagnostic_stage(windows_privileged_listener_health_stage(listener_health_facts(*detector, diagnostic)), [&] { require(false); });",
+  ].map((text) => {
+    expect(compact(health)).toContain(text)
+    return compact(health).indexOf(text)
   })
   expect(final).toEqual([...final].sort((left, right) => left - right))
   expect(health.split("native->state->available()").length - 1).toBe(2)
   expect(health.split("target->current()").length - 1).toBe(2)
   expect(health.split("detector->listener_health_ready()").length - 1).toBe(2)
   expect(health).not.toMatch(/setup_start|deadline\s*\+=|WindowsBackend::system/)
+})
+
+test("HF-6 diagnostics name the first stale affinity term and classify a listener-health failure read-only", async () => {
+  const native = path.join(desktopDirectory, "native/computer-helper/windows/src")
+  const source = await readFile(path.join(native, "privileged_self_test.cpp"), "utf8")
+  const header = await readFile(path.join(native, "privileged_self_test.h"), "utf8")
+  const compact = (text: string) => text.replace(/\s+/g, " ").trim()
+  const terms = header
+    .match(/enum class WindowsAffinityStale \{([^}]+)\};/)?.[1]
+    ?.split(",")
+    .map((term) => term.trim())
+  expect(terms).toEqual([
+    "none",
+    "target_lost",
+    "target_stale",
+    "pid",
+    "main_window",
+    "excluded_window",
+    "point_patch",
+    "point_excluded",
+    "owner",
+    "hit_null",
+    "hit_main",
+    "hit_foreign",
+    "affinity_call",
+    "affinity_monitor",
+    "affinity_none",
+    "affinity_other",
+    "exception",
+  ])
+  // Every term but none has one planning stage and one display-read stage, in enum order, in the catalog.
+  for (const prefix of ["affinity-plan-current-", "affinity-capture-stale-"]) {
+    const stages = terms!.slice(1).map((term) => prefix + term.replaceAll("_", "-"))
+    expect(WINDOWS_NATIVE_STAGES.filter((stage) => stages.includes(stage))).toEqual(stages)
+  }
+  expect(WINDOWS_NATIVE_STAGES).not.toContain("affinity-plan-current")
+
+  // first_stale keeps current()'s original short-circuit order, and current() is defined by it.
+  const plan = source.slice(
+    source.indexOf("WindowsAffinityStale first_stale() const noexcept"),
+    source.indexOf("struct CaptureFailureTrace"),
+  )
+  const order = [
+    "if (!target) return WindowsAffinityStale::target_lost;",
+    "if (!target->current()) return WindowsAffinityStale::target_stale;",
+    "if (target->pid() != fixture.pid) return WindowsAffinityStale::pid;",
+    "if (!windows_window_current(main)) return WindowsAffinityStale::main_window;",
+    "if (!windows_window_current(excluded)) return WindowsAffinityStale::excluded_window;",
+    "if (!fixture.patch.contains(point)) return WindowsAffinityStale::point_patch;",
+    "if (!fixture.excluded_bounds.contains(point)) return WindowsAffinityStale::point_excluded;",
+    "if (GetWindow(excluded.hwnd, GW_OWNER) != main.hwnd) return WindowsAffinityStale::owner;",
+    "windows_privileged_affinity_hit(GetAncestor(WindowFromPoint(point), GA_ROOT), main.hwnd, excluded.hwnd)",
+    "GetWindowDisplayAffinity(excluded.hwnd, &affinity)",
+    "return windows_privileged_affinity_value(read, affinity);",
+    "} catch (...) { return WindowsAffinityStale::exception; }",
+  ].map((text) => plan.indexOf(text))
+  expect(order).not.toContain(-1)
+  expect(order).toEqual([...order].sort((left, right) => left - right))
+  expect(plan).toContain("bool current() const noexcept { return first_stale() == WindowsAffinityStale::none; }")
+
+  // The display read records the plan's first stale term through the same two freshness checks.
+  const read = source.slice(
+    source.indexOf("backend.read = [read]"),
+    source.indexOf("const auto current = backend.current;"),
+  )
+  expect(read.split("trace->affinity_plan_current()").length - 1).toBe(2)
+  expect(read).not.toContain("affinity_plan->current()")
+  // Row 4 names a stale display-read term only where the sample is already missing, before that stage.
+  const row = source.slice(source.indexOf("run(4, [&]"), source.indexOf("run(5, [&]"))
+  const missing = [
+    "if (!response.affinity_sample && response.affinity_stale != WindowsAffinityStale::none) diagnostic_stage(windows_privileged_affinity_stale_stage(response.affinity_stale, true), [&] { require(false); });",
+    'diagnostic_stage(L"affinity-native-sample-missing", [&] { require(response.affinity_sample.has_value()); });',
+  ].map((text) => compact(row).indexOf(text))
+  expect(missing).not.toContain(-1)
+  expect(missing[0]!).toBeLessThan(missing[1]!)
+
+  // The listener facts are one synchronous read: no wait, retry, setup, focus or input.
+  const facts = source.slice(
+    source.indexOf("WindowsListenerHealthFacts listener_health_facts("),
+    source.indexOf("CaptureBitmap decode_png("),
+  )
+  expect(facts.split("observe_windows_availability(WindowsAvailabilityBackend::system())").length - 1).toBe(1)
+  expect(facts).not.toMatch(
+    /sleep_for|wait_for|while|for \(|setup_start|setup_reset|SetForegroundWindow|SendInput|request\(|detection_reasons/,
+  )
+  const classifier = source.slice(
+    source.indexOf("std::wstring_view windows_privileged_listener_health_stage("),
+    source.indexOf("std::wstring windows_privileged_origin_stage("),
+  )
+  const stages = [...classifier.matchAll(/return L"([^"]+)";/g)].map((match) => match[1])
+  expect(stages).toEqual([
+    // An exception while gathering the facts is its own stage, never a foreground refusal.
+    "input-health-observe-exception",
+    "input-health-unavailable-listener",
+    "input-health-unavailable-context",
+    "input-health-calibrating",
+    "input-health-no-foreground",
+    "input-health-foreground-refused",
+    "input-health-observe-slow",
+    "input-health-ready",
+  ])
+  for (const stage of stages) expect(WINDOWS_NATIVE_STAGES).toContain(stage!)
 })
 
 test("Windows isolated scenario settles the uncalibrated detection verdict before the first session-bound request", async () => {
@@ -1356,6 +1471,52 @@ test("Mac liveness requires completed ps evidence or a genuine ESRCH including r
     }
     expect(inspections).toBe(0)
   }
+})
+
+test("Mac lifecycle inspection tools warm once under a setup bound and fail closed when unavailable", async () => {
+  const calls: Command[] = []
+  const run = (pgrep: CommandResult, ps: CommandResult) => (command: Command) => {
+    calls.push(command)
+    return Promise.resolve(command.executable === "/usr/bin/pgrep" ? pgrep : ps)
+  }
+  for (const code of [0, 1]) {
+    calls.length = 0
+    await warmLifecycleInspection(run(inspectedProcess("", code), inspectedProcess("S+")))
+    expect(calls).toEqual([
+      { executable: "/usr/bin/pgrep", args: ["-P", String(process.pid)], timeoutMs: 5000 },
+      { executable: "/bin/ps", args: ["-p", String(process.pid), "-o", "stat="], timeoutMs: 5000 },
+    ])
+  }
+  for (const [pgrep, ps] of [
+    [{ ...inspectedProcess(""), timedOut: true }, inspectedProcess("S+")],
+    [inspectedProcess("", 2), inspectedProcess("S+")],
+    [{ ...inspectedProcess(""), code: null }, inspectedProcess("S+")],
+    [inspectedProcess(""), { ...inspectedProcess("S+"), timedOut: true }],
+    [inspectedProcess(""), inspectedProcess("", 1)],
+    [inspectedProcess(""), inspectedProcess("", 2)],
+  ] as const)
+    await expect(warmLifecycleInspection(run(pgrep, ps))).rejects.toThrow(
+      "The process inspection tools are unavailable.",
+    )
+})
+
+test("Mac fixture warms pgrep and ps before any timed lifecycle inspection and keeps their budgets", async () => {
+  const source = await readFile(path.join(desktopDirectory, "scripts/computer-helper-selftest.ts"), "utf8")
+  const setup = source.slice(
+    source.indexOf("async function createVerifiedFixture("),
+    source.indexOf("const lifetime = async (parentDeath: boolean)"),
+  )
+  const warm = setup.indexOf("await warmLifecycleInspection()")
+  expect(source.match(/warmLifecycleInspection\(\)/g)).toHaveLength(1)
+  expect(warm).toBeGreaterThan(setup.lastIndexOf('executable: "/usr/bin/codesign"'))
+  expect(warm).toBeGreaterThan(setup.indexOf("await bundleDigest(bundle)"))
+  for (const later of [
+    "const open = async",
+    'executable: "/bin/ps", args: ["-p", String(pid), "-o", "stat="], timeoutMs: 500',
+    'executable: "/usr/bin/pgrep", args: ["-P", String(pid)], timeoutMs: 500',
+  ])
+    expect(warm).toBeLessThan(setup.indexOf(later))
+  expect(source).toContain("const deadline = performance.now() + 1000")
 })
 
 test("lifecycle exit accepts only global environment events within its original deadline", async () => {

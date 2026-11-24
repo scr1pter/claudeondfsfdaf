@@ -87,7 +87,9 @@ screens and its readiness check.
 
 - The `ship-desk` readiness check and the screens (A50); the desktop merge with the person's own sign-in (A50).
 - The capture job in the workflow (Codex's V31) and the run-record reader (A59). Until A59, only App-bot pull requests
-  with the marker make cards, and no card has a verdict.
+  with the marker make cards, and no card has a verdict. (21 Nov 2026: both are built, V31 in BT12 and the reader in
+  BT11; the repository binding reader followed on `codium-api-fixes`. While the GitHub agent service is off no
+  repository is bound, so no card is made.)
 - A local try-out mode for `.vector/ship.json` (`vector ship capture` needs a ticket and a card).
 - Nothing was pushed or deployed. `bun.lock` was not touched.
 
@@ -110,3 +112,20 @@ screens and its readiness check.
   repository refused with the token revoked, GitHub down, unlisted refused, the intake's `not-listed` without a token
   minted, and an existing card updated while unlisted. `packages/engine/test/cli/ship.test.ts` (11 pass): every API
   request carries one proof, never in a child's environment.
+
+## A49 follow-up: refusal lines in Actions (21 Nov 2026, branch `vector-mention-fixes`)
+
+- **INV-P1.** `vector ship ticket` printed `result.reason` and `vector ship capture` printed the `ShipError` message
+  built from vectordev.ai's error body, so a capture job's Actions log could show "Your Vector Codium plan does not
+  include Ship Desk." or "Ship Desk is on hold for this account while its payment is reviewed." `ship.ts` now exports
+  a pure `refusalLine(fixed, detail, env)`: with `GITHUB_ACTIONS=true`, or an empty detail, it is the fixed line alone;
+  elsewhere the detail follows it. The ticket path prints `Ship Desk: no capture ticket.`; the capture's catch prints
+  `Ship Desk: vectordev.ai refused this capture.` only for a `ShipError` that carries a status (vectordev.ai's answer),
+  so the capture's own local refusals keep their text. Return shapes are unchanged and `workflow.ts` is untouched. In
+  Actions, a local ticket reason such as "No run token." is no longer printed; the generated workflow already discards
+  that output.
+- **Tests:** `packages/engine/test/cli/ship.test.ts`, describe "INV-P1: refusals in GitHub Actions" (3 tests, 14 in
+  the file): both commands through yargs against a loopback vectordev.ai that refuses with those two texts, with
+  `GITHUB_ACTIONS` set and deleted, plus pure `refusalLine` rows. Red on main, green with the fix, and two mutations
+  caught (record: `docs/vector/build/v2-p0/vector-mention-fixes.md`).
+- `VECTOR_SHIP_DESK` still stays unset until publish downloads the run bundle by artifact id.

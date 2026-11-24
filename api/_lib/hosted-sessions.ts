@@ -5,7 +5,7 @@ import { Hosted } from "../../packages/schema/src/hosted.js"
 import { codiumKey } from "./codium-keys.js"
 import { readSwitch } from "./codium-switches.js"
 import { readSnapshot } from "./codium-snapshot.js"
-import { deletingRefusal, requireAccountOpen } from "./codium-tombstone.js"
+import { accountDeleting, deletingRefusal, requireAccountOpen } from "./codium-tombstone.js"
 import {
   hostedAccess,
   hostedBrowserAllowed,
@@ -71,9 +71,9 @@ import { runTokenRevoked } from "./codium-provisioners.js"
  * download-only sessions, one at a time on each computer whose disk is still kept for download (`hosted:disk-due`,
  * §4.4): `mode: "download"`. Each gets no job, browser, live view, take-over or recording; its heartbeat answers ask
  * only to pack and upload the disk; it lasts one block, held like any block from the plan's final period; its run
- * token is refused at chat and /models (S3). The first start for a computer charges that disk's retention to the final
- * period, once per kept window (`chargeRetention`), and Vector pays at most one archive's worth of each computer's
- * uploads.
+ * token is refused at chat and /models (S3). The first upload confirmed for a computer charges that disk's retention to
+ * the final period, once per kept window (`chargeDownloadRetention`, PR3), so a download that delivers nothing charges
+ * none, and Vector pays at most one archive's worth of each computer's uploads.
  *
  * Image floor (H2a). Each computer keeps the image generation its daemon last reported in a signed heartbeat, for as
  * long as the provider keeps its disk after that beat. With `VECTOR_HOSTED_MIN_GENERATION` set, a job start passes over
@@ -126,6 +126,8 @@ export const START_STALE_MS = 10 * 60_000
 export const STOP_GIVE_UP_MS = 30 * 60_000
 /** S3's largest single upload, which R2 shares: the packed files must fit one PUT. */
 const ARCHIVE_MAX_BYTES = 5 * 1024 ** 3
+/** Why files the computer could not pack (O2) are not offered: they pack to more than `ARCHIVE_MAX_BYTES`. */
+const TOO_LARGE_MESSAGE = "This computer's files are over 5 GB, too large to pack for download."
 /**
  * A download-only start needs this long before the disk's deletion date (H1a): its one block, and an hour for the
  * person to fetch the files before the disk and its packed copy are deleted.
@@ -176,6 +178,11 @@ const Download = Schema.Struct({
    * (`eraseHostedComputer`). No link is given or followed after it.
    */
   erasedAt: Schema.optional(Schema.Number),
+  /**
+   * The computer reported that the files pack to more than one upload takes (`packFailed`, O2): they are never ready in
+   * this session, nothing more is asked of it, and a download-only session ends at the reaper's next pass.
+   */
+  failed: Schema.optional(Schema.Literal("too-large")),
 })
 const SessionRecord = Schema.Struct({
   v: Schema.Literal(1),
@@ -337,6 +344,7 @@ export function sessionView(record: SessionRecord): Hosted.SessionView {
           download: {
             requestedAt: record.download.requestedAt,
             ...(record.download.readyAt !== undefined ? { readyAt: record.download.readyAt } : {}),
+            ...(record.download.failed ? { failed: record.download.failed } : {}),
           },
         }
       : {}),
@@ -639,18 +647,16 @@ export async function startHostedSession(
 /**
  * The second half of a start, for both kinds of session: the first block's hold (`openBlock`), the record's times, the
  * computer's lease, its run token, creating or resuming the computer and the boot step. A download-only start (H1a)
- * holds its block from the plan's final period and, once the hold is placed and before the provider is asked, charges
- * the computer's kept disk to that period (`chargeRetention`: once per computer and kept window, `due` being the
- * window's deletion date, held and settled from the same pool, `final` saying whether that is the ended plan's final
- * period, checked against the daily share of the snapshot the start decided with, and shortened to what is left after
- * the block's hold). Anything that fails after the hold gives it back (or charges only what the computer ran).
+ * holds its block from the plan's final period (or the current one) and charges nothing else: the kept disk's
+ * retention waits for the session's upload to be confirmed (`chargeDownloadRetention`, PR3). Anything that fails after
+ * the hold gives it back (or charges only what the computer ran).
  */
 async function launchSession(
   record: SessionRecord,
   launch: {
     jobMinutes: number
     diskDays: number
-    download?: { final: boolean; snapshot: EntitlementSnapshot; due: number }
+    download?: true
   },
   options: SessionOptions,
 ): Promise<Hosted.SessionView> {
@@ -693,19 +699,6 @@ async function launchSession(
       }),
       { fetcher, clock },
     )
-    if (launch.download)
-      await chargeRetention(
-        account,
-        {
-          computer: computerName(account, record.computer),
-          gb: HOSTED_DISK_GB_MAX,
-          days: Hosted.ENDED_DISK_DAYS,
-          final: launch.download.final,
-          snapshot: launch.download.snapshot,
-          due: launch.download.due,
-        },
-        { fetcher, clock },
-      )
   } catch (error) {
     // Nothing was asked of the provider yet: the block closes at its own start, so nothing is charged (P8 review).
     await failSession({ ...record, block: block.block }, block.startedAt, options).catch(() => undefined)
@@ -770,8 +763,9 @@ export function parseDownloadStart(input: unknown, source: Hosted.SessionSource)
  * kept, or a live plan without a computer), the disk still inside its kept date with a block and an hour to spare, the
  * computer one the account has, and its lease. The session then starts as any other (`launchSession`) with one block
  * held from that period, no job, no browser and its files already asked for, so the computer's first answers ask it to
- * pack and upload them. The image floor (H2a) does not apply: a kept disk's files stay downloadable whatever image it
- * was made from.
+ * pack and upload them. The start charges only that block: the kept disk's retention is charged once the session's
+ * upload is confirmed (`chargeDownloadRetention`, PR3), so a download that delivers nothing charges none. The image
+ * floor (H2a) does not apply: a kept disk's files stay downloadable whatever image it was made from.
  */
 export async function startHostedDownload(
   account: string,
@@ -844,7 +838,36 @@ export async function startHostedDownload(
     await abandonSession(record, fetcher, clock).catch(() => undefined)
     throw error
   }
-  return launchSession(record, { jobMinutes: BLOCK_MINUTES, diskDays: days, download: { ...plan, due } }, options)
+  return launchSession(record, { jobMinutes: BLOCK_MINUTES, diskDays: days, download: true }, options)
+}
+
+/**
+ * Charges a download-only session's kept disk its retention, once the session's upload is confirmed (PR3, O6; called
+ * from `recordHeartbeat`'s confirmation, which runs once per session). It reads the plan as the start does
+ * (`readEntitlement`) and charges only while the plan may download (`final` or `current`): `chargeRetention`, once per
+ * computer and kept window (`due`, the disk's deletion date; nothing when no date is set), held and settled from the
+ * period the start's block was held from, checked against that snapshot's daily share and shortened to what the period
+ * can still pay. A charge refused there leaves the disk kept at Vector's cost (H1a R3).
+ */
+async function chargeDownloadRetention(record: SessionRecord, due: number | undefined, options: SessionOptions) {
+  if (due === undefined) return
+  const fetcher = options.fetcher ?? fetch
+  const clock = options.clock ?? Date.now
+  const snapshot = await readEntitlement(record.account, fetcher, clock())
+  const access = hostedDownloadAccess(snapshot)
+  if (!snapshot || (access !== "final" && access !== "current")) return
+  await chargeRetention(
+    record.account,
+    {
+      computer: computerName(record.account, record.computer),
+      gb: HOSTED_DISK_GB_MAX,
+      days: Hosted.ENDED_DISK_DAYS,
+      final: access === "final",
+      snapshot,
+      due,
+    },
+    { fetcher, clock },
+  )
 }
 
 /** When the account's computers' disks are to be deleted (§4.4), or undefined when no date is set. */
@@ -1276,7 +1299,8 @@ function publicOrigin() {
  * and marks its sessions' packed files the same way. No link is given, and none leads anywhere, while the plan's
  * disks are kept with no download (`requireFilesAllowed`). A link also leads nowhere once the media bucket's own rule
  * removed the packed files (owner-actions/hosted-computer.md); the person then asks a running session again. Files
- * that are gone answer 410 `HOSTED_DOWNLOAD_UNAVAILABLE` here and on the link; a request that cannot be served, 409.
+ * that are gone answer 410 `HOSTED_DOWNLOAD_UNAVAILABLE` here and on the link; a request that cannot be served, 409,
+ * and files the computer reported too large to pack (`download.failed`, O2) 409 with that reason.
  */
 export async function requestDownload(account: string, id: unknown, options: SessionOptions = {}) {
   const fetcher = options.fetcher ?? fetch
@@ -1285,6 +1309,8 @@ export async function requestDownload(account: string, id: unknown, options: Ses
   const record = await requireOwnSession(account, id, fetcher)
   await requireFilesAllowed(account, fetcher)
   const now = clock()
+  if (record.download?.failed === "too-large")
+    throw new ApiError(409, "HOSTED_DOWNLOAD_UNAVAILABLE", TOO_LARGE_MESSAGE)
   if (record.download?.readyAt !== undefined) {
     const due = await readDiskDue(account, fetcher)
     if (record.download.erasedAt !== undefined || (due !== undefined && due <= now))
@@ -1491,6 +1517,7 @@ export function parseHeartbeat(input: unknown): Hosted.Heartbeat {
     ...(body.done === true ? { done: true } : {}),
     ...(archiveBytes !== undefined && archiveBytes > 0 ? { archiveBytes } : {}),
     ...(body.uploaded === true ? { uploaded: true } : {}),
+    ...(body.packFailed === "too-large" ? { packFailed: "too-large" as const } : {}),
     ...(generation !== undefined && generation > 0 ? { generation } : {}),
     ...(handoff ? { handoff } : {}),
   }
@@ -1561,6 +1588,40 @@ async function requireDaemonBeat(id: string, input: Record<string, unknown>, kee
 }
 
 /**
+ * What the media bucket holds of an upload a beat reported (O1, O4): `confirmed` when it answers 200 with the size the
+ * upload was signed for, `rejected` when it holds no object (404) or one of another size, and `unknown` when the check
+ * cannot tell: it failed or timed out, answered another status, or gave no length.
+ */
+async function checkUpload(key: string, bytes: number, now: number, fetcher: typeof fetch) {
+  const head = presignR2("media", { method: "HEAD", key, expiresIn: 60, now })
+  const found = await fetcher(head.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(10_000) }).catch(
+    () => undefined,
+  )
+  if (!found) return "unknown" as const
+  if (found.status === 404) return "rejected" as const
+  const length = found.headers.get("content-length")?.trim()
+  if (found.status !== 200 || !length || !/^\d+$/.test(length)) return "unknown" as const
+  return Number(length) === bytes ? ("confirmed" as const) : ("rejected" as const)
+}
+
+/**
+ * Signs the PUT of a session's packed files at `bytes` for the heartbeat's answer (WP A54). The session is noted first,
+ * so account deletion finds the object even if no later beat confirms it.
+ */
+async function signUpload(record: SessionRecord, key: string, bytes: number, now: number, fetcher: typeof fetch) {
+  await store(["SADD", hostedArchivesKey(record.account), record.id], fetcher)
+  const put = presignR2("media", {
+    method: "PUT",
+    key,
+    contentLength: bytes,
+    contentType: "application/gzip",
+    expiresIn: 900,
+    now,
+  })
+  return { url: put.url, headers: put.headers, expiresAt: put.expiresAt }
+}
+
+/**
  * The computer's daemon reports (`POST /api/hosted/sessions/<id>/heartbeat` on the run-API host, with the session's run
  * token): its CPU, its agent's last activity, page loads and egress (cumulative), whether it booted, finished or packed
  * the files the person asked for. The answer tells it the session's state, who has control, its deadline, whether the
@@ -1569,6 +1630,15 @@ async function requireDaemonBeat(id: string, input: Record<string, unknown>, kee
  * upload the disk; the bytes it uploads are noted so the nightly egress charge leaves them to Vector, at most one
  * archive's worth per computer until its disk's deletion date. A beat's image generation is also kept for the
  * computer (`hosted:generation:<account>`, H2a), so the image floor can read it after the session ends.
+ *
+ * The files (WP A54, O1, O4): a beat with no size is asked to pack, one with a size gets an upload link for it, and one
+ * that says `uploaded` has the upload checked in the bucket (`checkUpload`). Only a confirmed upload makes the files
+ * ready, and only then is a download-only session's kept disk charged its retention (`chargeDownloadRetention`, PR3).
+ * For a job session a check that cannot tell gets a fresh link, so its hostd keeps the copy, and a rejected upload gets
+ * no answer, so hostd drops the copy and its next beat is asked to pack again. For a download-only session a rejected
+ * upload is answered `pack`, so hostd packs the disk again, and a check that cannot tell gets no answer. A beat that
+ * says the files are too large to pack (`packFailed`, O2) marks the session's request `failed`, and nothing about the
+ * files is asked again.
  */
 export async function recordHeartbeat(
   claims: HostedRunClaims,
@@ -1666,14 +1736,30 @@ export async function recordHeartbeat(
     }
   } else if (record.mode !== "download" && beat.booted) await store(["DEL", hostedJobKey(id)], fetcher)
   const download = record.download
-  if (download && download.readyAt === undefined && r2Configured("media")) {
+  // Files too large to pack (O2) are never asked for again.
+  if (download && download.readyAt === undefined && download.failed === undefined && r2Configured("media")) {
     const key = archiveKey(record.account, id)
-    if (beat.uploaded && next.archiveBytes !== undefined) {
-      const head = presignR2("media", { method: "HEAD", key, expiresIn: 60, now })
-      const found = await fetcher(head.url, { method: "HEAD", redirect: "error", signal: AbortSignal.timeout(10_000) }).catch(
-        () => undefined,
+    if (beat.packFailed === "too-large") {
+      // O2: the work folder packs to more than one upload takes. A download-only session ends at the reaper's next
+      // pass and says why; the person's request for a job session's files answers why.
+      await updateSessionRecord(
+        id,
+        (value) =>
+          value.download && value.download.readyAt === undefined && value.download.failed === undefined
+            ? { ...value, download: { ...value.download, failed: "too-large" as const } }
+            : undefined,
+        { fetcher, clock },
       )
-      if (found?.ok && Number(found.headers.get("content-length")) === next.archiveBytes) {
+    } else if (beat.uploaded && next.archiveBytes !== undefined) {
+      // The upload is checked against the size it was signed for, which the beat that reports it may leave out.
+      const check = await checkUpload(key, next.archiveBytes, now, fetcher)
+      if (check === "unknown" && record.mode !== "download") {
+        // O1: a check that could not tell is tried again on the next beat. A job session's hostd keeps its copy only
+        // while an answer asks for something, so it gets a fresh link, which it leaves unused while it reports the
+        // upload. A rejected upload gets no answer: hostd drops the copy, and its next beat, with no size, is asked to
+        // pack again.
+        answer.upload = await signUpload(record, key, next.archiveBytes, now, fetcher)
+      } else if (check === "confirmed") {
         const saved = await updateSessionRecord(
           id,
           (value) =>
@@ -1691,7 +1777,8 @@ export async function recordHeartbeat(
         ) {
           const uploaded = hostedDownloadUploadedKey(record.account, record.computer)
           const total = Number(await store(["INCRBY", uploaded, next.archiveBytes], fetcher))
-          const due = (await readDiskDue(record.account, fetcher)) ?? now + Hosted.ENDED_DISK_DAYS * DAY_MS
+          const kept = await readDiskDue(record.account, fetcher)
+          const due = kept ?? now + Hosted.ENDED_DISK_DAYS * DAY_MS
           await store(["PEXPIRE", uploaded, Math.max(DAY_MS, due - now)], fetcher)
           const waived = Math.max(0, Math.min(next.archiveBytes, ARCHIVE_MAX_BYTES - (total - next.archiveBytes)))
           if (waived > 0) {
@@ -1699,24 +1786,21 @@ export async function recordHeartbeat(
             await store(["INCRBY", key, waived], fetcher)
             await store(["PEXPIRE", key, 7 * DAY_MS], fetcher)
           }
+          // PR3, O6: the kept disk's retention is charged here, once its files are confirmed, never at the start. A
+          // charge that fails leaves the files ready and the disk kept at Vector's cost.
+          await chargeDownloadRetention(record, kept, { fetcher, clock }).catch(() => undefined)
         }
+      } else if (check === "rejected" && record.mode === "download") {
+        // O4: the bucket holds no such object, or one of another size. H1b's hostd takes `pack` answered to a beat
+        // that said `uploaded` as that, and packs the disk again and uploads anew. A check that could not tell gets no
+        // answer: the next beat, which still reports the upload, checks again.
+        answer.pack = true
       }
-    } else if (next.archiveBytes === undefined) {
-      // The person asked for the files and the computer has not packed them yet (WP A54).
+    } else if (beat.archiveBytes === undefined) {
+      // The person asked for the files and the computer holds no packed copy now (WP A54). This beat's own size
+      // decides, never one an earlier beat left: a computer that dropped its copy is asked to pack again (O1).
       answer.pack = true
-    } else {
-      // Noted before the link goes out, so account deletion finds the object even if no later beat confirms it.
-      await store(["SADD", hostedArchivesKey(record.account), id], fetcher)
-      const put = presignR2("media", {
-        method: "PUT",
-        key,
-        contentLength: next.archiveBytes,
-        contentType: "application/gzip",
-        expiresIn: 900,
-        now,
-      })
-      answer.upload = { url: put.url, headers: put.headers, expiresAt: put.expiresAt }
-    }
+    } else answer.upload = await signUpload(record, key, beat.archiveBytes, now, fetcher)
   }
   if (record.mode === "download") return answer
   for (const hook of heartbeatHooks.values())
@@ -1784,7 +1868,8 @@ export async function hostedStatus(account: string, snapshot: EntitlementSnapsho
  * than a block and an hour is left (`DOWNLOAD_START_MARGIN_MS`), and `closed` otherwise, sent only while some session
  * has packed files to offer: `requestDownload` still gives their link. The money and the lease are the start's to
  * decide (S1). Each computer comes with its preferred session (`Hosted.KeptDisks`); a job session's packed files count,
- * since they are a copy of the same disk (H1a R11), until a later job session starts on that computer.
+ * since they are a copy of the same disk (H1a R11), until a later job session starts on that computer. An account being
+ * deleted gets none (its tombstone, read only on this path; a tombstone that cannot be read hides the offer too).
  */
 async function keptDisks(
   account: string,
@@ -1800,6 +1885,8 @@ async function keptDisks(
   if (!r2Configured("media")) return undefined
   const due = await readDiskDue(account, fetcher)
   if (due === undefined || due <= now) return undefined
+  // A download-only start and the file link refuse an account being deleted (`requireFilesAllowed`): offer nothing.
+  if (await accountDeleting(account, fetcher).catch(() => true)) return undefined
   // `listHostedSessions` answers live sessions first, then the newest first.
   const disks = (await knownComputers(account, fetcher)).map((computer) => {
     const mine = sessions.filter((session) => session.computer === computer)

@@ -206,6 +206,9 @@ export function validateEngineCommand(command: EngineCommand) {
   if (url.origin !== "http://engine.invalid" || command.path[0] !== "/" || command.path.startsWith("//"))
     return invalid()
   const path = url.pathname
+  // The supervisor forwards url.pathname, while service.ts keys session identity on the raw path, so the two must agree:
+  // a raw path that reaches a route only through dot segments (`/session/ses_A/../ses_B/prompt_async`) is refused.
+  if (command.path.split("?")[0] !== path) return invalid()
   const session = "ses_[A-Za-z0-9]{1,80}"
   const request = "(?:per|req|que)_[A-Za-z0-9]{1,80}"
   // A Connect.RunID (schema connect.ts), narrower than the desktop's Remote rule (`cr_[A-Za-z0-9_-]{1,61}`):
@@ -216,9 +219,8 @@ export function validateEngineCommand(command: EngineCommand) {
   // uncommitted, staged or branch changes, always in the background. service.ts forwards the body as sent, so it is
   // exactly the engine's review input (schema Connect.ReviewInput, which has no `action`). Fixes, findings, dismissals,
   // the sessionless folder review and every other /experimental route stay refused, and so does a path that reaches
-  // one of these routes only through dot segments.
+  // one of these routes only through dot segments (refused above for every route).
   if (path.startsWith("/experimental/")) {
-    if (command.path.split("?")[0] !== path) return invalid()
     if (command.method === "GET" && (path === "/experimental/connect" || path === "/experimental/connect/runs")) {
       const keys = [...url.searchParams.keys()]
       if (

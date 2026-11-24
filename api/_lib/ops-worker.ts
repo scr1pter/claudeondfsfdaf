@@ -10,6 +10,8 @@ import {
 import { readSwitch } from "./codium-switches.js"
 import { internalConfigured, internalFetch } from "./hosted-internal.js"
 import { ApiError } from "./http.js"
+import { opsWorkerAccountsKey } from "./ops-accounts.js"
+import { persistentStore } from "./persistent-store.js"
 
 /*
  * Vector's server side of the ops Worker (WP A47; the Worker is A46, `packages/ops-worker`, and its interface is
@@ -27,6 +29,11 @@ import { ApiError } from "./http.js"
 
 const ACCOUNT = /^[\x21-\x7e]{1,128}$/
 const ANSWER_BYTES = 64 * 1024
+/**
+ * The actions that can leave an account's data at the Worker (its plan, config, releases and baselines, its hold).
+ * OPS-WORKER-ERASE-GAP: each is recorded in `ops:worker` (ops-accounts.ts) before it is sent.
+ */
+const HOLDING: ReadonlySet<OpsAction> = new Set(["plan", "config", "release", "suspend"])
 const RELEASE_REASONS = new Set(["not-in-plan", "off", "stale", "older", "duplicate", "daily-limit", "not-verified"])
 
 /** VECTOR_OPS_ENABLED=true: the owner says the ops services are set up. The `ops` switch turns them off at runtime. */
@@ -85,7 +92,11 @@ export async function requireOpsService(fetcher: typeof fetch = fetch, now = Dat
 
 /**
  * One signed call to the Worker. The answer must be a 2xx JSON object; anything else (the Worker unreachable, a
- * refusal, a malformed answer) is 503 `OPS_UNAVAILABLE`, so a caller never acts on a half-applied change.
+ * refusal, a malformed answer) is 503 `OPS_UNAVAILABLE`, so a caller never acts on a half-applied change. Before a
+ * `plan`, `config`, `release` or `suspend` is sent, the account is recorded in `ops:worker` (NX keeps the first call),
+ * so its deletion waits for the Worker's erase even after the daily cleanup drops it from `ops:accounts`. A store that
+ * cannot take that write is 503 `OPS_UNAVAILABLE` too, and the Worker is not called (fail closed), as with any
+ * other failure here.
  */
 export async function opsCall(
   action: OpsAction,
@@ -96,6 +107,10 @@ export async function opsCall(
   const origin = opsWorkerOrigin()
   if ((!opsEnabled() && action !== "erase") || !origin || !internalConfigured("ops")) throw unavailable()
   if (action !== "flags" && (typeof body.account !== "string" || !ACCOUNT.test(body.account))) throw unavailable()
+  if (HOLDING.has(action))
+    await persistentStore(["ZADD", opsWorkerAccountsKey(), "NX", now, body.account as string], fetcher).catch(() => {
+      throw unavailable()
+    })
   let response: Response
   try {
     response = await internalFetch(

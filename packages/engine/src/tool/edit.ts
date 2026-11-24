@@ -19,6 +19,7 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { assertOwnedPath } from "./owned-path"
 import { FileLock } from "./file-lock"
 import { FileState } from "./file-state"
+import { ConnectPolicy } from "@vectordevai/core/connect/policy"
 import { FSUtil } from "@vectordevai/core/fs-util"
 import * as Bom from "@/util/bom"
 import { Instruction } from "../session/instruction"
@@ -144,7 +145,9 @@ export const EditTool = Tool.define(
               if (ctx.assertWritable) yield* ctx.assertWritable({ files: [filePath] })
               yield* FileLock.write(afs, filePath, Bom.join(change.contentNew, change.bom))
               let written = change.contentNew
-              if (yield* format.file(filePath)) {
+              // A connect fix child starts no project tooling (CW-07): a formatter or language server runs the project's
+              // code with the network, which a fix child must not have. Reading diagnostics already published starts none.
+              if (ctx.agent !== ConnectPolicy.FIX_AGENT && (yield* format.file(filePath))) {
                 written = yield* Bom.syncFile(afs, filePath, change.bom)
               }
               const fileState = yield* FileState.commit({
@@ -189,7 +192,7 @@ export const EditTool = Tool.define(
           })
 
           let output = "Edit applied successfully."
-          yield* lsp.touchFile(filePath, "document")
+          if (ctx.agent !== ConnectPolicy.FIX_AGENT) yield* lsp.touchFile(filePath, "document")
           const diagnostics = yield* lsp.diagnostics()
           const normalizedFilePath = FSUtil.normalizePath(filePath)
           const block = LSP.Diagnostic.report(filePath, diagnostics[normalizedFilePath] ?? [])

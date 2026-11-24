@@ -108,8 +108,8 @@ export const SPECS: readonly Spec[] = [
 
 /**
  * How long a server gets to answer the first request. `remote` is the wait for one address the user typed or listed,
- * on this computer or elsewhere. `loopback` is the short wait for reads of many ports at once on this computer: Detect,
- * and the model read of a listed server with no pin before a call.
+ * on this computer or elsewhere, pinned or not, including the model read of a listed server before a call. `loopback`
+ * is the short wait for Detect only, which reads many ports at once on this computer.
  */
 export const IDENTIFY_TIMEOUT = { loopback: 400, remote: 3_000 }
 const INSPECT_TIMEOUT = 5_000
@@ -575,11 +575,15 @@ function modelName(model: string) {
 // answered. An Ollama server that lists no models answered only in part, or has none to call, so it counts as not
 // answering.
 async function ollamaModels(origin: string, options: Options) {
-  const timeout =
-    options.timeout ??
-    (LocalPolicy.loopback(new URL(origin).hostname) ? IDENTIFY_TIMEOUT.loopback : IDENTIFY_TIMEOUT.remote)
+  // One address the person or company listed, on this computer or not, gets the long wait (CI14): a read that misses
+  // would let a slow server that forwards to ollama.com pass as local, and the check is cached, so only the first call
+  // waits.
   const answered = { any: false }
-  const identified = await reader(origin, { ...options, timeout }, answered)(OllamaServer.identify)
+  const identified = await reader(
+    origin,
+    { ...options, timeout: options.timeout ?? IDENTIFY_TIMEOUT.remote },
+    answered,
+  )(OllamaServer.identify)
   if (!answered.any) return undefined
   if (!OllamaServer.matches(identified)) return { models: undefined }
   const inspection = await OllamaServer.inspect(reader(origin, { ...options, timeout: INSPECT_TIMEOUT }), identified)

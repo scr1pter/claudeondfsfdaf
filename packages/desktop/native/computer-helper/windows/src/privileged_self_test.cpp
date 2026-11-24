@@ -140,17 +140,28 @@ struct AffinitySamplePlan {
     return session.id == value.id && session.run_epoch == value.run_epoch && session.observation_epoch == value.observation_epoch &&
       session.revision == value.revision && session.mode == value.mode && session.paused == value.paused;
   }
-  bool current() const noexcept {
+  // HF-6: the first false term, in the original short-circuit order. Closed values only: no
+  // window handle, pid or title leaves this plan. current() is defined by it so they cannot drift.
+  WindowsAffinityStale first_stale() const noexcept {
     try {
       const auto target = client.lock();
-      if (!target || !target->current() || target->pid() != fixture.pid || !windows_window_current(main) || !windows_window_current(excluded)) return false;
+      if (!target) return WindowsAffinityStale::target_lost;
+      if (!target->current()) return WindowsAffinityStale::target_stale;
+      if (target->pid() != fixture.pid) return WindowsAffinityStale::pid;
+      if (!windows_window_current(main)) return WindowsAffinityStale::main_window;
+      if (!windows_window_current(excluded)) return WindowsAffinityStale::excluded_window;
       const POINT point{static_cast<LONG>(display.bounds.x + sample_x), static_cast<LONG>(display.bounds.y + sample_y)};
+      if (!fixture.patch.contains(point)) return WindowsAffinityStale::point_patch;
+      if (!fixture.excluded_bounds.contains(point)) return WindowsAffinityStale::point_excluded;
+      if (GetWindow(excluded.hwnd, GW_OWNER) != main.hwnd) return WindowsAffinityStale::owner;
+      const auto hit = windows_privileged_affinity_hit(GetAncestor(WindowFromPoint(point), GA_ROOT), main.hwnd, excluded.hwnd);
+      if (hit != WindowsAffinityStale::none) return hit;
       DWORD affinity = WDA_NONE;
-      return fixture.patch.contains(point) && fixture.excluded_bounds.contains(point) &&
-        GetWindow(excluded.hwnd, GW_OWNER) == main.hwnd && GetAncestor(WindowFromPoint(point), GA_ROOT) == excluded.hwnd &&
-        GetWindowDisplayAffinity(excluded.hwnd, &affinity) && affinity == WDA_EXCLUDEFROMCAPTURE;
-    } catch (...) { return false; }
+      const bool read = GetWindowDisplayAffinity(excluded.hwnd, &affinity) != FALSE;
+      return windows_privileged_affinity_value(read, affinity);
+    } catch (...) { return WindowsAffinityStale::exception; }
   }
+  bool current() const noexcept { return first_stale() == WindowsAffinityStale::none; }
 };
 struct CaptureFailureTrace {
   std::atomic_uint32_t inventories{0};
@@ -162,6 +173,14 @@ struct CaptureFailureTrace {
   std::function<bool()> affinity_current;
   std::atomic_bool affinity_attempted{false};
   std::atomic_int affinity_sample{0}; // 0 absent, 1 false, 2 true; private metadata only.
+  std::atomic<WindowsAffinityStale> affinity_stale{WindowsAffinityStale::none};
+  // The plan's freshness during the display read; keeps the first closed stale term it observed.
+  bool affinity_plan_current() noexcept {
+    const auto stale = affinity_plan->first_stale();
+    auto expected = WindowsAffinityStale::none;
+    if (stale != WindowsAffinityStale::none) affinity_stale.compare_exchange_strong(expected, stale);
+    return stale == WindowsAffinityStale::none;
+  }
   void record(CaptureFailureStage stage) noexcept {
     if (native_failure.load() != WindowsInventoryDiagnostic::none || read_failure.load() != CaptureReadPhase::none) return;
     auto expected = CaptureFailureStage::none; failure.compare_exchange_strong(expected, stage);
@@ -218,13 +237,13 @@ CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
       try {
         sample = trace && trace->affinity_plan && !trace->affinity_attempted.exchange(true) &&
           !request.window && !request.isolate_window && request.bounds == trace->affinity_plan->display.bounds &&
-          trace->affinity_current && trace->affinity_current() && current() && trace->affinity_plan->current();
+          trace->affinity_current && trace->affinity_current() && current() && trace->affinity_plan_current();
       } catch (...) {}
       auto image = read(request, current);
       try {
         if (sample && image.valid() && image.width == request.bounds.width && image.height == request.bounds.height &&
             trace->affinity_plan->sample_x < image.width && trace->affinity_plan->sample_y < image.height &&
-            trace->affinity_current() && current() && trace->affinity_plan->current()) {
+            trace->affinity_current() && current() && trace->affinity_plan_current()) {
           const auto matches = fixture_color(image, trace->affinity_plan->sample_x, trace->affinity_plan->sample_y);
           if (trace->affinity_current() && current()) trace->affinity_sample.store(matches ? 2 : 1);
         }
@@ -244,11 +263,13 @@ CaptureBackend diagnostic_capture_backend(CaptureBackend backend) {
 struct CaptureDiagnosticSummary {
   std::wstring failure_stage; CaptureReadRoute read_route = CaptureReadRoute::none;
   std::optional<bool> affinity_sample;
+  WindowsAffinityStale affinity_stale = WindowsAffinityStale::none;
 };
 struct NativeReply {
   JsonObject document; std::vector<uint8_t> image; std::wstring failure_stage;
   CaptureReadRoute read_route = CaptureReadRoute::none;
   std::optional<bool> affinity_sample;
+  WindowsAffinityStale affinity_stale = WindowsAffinityStale::none;
 };
 struct ScenarioState {
   std::weak_ptr<Dispatcher> dispatcher;
@@ -272,7 +293,7 @@ struct ScenarioState {
     if (replies.size() >= 16 || image.size() > kMaxFrameBytes || replies.contains(*id)) return false;
     CaptureDiagnosticSummary diagnostic;
     if (const auto found = diagnostics.find(*id); found != diagnostics.end()) { diagnostic = std::move(found->second); diagnostics.erase(found); }
-    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}, std::move(diagnostic.failure_stage), diagnostic.read_route, diagnostic.affinity_sample}); changed.notify_all(); return true;
+    replies.emplace(*id, NativeReply{JsonObject::Parse(document.Stringify()), {image.begin(), image.end()}, std::move(diagnostic.failure_stage), diagnostic.read_route, diagnostic.affinity_sample, diagnostic.affinity_stale}); changed.notify_all(); return true;
   }
 };
 Dispatcher::Handler diagnostic_handler(Dispatcher::Handler handler, std::weak_ptr<ScenarioState> weak) {
@@ -304,8 +325,9 @@ Dispatcher::Handler diagnostic_handler(Dispatcher::Handler handler, std::weak_pt
             const auto route = trace->read_route.load();
             const auto sample = trace->affinity_sample.load();
             const auto affinity = sample == 0 ? std::optional<bool>{} : std::optional<bool>{sample == 2};
-            if (!stage.empty() || route != CaptureReadRoute::none) if (const auto active = weak.lock()) {
-              std::lock_guard lock(active->mutex); if (active->diagnostics.size() < 16) active->diagnostics.insert_or_assign(id, CaptureDiagnosticSummary{stage, route, affinity});
+            const auto stale = trace->affinity_stale.load();
+            if (!stage.empty() || route != CaptureReadRoute::none || stale != WindowsAffinityStale::none) if (const auto active = weak.lock()) {
+              std::lock_guard lock(active->mutex); if (active->diagnostics.size() < 16) active->diagnostics.insert_or_assign(id, CaptureDiagnosticSummary{stage, route, affinity, stale});
             }
           } catch (...) {
             // Metadata is best effort; the original completion/result always remains authoritative.
@@ -439,7 +461,8 @@ class NativeScenario final {
       auto value = std::make_shared<AffinitySamplePlan>(); value->request_id = next + 1; value->client = target; value->fixture = shown;
       value->main = *frame.window; value->excluded = *excluded->window; value->session = phase; value->display = *display;
       value->sample_x = static_cast<uint32_t>(source_x); value->sample_y = static_cast<uint32_t>(source_y);
-      diagnostic_stage(L"affinity-plan-current", [&] { require(value->current()); });
+      const auto stale = value->first_stale();
+      if (stale != WindowsAffinityStale::none) diagnostic_stage(windows_privileged_affinity_stale_stage(stale, false), [&] { require(false); });
       diagnostic_stage(L"affinity-plan-current-context", [&] { require(state->available()); }); return value;
     });
     JsonObject args = object(LR"({"budget":{"maxWidth":1024,"maxHeight":1024,"maxPixels":1048576},"format":"png"})");
@@ -520,6 +543,31 @@ class NativeScenario final {
   bool detector_started = false, closed = false, cleanup_ok = false;
   std::jthread heartbeat;
 };
+// HF-6: closed read-only facts once row 16's unchanged health wait has failed. One synchronous
+// observation: no wait, retry, setup call, focus or input, and no event-derived detection bits.
+WindowsListenerHealthFacts listener_health_facts(const UserInputService& detector, const UserInputDiagnostic& baseline) noexcept {
+  WindowsListenerHealthFacts facts;
+  try {
+    facts.setup = detector.setup_status().state;
+    const auto current = detector.diagnostic();
+    facts.listener_changed = current.failure != baseline.failure || current.listener.failure != baseline.listener.failure ||
+      current.listener.generation != baseline.listener.generation || !current.listener.installed || !current.listener.registered || !current.listener.alive;
+    facts.context_changed = current.listener.context_generation != baseline.listener.context_generation;
+    const auto started = GetTickCount64();
+    const auto availability = observe_windows_availability(WindowsAvailabilityBackend::system());
+    const auto foreground = GetForegroundWindow();
+    facts.foreground_null = !foreground;
+    DWORD pid = 0;
+    const auto thread = foreground ? GetWindowThreadProcessId(foreground, &pid) : 0;
+    if (thread && pid) {
+      // The same query-only token read the listener's environment check makes for the foreground owner.
+      const winrt::handle process{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)};
+      if (process) { const auto token = observe_token(process.get()); facts.surface = windows_surface_state(availability, &token); }
+    }
+    facts.observe_slow = GetTickCount64() - started > 100;
+  } catch (...) { facts.observe_exception = true; }
+  return facts;
+}
 CaptureBitmap decode_png(const std::vector<uint8_t>& bytes) {
   require(!bytes.empty() && bytes.size() <= kMaxFrameBytes);
   winrt::com_ptr<IStream> stream; winrt::check_hresult(CreateStreamOnHGlobal(nullptr, TRUE, stream.put())); ULONG written = 0;
@@ -618,6 +666,51 @@ std::wstring windows_privileged_settle_stage(bool context_available, const Serve
   if (latest->id != begun.id || latest->run_epoch != begun.run_epoch || latest->observation_epoch != begun.observation_epoch || latest->revision != begun.revision)
     return L"input-settle-session";
   return L"input-settle-verdict";
+}
+WindowsAffinityStale windows_privileged_affinity_hit(HWND root, HWND owner, HWND excluded) noexcept {
+  if (root && root == excluded) return WindowsAffinityStale::none;
+  if (!root) return WindowsAffinityStale::hit_null;
+  return root == owner ? WindowsAffinityStale::hit_main : WindowsAffinityStale::hit_foreign;
+}
+WindowsAffinityStale windows_privileged_affinity_value(bool read, DWORD affinity) noexcept {
+  if (!read) return WindowsAffinityStale::affinity_call;
+  if (affinity == WDA_EXCLUDEFROMCAPTURE) return WindowsAffinityStale::none;
+  if (affinity == WDA_MONITOR) return WindowsAffinityStale::affinity_monitor;
+  return affinity == WDA_NONE ? WindowsAffinityStale::affinity_none : WindowsAffinityStale::affinity_other;
+}
+std::wstring_view windows_privileged_affinity_stale_stage(WindowsAffinityStale stale, bool during_capture) noexcept {
+  static constexpr std::array<std::wstring_view, 17> plan{
+    L"", L"affinity-plan-current-target-lost", L"affinity-plan-current-target-stale", L"affinity-plan-current-pid",
+    L"affinity-plan-current-main-window", L"affinity-plan-current-excluded-window", L"affinity-plan-current-point-patch",
+    L"affinity-plan-current-point-excluded", L"affinity-plan-current-owner", L"affinity-plan-current-hit-null",
+    L"affinity-plan-current-hit-main", L"affinity-plan-current-hit-foreign", L"affinity-plan-current-affinity-call",
+    L"affinity-plan-current-affinity-monitor", L"affinity-plan-current-affinity-none", L"affinity-plan-current-affinity-other",
+    L"affinity-plan-current-exception"};
+  static constexpr std::array<std::wstring_view, 17> capture{
+    L"", L"affinity-capture-stale-target-lost", L"affinity-capture-stale-target-stale", L"affinity-capture-stale-pid",
+    L"affinity-capture-stale-main-window", L"affinity-capture-stale-excluded-window", L"affinity-capture-stale-point-patch",
+    L"affinity-capture-stale-point-excluded", L"affinity-capture-stale-owner", L"affinity-capture-stale-hit-null",
+    L"affinity-capture-stale-hit-main", L"affinity-capture-stale-hit-foreign", L"affinity-capture-stale-affinity-call",
+    L"affinity-capture-stale-affinity-monitor", L"affinity-capture-stale-affinity-none", L"affinity-capture-stale-affinity-other",
+    L"affinity-capture-stale-exception"};
+  const auto index = static_cast<size_t>(stale);
+  const auto& stages = during_capture ? capture : plan;
+  return index < stages.size() ? stages[index] : std::wstring_view{};
+}
+std::wstring_view windows_privileged_listener_health_stage(const WindowsListenerHealthFacts& facts) noexcept {
+  // A throw left the other facts at their defaults, so it must not read as a foreground refusal.
+  if (facts.observe_exception) return L"input-health-observe-exception";
+  // Setup reads unavailable (a fail_locked ran, or the detector is closed, stopped or its listener
+  // unhealthy): first the listener's own facts, then a native context rotation.
+  if (facts.setup == UserInputSetupState::unavailable && facts.listener_changed) return L"input-health-unavailable-listener";
+  if (facts.setup == UserInputSetupState::unavailable && facts.context_changed) return L"input-health-unavailable-context";
+  // None ran: the pulse, challenge or freshness terms are left, which no read-only fact separates.
+  if (facts.setup == UserInputSetupState::calibrating) return L"input-health-calibrating";
+  if (facts.foreground_null) return L"input-health-no-foreground";
+  if (facts.surface != WindowsSurfaceState::ready) return L"input-health-foreground-refused";
+  if (facts.observe_slow) return L"input-health-observe-slow";
+  // A clean post-failure observation: the cause was transient or is not visible to these facts.
+  return L"input-health-ready";
 }
 std::wstring windows_privileged_origin_stage(std::wstring_view message, std::wstring_view fallback, std::wstring_view capture_stage) {
   if (message == L"The computer session changed during the operation.") return L"authority-completion";
@@ -810,6 +903,9 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
             fresh.bounds == shown.bounds && fresh.patch == shown.patch && fresh.excluded_bounds == shown.excluded_bounds && fresh.visible && !fresh.minimized && fresh.affinity && fresh.excluded_visible &&
             native->state->available() && native->state->captures->current(record, native->session()));
         });
+        // A plan that went stale during the display read names its first closed term instead.
+        if (!response.affinity_sample && response.affinity_stale != WindowsAffinityStale::none)
+          diagnostic_stage(windows_privileged_affinity_stale_stage(response.affinity_stale, true), [&] { require(false); });
         diagnostic_stage(L"affinity-native-sample-missing", [&] { require(response.affinity_sample.has_value()); });
         diagnostic_stage(L"affinity-native-sample-mismatch", [&] { require(*response.affinity_sample); });
         diagnostic_stage(L"affinity-display-proof", [&] {
@@ -931,7 +1027,8 @@ WindowsPrivilegedReport run_windows_privileged_self_test(const Command& command,
           std::this_thread::sleep_for(std::chrono::milliseconds(5));
         diagnostic_stage(L"input-health-context", [&] { require(native->state->available()); });
         diagnostic_stage(L"input-health-target", [&] { require(target->current()); });
-        diagnostic_stage(L"input-health-ready", [&] { require(detector->listener_health_ready()); });
+        if (!detector->listener_health_ready())
+          diagnostic_stage(windows_privileged_listener_health_stage(listener_health_facts(*detector, diagnostic)), [&] { require(false); });
       });
       diagnostic_stage(L"input-calibration-required", [&] {
         const auto status = detector->setup_status();

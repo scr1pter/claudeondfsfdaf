@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 import type { OpsEvent, OpsReport, ProbeReason } from "../../packages/ops-worker/src/protocol.js"
 import { CodiumRunTrigger } from "../../packages/schema/src/codium-run-trigger.js"
 import { codiumKey, codiumKeyIn } from "./codium-keys.js"
+import { accountDeleting } from "./codium-tombstone.js"
 import { requireEntitlement } from "./codium-entitlements.js"
 import { readSnapshot, requireUsableSnapshot } from "./codium-snapshot.js"
 import type { GithubServerOptions } from "./github-app-server.js"
@@ -54,7 +55,7 @@ import { sendServerAlert } from "./web-push.js"
  *
  * The account acts on an incident from its cards: snooze (1 to 24 hours: no alerts and no automatic revert for that URL
  * or that repository and environment), and "Fix it", which starts a run of Vector's GitHub agent in the person's own
- * repository through Codex's `startCloudRun` (registered by the integration commit, A59), only on that tap, within the
+ * repository through Codex's `startCloudRun` (registered by api/_lib/ops-registration.ts, A59), only on that tap, within the
  * plan's fix runs a day. Undo is the revert pull request: the person merges it in GitHub, or in the desktop with their
  * own GitHub sign-in. Vector's server never merges.
  */
@@ -323,12 +324,15 @@ async function markTaken(account: string, id: string, fetcher: typeof fetch, now
 /**
  * Handles every event of one report, oldest first. An event already taken is skipped; one this server does not know or
  * that is malformed is skipped too (never retried forever). A failure (the store, GitHub during a revert) stops the
- * report there and is thrown, so the Worker sends it again and the events already taken are not repeated.
+ * report there and is thrown, so the Worker sends it again and the events already taken are not repeated. A report for
+ * an account being deleted (A57's tombstone) is answered with every event skipped and nothing written or alerted, so
+ * the Worker stops resending; a tombstone that cannot be read is thrown like any store failure.
  */
 export async function handleOpsReport(report: OpsReport, options: OpsReportOptions = {}): Promise<OpsReportResult> {
   const fetcher = options.fetcher ?? fetch
   const now = options.now ?? Date.now()
   const deadline = options.deadline ?? Date.now() + INCIDENT_LIMITS.reportBudgetMs
+  if (await accountDeleting(report.account, fetcher)) return { taken: 0, duplicates: 0, skipped: report.events.length }
   const result: OpsReportResult = { taken: 0, duplicates: 0, skipped: 0 }
   for (const raw of report.events) {
     const event = checkedEvent(raw)
@@ -815,10 +819,11 @@ export async function unsnoozeIncident(account: string, id: unknown, fetcher: ty
 
 /**
  * Starts a run of Vector's GitHub agent in the person's own repository: Codex's `startCloudRun(trigger)` (contract
- * §4.18), which the integration commit (A59) registers with `registerOpsRunStarter`. It answers the run's id and, when
- * it has one, a link to follow it.
+ * §4.18), which api/_lib/ops-registration.ts (A59) registers with `registerOpsRunStarter`. It answers the run's id and
+ * a link to follow it when it has them; `startCloudRun` has neither at dispatch, so the registered starter answers
+ * neither. A refusal is thrown as an ApiError, which the fix passes through after releasing its claim.
  */
-export type OpsRunStarter = (trigger: CodiumRunTrigger.RunTrigger) => Promise<{ id: string; url?: string }>
+export type OpsRunStarter = (trigger: CodiumRunTrigger.RunTrigger) => Promise<{ id?: string; url?: string }>
 let runStarter: OpsRunStarter | undefined
 
 export function registerOpsRunStarter(starter: OpsRunStarter | undefined) {
@@ -938,7 +943,7 @@ export async function startIncidentFix(
       detail: { limit: "fix-runs", max: cap },
     })
   const { prompt, criteria } = fixPrompt(incident)
-  let run: { id: string; url?: string }
+  let run: { id?: string; url?: string }
   try {
     run = await starter({
       source: "ops",
