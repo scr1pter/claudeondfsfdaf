@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  cloudPermissionReply,
   cloudWorkspaceLocation,
   cloudWorkspacePath,
   cloudWorkspacesClient,
@@ -423,6 +424,75 @@ describe("cloud workspace projections", () => {
     expect(() =>
       readCloudQuestions([{ id: "que_123", sessionID: "ses_123", questions: [{ question: "Which?", options: [] }] }]),
     ).toThrow()
+  })
+
+  test("displays the engine's Connect write description and patch preview", () => {
+    const permission = { id: "per_123", sessionID: "ses_123", permission: "connect_write", patterns: ["file.ts"] }
+    const metadata = {
+      runID: "cr_example",
+      description: "Merge the fix worktree into your checkout.",
+      diff: "--- a/file.ts\n+++ b/file.ts\n-old\n+new",
+      detail: "not projected",
+    }
+    expect(readCloudPermissions([{ ...permission, metadata }])).toEqual([
+      { ...permission, connectWrite: { description: metadata.description, diff: metadata.diff } },
+    ])
+  })
+
+  test("marks only explicit acceptance of a displayable Connect write", async () => {
+    const permission = { id: "per_123", sessionID: "ses_123", permission: "connect_write", patterns: ["file.ts"] }
+    const metadata = { runID: "cr_example", description: "Fix a finding in your checkout." }
+    const [write, read, cloud] = readCloudPermissions([
+      { ...permission, metadata },
+      { ...permission, permission: "connect", metadata },
+      { ...permission, permission: "connect_cloud", metadata },
+    ])
+    expect(cloudPermissionReply(write, "once")).toEqual({ reply: "once", confirm: true })
+    expect(cloudPermissionReply(write, "reject")).toEqual({ reply: "reject" })
+    expect(cloudPermissionReply(read, "once")).toEqual({ reply: "once" })
+    expect(cloudPermissionReply(read, "reject")).toEqual({ reply: "reject" })
+    expect(cloudPermissionReply(cloud, "once")).toBeUndefined()
+    expect(cloudPermissionReply(cloud, "reject")).toEqual({ reply: "reject" })
+
+    const requests: unknown[] = []
+    const client = cloudWorkspacesClient("test-token", async (input, init) => {
+      const request = new Request(new URL(String(input), "https://vectordev.ai"), init)
+      requests.push(await request.json())
+      return Response.json(true)
+    })
+    await client.engine(workspace.id, `/permission/${write.id}/reply`, "POST", cloudPermissionReply(write, "once"))
+    expect(requests).toEqual([
+      {
+        action: "engine",
+        workspaceId: workspace.id,
+        path: "/permission/per_123/reply",
+        method: "POST",
+        body: { reply: "once", confirm: true },
+      },
+    ])
+  })
+
+  test("keeps Connect writes deny-only when review details are missing or unsafe to display", () => {
+    const permission = { id: "per_123", sessionID: "ses_123", permission: "connect_write", patterns: ["file.ts"] }
+    const metadata = { runID: "cr_example", description: "Fix a finding in your checkout." }
+    const pending = readCloudPermissions([
+      permission,
+      { ...permission, metadata: { ...metadata, runID: "run_example" } },
+      { ...permission, metadata: { ...metadata, description: "  " } },
+      { ...permission, metadata: { ...metadata, description: "a".repeat(2_001) } },
+      { ...permission, metadata: { ...metadata, description: "Fix file\u202e" } },
+      { ...permission, metadata: { ...metadata, diff: { unexpected: "patch" } } },
+      { ...permission, metadata: { ...metadata, diff: "" } },
+      { ...permission, metadata: { ...metadata, diff: "+a\u0000" } },
+      { ...permission, metadata: { ...metadata, diff: "a".repeat(256 * 1024 + 1) } },
+      { ...permission, patterns: [], metadata },
+      { ...permission, patterns: ["file\u202e.ts"], metadata },
+    ])
+    for (const item of pending) {
+      expect(item.connectWrite).toBeUndefined()
+      expect(cloudPermissionReply(item, "once")).toBeUndefined()
+      expect(cloudPermissionReply(item, "reject")).toEqual({ reply: "reject" })
+    }
   })
 })
 

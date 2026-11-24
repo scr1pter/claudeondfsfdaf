@@ -192,6 +192,7 @@ export function PermissionCard(props: {
 
   const allow = () =>
     run(async () => {
+      if (props.request.denyOnly) return
       const pending = confirm()
       finish(
         pending
@@ -213,9 +214,11 @@ export function PermissionCard(props: {
         <pre class="phone-detail">{props.request.detail}</pre>
       </Show>
       <div class="phone-actions">
-        <button type="button" class="phone-button" disabled={busy()} onClick={allow}>
-          {confirm() ? "Confirm with your passkey" : "Allow once"}
-        </button>
+        <Show when={!props.request.denyOnly}>
+          <button type="button" class="phone-button" disabled={busy()} onClick={allow}>
+            {confirm() ? "Confirm with your passkey" : "Allow once"}
+          </button>
+        </Show>
         <button type="button" class="phone-button phone-button--quiet" disabled={busy()} onClick={deny}>
           Deny
         </button>

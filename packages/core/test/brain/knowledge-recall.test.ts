@@ -23,6 +23,26 @@ const ask = (query: string, overrides: Partial<Parameters<BrainKnowledge.Interfa
 const LESSON = "Refresh token rotation lives in src/auth/session.ts; the refresh token is single use."
 
 describe("BrainKnowledge.recall", () => {
+  test("outward recall ranks approved lessons and withholds repository and private cards", async () => {
+    await withKnowledge((setup) =>
+      Effect.gen(function* () {
+        const lesson = "Check refresh token expiry with a deterministic fixture."
+        yield* setup.brain.propose(setup.place, { kind: "lesson", text: lesson, scope: "repository", origin: "user" })
+        yield* added(setup, { ...text("Repository auth spec.md", SPEC_V1), origin: "repository" })
+        yield* added(setup, text("Local notes.md", "# Refresh token expiry\n\nOnly the owner should see this detail."))
+        const query = "what is the refresh token expiry and TTL?"
+        const ordinary = yield* setup.knowledge.recall(setup.place, ask(query, { personal: false }))
+        expect(ordinary.text).toContain("Refresh tokens expire after 14 days.")
+        const outward = yield* setup.knowledge.recall(setup.place, ask(query, { audience: "outward" }))
+        expect(outward.text).toContain(lesson)
+        expect(outward.cards).toEqual([])
+        expect(outward.documents).toBe(false)
+        expect(outward.text).not.toContain("14 days")
+        expect(outward.text).not.toContain("Only the owner")
+      }),
+    )
+  })
+
   test("a repository without documents recalls exactly what memory alone does", async () => {
     const result = await withKnowledge((setup) =>
       Effect.gen(function* () {

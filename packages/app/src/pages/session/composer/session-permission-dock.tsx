@@ -6,7 +6,7 @@ import type { PermissionRequest } from "@vectordevai/sdk/v2"
 import { Button } from "@vectordevai/ui/button"
 import { DockPrompt } from "@vectordevai/session-ui/dock-prompt"
 import { Icon } from "@vectordevai/ui/icon"
-import { connectConsentDetails, connectConsentDiff } from "@/features/connect/consent"
+import { canConfirmConnectWrite, connectConsentDetails, connectConsentDiff } from "@/features/connect/consent"
 import { useLanguage } from "@/context/language"
 import { cloudPermissionScope, permissionStatements } from "./cloud-permission-scope"
 import { canAlwaysAllowPermission } from "@/context/permission-policy"
@@ -47,7 +47,9 @@ function GenericPermissionDock(props: PermissionDockProps) {
   // A workflow ask carries its plan. Always allow shows only for a plan within the configured defaults ("run"); any
   // other pattern asks every time, and the reason line says why (G.3, I15).
   const workflow = () => readWorkflowAsk(props.request)
+  const requiresConnectConfirmation = () => PermissionPolicy.requiresConnectConfirmation(props.request.permission)
   const canAlways = () => {
+    if (requiresConnectConfirmation()) return false
     const ask = workflow()
     if (ask) return ask.canAlways
     return canAlwaysAllowPermission(props.request.permission, props.request.always)
@@ -81,9 +83,16 @@ function GenericPermissionDock(props: PermissionDockProps) {
                 {language.t("ui.permission.allowAlways")}
               </Button>
             </Show>
-            <Button variant="primary" size="normal" onClick={() => props.onDecide("once")} disabled={props.responding}>
-              {language.t("ui.permission.allowOnce")}
-            </Button>
+            <Show when={!requiresConnectConfirmation() || canConfirmConnectWrite(props.request)}>
+              <Button
+                variant="primary"
+                size="normal"
+                onClick={() => props.onDecide("once")}
+                disabled={props.responding}
+              >
+                {language.t("ui.permission.allowOnce")}
+              </Button>
+            </Show>
           </div>
         </>
       }

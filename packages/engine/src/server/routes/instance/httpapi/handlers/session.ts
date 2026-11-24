@@ -56,7 +56,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { InvalidRequestError, PermissionNotFoundError, notFound } from "../errors"
+import { ConflictError, InvalidRequestError, PermissionNotFoundError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 import { RequestPrincipal } from "@vectordevai/protocol/middleware/authorization"
 import { ForbiddenError } from "@vectordevai/protocol/errors"
@@ -246,6 +246,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ),
         )
       yield* SessionAudienceHttp.admit(created.id, owner)
+      if (owner && promptSvc.recordScreenedRecallJob && (yield* RequestOwner.authenticated))
+        yield* promptSvc.recordScreenedRecallJob(created)
       return created
     })
 
@@ -447,9 +449,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     // guest never accepted the free-model training notice, so the owner's acceptance does not carry a guest's prompt to
     // a model that may train. Where research searches is the owner's choice too.
     const promptOptions = Effect.gen(function* () {
+      const screenedRecallOwner = yield* RequestOwner.authenticated
       return (yield* RequestOwner.owner)
-        ? { userFile: () => true }
-        : { tightenBudget: true, refuseTrainingFreeModels: true, dropResearchOptions: true }
+        ? { userFile: () => true, screenedRecallOwner }
+        : { tightenBudget: true, refuseTrainingFreeModels: true, dropResearchOptions: true, screenedRecallOwner }
     })
 
     // An isolated task, or a descendant of a retired one, is refused here with a client error before anything is
@@ -629,6 +632,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response }).pipe(
+        Effect.catchTag(
+          "Permission.ConfirmationRequiredError",
+          (error) => new ConflictError({ resource: error.requestID, message: error.message }),
+        ),
         Effect.catchTag("Permission.NotFoundError", (error) =>
           Effect.fail(
             new PermissionNotFoundError({

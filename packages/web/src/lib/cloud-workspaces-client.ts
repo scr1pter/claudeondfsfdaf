@@ -15,7 +15,13 @@ export type CloudSession = { id: string; title: string; updatedAt: number }
 export type CloudModel = { providerID: string; modelID: string; name: string; provider: string; preferred: boolean }
 export type CloudPullRequest = { url: string; branch: string; commit: string }
 export type CloudChanges = { digest: string; diff: string; files: string[] }
-export type CloudPermission = { id: string; sessionID: string; permission: string; patterns: string[] }
+export type CloudPermission = {
+  id: string
+  sessionID: string
+  permission: string
+  patterns: string[]
+  connectWrite?: { description: string; diff?: string }
+}
 export type CloudQuestion = {
   id: string
   sessionID: string
@@ -343,8 +349,50 @@ export function readCloudPermissions(value: unknown): CloudPermission[] {
       !item.patterns.every((pattern) => typeof pattern === "string")
     )
       throw new Error("Vector could not read a pending approval.")
-    return { id: item.id, sessionID: item.sessionID, permission: item.permission, patterns: item.patterns as string[] }
+    const permission = {
+      id: item.id,
+      sessionID: item.sessionID,
+      permission: item.permission,
+      patterns: item.patterns as string[],
+    }
+    if (permission.permission !== "connect_write") return permission
+    const connectWrite = readConnectWrite(item.metadata, permission.patterns)
+    return { ...permission, ...(connectWrite ? { connectWrite } : {}) }
   })
+}
+
+// Control and bidirectional formatting characters can hide parts of an approval.
+const hiddenConsentText =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u
+
+function readConnectWrite(metadata: unknown, patterns: string[]): CloudPermission["connectWrite"] {
+  if (!record(metadata)) return
+  const { runID, description, diff } = metadata
+  if (
+    typeof runID !== "string" ||
+    !/^cr_[A-Za-z0-9_-]{1,61}$/.test(runID) ||
+    typeof description !== "string" ||
+    !description.trim() ||
+    description.length > 2_000 ||
+    hiddenConsentText.test(description) ||
+    patterns.length === 0 ||
+    patterns.length > 50 ||
+    patterns.some((pattern) => !pattern.trim() || pattern.length > 500 || hiddenConsentText.test(pattern))
+  )
+    return
+  if (
+    diff !== undefined &&
+    (typeof diff !== "string" || !diff.trim() || diff.length > 256 * 1024 || hiddenConsentText.test(diff))
+  )
+    return
+  return { description, ...(diff !== undefined ? { diff } : {}) }
+}
+
+export function cloudPermissionReply(permission: CloudPermission, reply: "once" | "reject") {
+  if (reply === "reject") return { reply }
+  if (permission.permission === "connect_cloud") return
+  if (permission.permission !== "connect_write") return { reply }
+  if (permission.connectWrite) return { reply, confirm: true as const }
 }
 
 export function readCloudQuestions(value: unknown): CloudQuestion[] {

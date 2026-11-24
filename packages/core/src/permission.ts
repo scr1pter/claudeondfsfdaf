@@ -60,8 +60,7 @@ export type AssertInput = typeof AssertInput.Type
 
 export const ReplyInput = Schema.Struct({
   requestID: ID,
-  reply: Reply,
-  message: Schema.String.pipe(Schema.optional),
+  ...Permission.ReplyBody.fields,
 }).annotate({ identifier: "PermissionV2.ReplyInput" })
 export type ReplyInput = typeof ReplyInput.Type
 
@@ -87,6 +86,15 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
   requestID: ID,
 }) {}
 
+export class ConfirmationRequiredError extends Schema.TaggedErrorClass<ConfirmationRequiredError>()(
+  "Permission.ConfirmationRequiredError",
+  { requestID: Schema.String },
+) {
+  override get message() {
+    return "This Connect request needs an explicit Allow once from an updated client."
+  }
+}
+
 export type Error = DeniedError | RejectedError | CorrectedError
 
 export function evaluate(action: string, resource: string, ...rulesets: Permission.Ruleset[]): Permission.Rule {
@@ -108,7 +116,7 @@ export interface Interface {
   readonly deniedResources: (input: AssertInput) => EffectRuntime.Effect<ReadonlyArray<string>, SessionV2.NotFoundError>
   readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionV2.NotFoundError>
   readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionV2.NotFoundError>
-  readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
+  readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError | ConfirmationRequiredError>
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionV2.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
   readonly list: () => EffectRuntime.Effect<ReadonlyArray<Request>>
@@ -120,6 +128,7 @@ interface Pending {
   readonly request: Request
   readonly agent?: AgentV2.ID
   readonly deferred: Deferred.Deferred<void, Error>
+  answering?: boolean
 }
 
 const layer = Layer.effect(
@@ -249,7 +258,18 @@ const layer = Layer.effect(
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
           const existing = pending.get(input.requestID)
-          if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
+          if (!existing || existing.answering) return yield* new NotFoundError({ requestID: input.requestID })
+          if (PermissionPolicy.requiresConnectConfirmation(existing.request.action)) {
+            if (input.reply !== "reject" && (input.reply !== "once" || input.confirm !== true))
+              return yield* new ConfirmationRequiredError({ requestID: input.requestID })
+            // Claim the protected request before publishing an answer or looking up current rules.
+            existing.answering = true
+            yield* EffectRuntime.addFinalizer(() =>
+              EffectRuntime.sync(() => {
+                existing.answering = false
+              }),
+            )
+          }
           const reply =
             input.reply === "always" &&
             !canAlwaysApprove(existing.request.action, existing.request.save, existing.request.resources)
@@ -327,7 +347,7 @@ const layer = Layer.effect(
             yield* Deferred.succeed(item.deferred, undefined)
             pending.delete(id)
           }
-        }),
+        }).pipe(EffectRuntime.scoped),
       ),
     )
 

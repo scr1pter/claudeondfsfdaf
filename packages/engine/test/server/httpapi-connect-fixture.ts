@@ -89,6 +89,12 @@ if (connect.identifier !== "connect" || permission.identifier !== "permission" |
 // Seeding through the same handler lifetime avoids creating rows in a different scoped Database layer.
 const seed = HttpApiGroup.make("fixture-seed")
   .add(HttpApiEndpoint.post("create", "/fixture/session", { payload: Schema.Struct({}), success: Session.Info }))
+  .add(
+    HttpApiEndpoint.post("ask", "/fixture/permission", {
+      payload: Schema.Struct({ sessionID: Session.Info.fields.id, permission: Schema.String }),
+      success: Schema.Boolean,
+    }),
+  )
   .middleware(InstanceContextMiddleware)
   .middleware(WorkspaceRoutingMiddleware)
   .middleware(Authorization)
@@ -101,7 +107,14 @@ const api = HttpApi.make("vector-instance")
 const seedHandlers = HttpApiBuilder.group(api, "fixture-seed", (handlers) =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
-    return handlers.handle("create", () => sessions.create({ title: "Connected review fixture" }))
+    const permission = yield* Permission.Service
+    return handlers
+      .handle("create", () => sessions.create({ title: "Connected review fixture" }))
+      .handle("ask", (ctx) =>
+        permission
+          .ask({ ...ctx.payload, patterns: ["fixture"], always: [], metadata: {}, ruleset: [] })
+          .pipe(Effect.match({ onFailure: () => false, onSuccess: (reply) => reply === "once" })),
+      )
   }),
 )
 export const routes = HttpApiBuilder.layer(api).pipe(

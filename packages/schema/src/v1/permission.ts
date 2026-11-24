@@ -3,6 +3,7 @@ export * as PermissionV1 from "./permission"
 import { Schema } from "effect"
 import { define, inventory } from "../event"
 import { ascending } from "../identifier"
+import { ReplyConfirmation } from "../permission"
 import { Project } from "../project"
 import { statics } from "../schema"
 import { SessionID } from "../session-id"
@@ -38,9 +39,11 @@ export type Request = typeof Request.Type
 export const Reply = Schema.Literals(["once", "always", "reject"])
 export type Reply = typeof Reply.Type
 
-export const ReplyBody = Schema.Struct({ reply: Reply, message: Schema.optional(Schema.String) }).annotate({
-  identifier: "PermissionReplyBody",
-})
+export const ReplyBody = Schema.Struct({
+  reply: Reply,
+  message: Schema.optional(Schema.String),
+  confirm: ReplyConfirmation,
+}).annotate({ identifier: "PermissionReplyBody" })
 export type ReplyBody = typeof ReplyBody.Type
 
 export const Approval = Schema.Struct({ projectID: Project.ID, patterns: Schema.Array(Schema.String) }).annotate({

@@ -16,6 +16,7 @@ import { Shell } from "@vectordevai/core/shell"
 import { AGENT_MARKER, untrustedChildEnvironment } from "@vectordevai/core/child-environment"
 import { ShellID } from "./shell/id"
 import { Sandbox } from "./shell/sandbox"
+import * as UnattendedSeccomp from "./shell/unattended-seccomp"
 import { CloudCli } from "./shell/cloud-cli"
 import { GitMutation } from "./shell/git-mutation"
 import { TaskClaims } from "@/task/claims"
@@ -1237,6 +1238,7 @@ const cmd = Effect.fn("ShellTool.cmd")(function* (
       cwd,
       env: offline.wrapped.env,
       stdin: "ignore",
+      ...(offline.wrapped.seccomp ? UnattendedSeccomp.options(offline.wrapped.seccomp) : {}),
       detached: true,
     })
   }

@@ -2,8 +2,10 @@ export * as ConnectOwner from "./owner"
 
 import { randomUUID } from "node:crypto"
 import os from "node:os"
+import path from "node:path"
 import { Cause, Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainDatabase } from "@vectordevai/core/brain/database"
@@ -78,11 +80,15 @@ const requestError = (error: ConnectDirectoryRequest.Error) =>
     message: error.message,
   })
 
+const busyReview = () =>
+  new Error({ code: "invalid", message: "This conversation is busy. Start the review after its turn finishes." })
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const hub = yield* ConnectHub.Service
     const directoryRequests = yield* ConnectDirectoryRequest.Service
+    const jobs = yield* BackgroundJobStore.Service
     const brain = yield* Brain.Service
     const brainDatabase = yield* BrainDatabase.Service
     const instruction = yield* Instruction.Service
@@ -156,15 +162,8 @@ const layer = Layer.effect(
             const failed = Cause.squash(cause)
             const error = failed instanceof WorkflowOwnerHandoffFailure ? failed.original : failed
             if (error instanceof Error) return Effect.fail(error)
-            return Effect.fail(
-              new Error({
-                code: "invalid",
-                message:
-                  error instanceof Session.BusyError
-                    ? "This conversation is busy. Start the review after its turn finishes."
-                    : "The connected owner action did not complete.",
-              }),
-            )
+            if (error instanceof Session.BusyError) return Effect.fail(busyReview())
+            return Effect.fail(new Error({ code: "invalid", message: "The connected owner action did not complete." }))
           }),
         )
         if (Option.isNone(result.value))
@@ -345,40 +344,78 @@ const layer = Layer.effect(
         return yield* hub.cancel(runID, sessionID ? { sessionID } : undefined)
       })
     const review: Interface["review"] = (sessionID, input, options) =>
-      own(
-        sessionID,
-        Effect.gen(function* () {
+      Effect.gen(function* () {
+        const to = input.to ?? "vectorscope"
+        const request = (directory: string, agent: string): ConnectHub.StartRequest => ({
+          to,
+          action: "review",
+          requester: { kind: "user", sessionID, agent },
+          directory,
+          target: input.target ?? { kind: "uncommitted" },
+          background: input.background ?? true,
+          ...(input.budget ? { budget: input.budget } : {}),
+          ...(input.security !== undefined ? { security: input.security } : {}),
+          ...(input.since ? { since: input.since } : {}),
+        })
+        if (hub.isListOnly(to)) {
+          const session = yield* requireSession(sessionID)
+          yield* state.assertNotBusy(sessionID).pipe(Effect.mapError(busyReview))
           if (options?.abort?.aborted) return yield* Effect.interrupt
-          const saved = yield* recorder(sessionID, "Review my changes with VectorScope.", {
-            action: "review",
-            ...input,
-          })
-          return yield* Effect.gen(function* () {
-            const run = yield* hub.run({
-              request: {
-                to: input.to ?? "vectorscope",
-                action: "review",
-                requester: { kind: "user", sessionID, agent: saved.agent.name },
-                directory: saved.context.directory,
-                target: input.target ?? { kind: "uncommitted" },
-                background: input.background ?? true,
-                ...(input.budget ? { budget: input.budget } : {}),
-                ...(input.security !== undefined ? { security: input.security } : {}),
-                ...(input.since ? { since: input.since } : {}),
-              },
-              call: {
-                promptOps,
-                ...(options?.abort ? { abort: options.abort } : {}),
-                part: { messageID: saved.part.messageID, callID: saved.part.callID },
-                update: saved.update,
-              },
+          const context = yield* InstanceState.context
+          return yield* hub.run({ request: request(context.directory, session.agent ?? "build") })
+        }
+        return yield* own(
+          sessionID,
+          Effect.gen(function* () {
+            if (options?.abort?.aborted) return yield* Effect.interrupt
+            const saved = yield* recorder(sessionID, "Review my changes with VectorScope.", {
+              action: "review",
+              ...input,
             })
-            return { value: run, message: yield* saved.complete(run) }
-          }).pipe(
-            Effect.onExit((exit) => (Exit.isFailure(exit) ? saved.fail(Cause.hasInterrupts(exit.cause)) : Effect.void)),
-          )
-        }),
+            return yield* Effect.gen(function* () {
+              const run = yield* hub.run({
+                request: request(saved.context.directory, saved.agent.name),
+                call: {
+                  promptOps,
+                  ...(options?.abort ? { abort: options.abort } : {}),
+                  part: { messageID: saved.part.messageID, callID: saved.part.callID },
+                  update: saved.update,
+                },
+              })
+              return { value: run, message: yield* saved.complete(run) }
+            }).pipe(
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit) ? saved.fail(Cause.hasInterrupts(exit.cause)) : Effect.void,
+              ),
+            )
+          }),
+        )
+      })
+    const inspectOpen: ConnectDirectoryRequest.InspectOpen = Effect.fnUntraced(function* (binding, receipt) {
+      // A row may already say cancelled while its worker drains. Reclaim an open receipt only when the original
+      // modern lease is positively dead, and the row still names the exact directory binding.
+      const row = yield* jobs.forJob(binding.runID, binding.anchorID)
+      const metadata = row?.metadata
+      return (
+        row !== undefined &&
+        row.id === binding.runID &&
+        row.parentSessionID === binding.anchorID &&
+        row.type === ConnectHub.JOB_TYPE &&
+        row.background &&
+        row.sessionID === undefined &&
+        row.attempt === undefined &&
+        (row.status === "running" || row.status === "interrupted") &&
+        path.normalize(row.directory) === path.normalize(receipt.directory) &&
+        metadata?.directoryReview === true &&
+        metadata.runID === binding.runID &&
+        metadata.member === "vectorscope" &&
+        metadata.action === "review" &&
+        metadata.requestKey === binding.key &&
+        metadata.scopeDigest === binding.scopeDigest &&
+        metadata.inputDigest === binding.inputDigest &&
+        BackgroundJobStore.deadModernLease(row.owner)
       )
+    })
     const directoryReview: Interface["directoryReview"] = (input, options) =>
       Effect.gen(function* () {
         yield* enabled
@@ -414,8 +451,11 @@ const layer = Layer.effect(
         } = { step: "agent", bind: "none" }
         return yield* Effect.acquireUseRelease(
           directoryRequests
-            .reserve({ projectID: current.project.id, directory: current.directory }, checked, (prepared) =>
-              hub.settleDirectory({ ...prepared.proof, anchorID: prepared.anchorID }),
+            .reserve(
+              { projectID: current.project.id, directory: current.directory },
+              checked,
+              (prepared) => hub.settleDirectory({ ...prepared.proof, anchorID: prepared.anchorID }),
+              inspectOpen,
             )
             .pipe(Effect.mapError(requestError)),
           (attempt) =>
@@ -802,6 +842,7 @@ export const node = LayerNode.make({
   deps: [
     ConnectHub.node,
     ConnectDirectoryRequest.node,
+    BackgroundJobStore.node,
     Brain.node,
     BrainDatabase.node,
     Instruction.node,

@@ -4,7 +4,7 @@ import { PermissionSaved } from "@vectordevai/core/permission/saved"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { PermissionNotFoundError, SessionNotFoundError } from "@vectordevai/protocol/errors"
+import { ConflictError, PermissionNotFoundError, SessionNotFoundError } from "@vectordevai/protocol/errors"
 import { pluginsLoaded, response } from "../location"
 
 function missingRequest(id: PermissionV2.ID) {
@@ -73,9 +73,13 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
           const permission = yield* PermissionV2.Service
           const request = yield* permission.get(ctx.params.requestID)
           if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
-          yield* permission
-            .reply({ requestID: ctx.params.requestID, reply: ctx.payload.reply, message: ctx.payload.message })
-            .pipe(Effect.catchTag("PermissionV2.NotFoundError", () => missingRequest(ctx.params.requestID)))
+          yield* permission.reply({ requestID: ctx.params.requestID, ...ctx.payload }).pipe(
+            Effect.catchTag("PermissionV2.NotFoundError", () => missingRequest(ctx.params.requestID)),
+            Effect.catchTag(
+              "Permission.ConfirmationRequiredError",
+              (error) => new ConflictError({ resource: error.requestID, message: error.message }),
+            ),
+          )
           return HttpApiSchema.NoContent.make()
         }),
       )

@@ -2,17 +2,14 @@ import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { Permission } from "@/permission"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
-import { PermissionNotFoundError } from "../errors"
+import { ConflictError, PermissionNotFoundError } from "../errors"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
 import { described } from "./metadata"
 
 const root = "/permission"
-const ReplyPayload = Schema.Struct({
-  reply: PermissionV1.Reply,
-  message: Schema.optional(Schema.String),
-})
+const ReplyPayload = Schema.Struct(PermissionV1.ReplyBody.fields)
 
 export const PermissionApi = HttpApi.make("permission")
   .add(
@@ -33,7 +30,7 @@ export const PermissionApi = HttpApi.make("permission")
           query: WorkspaceRoutingQuery,
           payload: ReplyPayload,
           success: described(Schema.Boolean, "Permission processed successfully"),
-          error: [HttpApiError.BadRequest, PermissionNotFoundError],
+          error: [HttpApiError.BadRequest, PermissionNotFoundError, ConflictError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "permission.reply",

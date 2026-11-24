@@ -1,6 +1,6 @@
 export * as ConnectHub from "./hub"
 
-import { readdir, realpath, stat } from "node:fs/promises"
+import { lstat, readdir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -157,6 +157,8 @@ export interface Interface {
    * once, as a note to the requester's session, when it ends.
    */
   readonly run: (input: StartInput) => Effect.Effect<Connect.Run>
+  /** Whether the registered adapter has no hand-off handler. This does not probe the member. */
+  readonly isListOnly: (to: string) => boolean
   /** Cancels a run that is going. With `sessionID`, only that session's own runs. False when there was none. */
   readonly cancel: (runID: string, scope?: { readonly sessionID?: SessionID }) => Effect.Effect<boolean>
   /** Owner service only: save dismissal context, then change the original trusted durable review row. */
@@ -324,6 +326,12 @@ interface Admission {
 const refusal = (code: Connect.RefusalCode, message: string) =>
   new Connect.Refusal({ code, message: clip(message, 2_000) })
 
+const listOnlyRefusal = (to: string) =>
+  refusal("unknown", `${clip(to, 200)} is only listed; connect cannot hand work to it.`)
+
+const taskReviewRefusal = () =>
+  refusal("input", "An isolated task review needs its launching conversation and VectorScope.")
+
 const OFF = "Connected tools are off in this build (VECTOR_EXPERIMENTAL_CONNECT)."
 
 /** The hub's layer over the given adapters. Tests pass fakes; the engine passes `ADAPTERS`. */
@@ -352,6 +360,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const scope = yield* Scope.Scope
       const adapters = yield* Effect.all(factories)
       const byID = new Map(adapters.map((adapter) => [adapter.id, adapter]))
+      const isListOnly = (to: string) => {
+        const adapter = byID.get(to)
+        return adapter !== undefined && !adapter.handle
+      }
       // Each adapter's cloud actions, read once here: nothing it describes or changes later widens them.
       const clouds = new Map(
         adapters.map((adapter) => [
@@ -930,6 +942,24 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         } satisfies ConnectPolicy.RunSpend
       })
 
+      const checkRequester = Effect.fnUntraced(function* (requester: Connect.Requester, hasDirectory: boolean) {
+        const session = requester.sessionID
+          ? yield* sessions.get(requester.sessionID).pipe(Effect.orElseSucceed(() => undefined))
+          : undefined
+        if (requester.sessionID && !session)
+          return yield* refusal("not-allowed", "The session that asked no longer exists, so connect did not start.")
+        if (!requester.sessionID && !hasDirectory)
+          return yield* refusal("not-allowed", "A directory review needs the current owner's execution authority.")
+        // A member's own helper session never starts a hand-off (no chains).
+        if (session?.internal)
+          return yield* refusal("not-allowed", "A helper session cannot hand work to another member.")
+        // Nor does a subagent (a child session the task tool made): only the conversation's own agent, a person or a
+        // workflow stage hands work off.
+        if (requester.kind === "agent" && session?.parentID)
+          return yield* refusal("not-allowed", "A subagent cannot hand work to another member.")
+        return session
+      })
+
       const admit = Effect.fnUntraced(function* (
         entry: Entry,
         saved: readonly Connect.Run[],
@@ -939,24 +969,10 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const requester = request.requester
         if (!flags.experimentalConnect) return yield* refusal("not-allowed", OFF)
         yield* directoryCurrent(entry)
-        const session = requester.sessionID
-          ? yield* sessions.get(requester.sessionID).pipe(Effect.orElseSucceed(() => undefined))
-          : undefined
-        if (requester.sessionID && !session)
-          return yield* refusal("not-allowed", "The session that asked no longer exists, so connect did not start.")
-        if (!requester.sessionID && !entry.directory)
-          return yield* refusal("not-allowed", "A directory review needs the current owner's execution authority.")
-        // A member's own helper session never starts a hand-off (no chains).
-        if (session?.internal)
-          return yield* refusal("not-allowed", "A helper session cannot hand work to another member.")
-        // Nor does a subagent (a child session the task tool made): only the conversation's own agent, a person or a
-        // workflow stage hands work off.
-        if (requester.kind === "agent" && session?.parentID)
-          return yield* refusal("not-allowed", "A subagent cannot hand work to another member.")
+        const session = yield* checkRequester(requester, entry.directory !== undefined)
         const adapter = entry.adapter
         if (!adapter) return yield* refusal("unknown", `Connect has no member named ${clip(request.to, 200)}.`)
-        if (!adapter.handle)
-          return yield* refusal("unknown", `${clip(request.to, 200)} is only listed; connect cannot hand work to it.`)
+        if (!adapter.handle) return yield* listOnlyRefusal(request.to)
         const described = yield* adapter.describe().pipe(Effect.exit)
         if (Exit.isFailure(described))
           return yield* refusal("unavailable", `Connect could not check whether ${request.to} is ready.`)
@@ -1019,7 +1035,14 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             reviews(state, requester.sessionID, request.requestID, saved, entry.run.id),
           )
           if (!capped.ok) return yield* capped.refusal
-          yield* checkReads(request.directory, rules)
+        }
+        const checkedPlace =
+          request.action === "review"
+            ? yield* checkReads(request.directory, rules, {
+                qualify: adapter.id === "vectorscope" && !!entry.call.promptOps,
+              })
+            : undefined
+        if (request.action === "review") {
           if (entry.directory) {
             const canonical = yield* Effect.tryPromise(() => realpath(request.directory)).pipe(
               Effect.catch(() => refusal("read-rule", "Connect could not resolve this directory's read authority.")),
@@ -1043,7 +1066,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             })
             if (!denies.ok) return yield* denies.refusal
             entry.readDenies = denies.value
-            yield* checkReads(placed.directory, rules, [placed.parentDirectory, roots[0]!])
+            yield* checkReads(placed.directory, rules, { aliases: [placed.parentDirectory, roots[0]!] })
           }
         }
         const previous = request.action === "review" && request.since ? yield* earlier(request, requester) : undefined
@@ -1099,13 +1122,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const remainingUsd =
           spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0) - heldUsd) : undefined
         const ops = entry.call.promptOps
-        const yieldInstance = yield* InstanceState.context
-        const readPlace =
-          request.action === "review" && adapter.id === "vectorscope" && ops
-            ? yield* Effect.tryPromise(() => reviewRoot(request.directory, yieldInstance)).pipe(
-                Effect.catch(() => refusal("read-rule", "Connect could not resolve the review's read authority.")),
-              )
-            : undefined
+        if (checkedPlace)
+          yield* Effect.tryPromise(() => verifyReadPlace(checkedPlace)).pipe(
+            Effect.catch(() => refusal("read-rule", "The review's original read aliases are no longer available.")),
+          )
+        const readPlace = adapter.id === "vectorscope" && ops ? checkedPlace : undefined
         const readSources = readPlace ? [...new Set([readPlace.root, ...(placed ? [placed.parentDirectory] : [])])] : []
         const readOrigins = readPlace
           ? yield* Effect.tryPromise(async () => [
@@ -1133,7 +1154,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                   Effect.gen(function* () {
                     if (!originAuthority.valid)
                       return yield* refusal("read-rule", "The review's original read aliases are no longer available.")
-                    yield* Effect.tryPromise(() => verifyReadOrigins(readPlace.origins)).pipe(
+                    yield* Effect.tryPromise(() => verifyReadPlace(readPlace)).pipe(
                       Effect.catch(() => {
                         originAuthority.valid = false
                         return refusal("read-rule", "The review's original read aliases are no longer available.")
@@ -1171,7 +1192,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 yield* directoryCurrent(entry)
                 // Uncommitted/staged input is collected after model consent. A newly restricted file must not enter
                 // that diff just because it did not exist at the first preflight; tool denies remain in force too.
-                yield* checkReads(request.directory, rules)
+                yield* checkReads(request.directory, rules, { existing: checkedPlace })
               }
               // The adapter's own cap is never above what was held for it; a review with no dollar cap holds none.
               if (cap && entry.reservedUsd !== undefined)
@@ -1224,32 +1245,41 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const checkReads = Effect.fnUntraced(function* (
         directory: string,
         rules: PermissionV1.Ruleset,
-        aliases: readonly string[] = [],
+        options: {
+          readonly aliases?: readonly string[]
+          readonly existing?: CheckedReadPlace
+          readonly qualify?: boolean
+        } = {},
       ) {
         const patterns = ConnectPolicy.readPatterns(rules)
-        if (patterns.length === 0) return
+        if (patterns.length === 0 && !options.qualify && !options.existing) return
         const instance = yield* InstanceState.context
-        const scanned = yield* Effect.tryPromise(async () => {
-          const place = await reviewRoot(directory, instance)
+        const checked = yield* Effect.tryPromise(async () => {
+          const place = options.existing ?? (await checkedReadPlace(directory, instance, rules))
+          if (options.existing) await verifyReadPlace(place)
+          if (patterns.length === 0) return { place, scanned: {} }
+          const aliases = options.aliases ?? []
           const roots = await Promise.all([place.root, ...aliases].map((root) => realpath(root)))
           const prefixes = [...new Set([...place.prefixes, ...roots, place.root, ...aliases])].map((root) =>
             root.replaceAll("\\", "/").replace(/\/$/, ""),
           )
           const scanned = await scan(place.root, patterns, rules, { prefixes, origins: place.origins })
-          await verifyReadOrigins(place.origins)
-          return scanned
+          await verifyReadPlace(place)
+          return { place, scanned }
         }).pipe(Effect.orElseSucceed(() => ({ error: true as const })))
-        if ("error" in scanned)
+        if ("error" in checked)
           return yield* refusal(
             "read-rule",
             "Connect could not check this directory against this session's read rules, so it did not review it.",
           )
+        const scanned = checked.scanned
         if ("tooMany" in scanned)
           return yield* refusal(
             "read-rule",
             `This repository holds more than ${MAX_SCAN.toLocaleString("en-US")} files, too many for connect to check against this session's read rules, so it did not review it.`,
           )
-        if (scanned.block) return yield* ConnectPolicy.readRefusal(scanned.block)
+        if ("block" in scanned && scanned.block) return yield* ConnectPolicy.readRefusal(scanned.block)
+        return checked.place
       })
 
       const progress = Effect.fnUntraced(function* (entry: Entry, update: ConnectAdapter.ProgressUpdate) {
@@ -1358,9 +1388,13 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
               "The directory review's private execution authority is no longer valid.",
             )
         }
-        const state = yield* InstanceState.get(ledger)
         const requester = decoded.value.requester
-        const saved = requester.sessionID ? yield* recorded(requester.sessionID) : undefined
+        // Directory requests keep their existing private binding and replay protocol.
+        const listOnly = !directory && isListOnly(decoded.value.to)
+        const saved =
+          requester.sessionID && (!listOnly || input.call?.expectedRequestID !== undefined)
+            ? yield* recorded(requester.sessionID)
+            : undefined
         if (input.call?.expectedRequestID !== undefined && saved?.requestID !== input.call.expectedRequestID)
           return unrecorded(
             id,
@@ -1377,6 +1411,18 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             "not-allowed",
             "The automatic review is no longer authorized for this request.",
           )
+        if (listOnly) {
+          const target = decoded.value.action === "review" ? decoded.value.target : undefined
+          if (target?.kind === "task" && (decoded.value.to !== "vectorscope" || !requester.sessionID)) {
+            const denied = taskReviewRefusal()
+            return unrecorded(id, decoded.value, created, denied.code, denied.message, target)
+          }
+          const denied = yield* checkRequester(requester, false).pipe(
+            Effect.match({ onFailure: (error) => error, onSuccess: () => listOnlyRefusal(decoded.value.to) }),
+          )
+          return unrecorded(id, decoded.value, created, denied.code, denied.message, target)
+        }
+        const state = yield* InstanceState.get(ledger)
         const configured = ConfigConnectV1.review((yield* config.get()).connect).max_cost_usd
         const request: Connect.Request = {
           ...decoded.value,
@@ -1455,8 +1501,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           })
         const work = Effect.gen(function* () {
           if (request.action !== "review" || request.target.kind !== "task") return yield* execute()
-          if (request.to !== "vectorscope" || !request.requester.sessionID)
-            return yield* refusal("input", "An isolated task review needs its launching conversation and VectorScope.")
+          if (request.to !== "vectorscope" || !request.requester.sessionID) return yield* taskReviewRefusal()
           return yield* isolation
             .review({ taskID: request.target.task, parentSessionID: request.requester.sessionID }, (record) =>
               ConnectGit.withTask(record, (reviewGit) => execute(record, reviewGit)),
@@ -1682,6 +1727,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             messageID: part.messageID,
             callID: part.callID,
             patch: metadata(run),
+            ...(run.status === "done" && run.result ? { title: ConnectFrame.titleOf(run) } : {}),
           }).pipe(Effect.provideService(Database.Service, database), Effect.forkIn(scope, { startImmediately: true }))
         const ops = entry.call.promptOps
         if (!sessionID || !ops) return
@@ -1756,7 +1802,18 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         return list.map((member) => withActivity(member, state))
       })
 
-      return Service.of({ run, cancel, get, replayDirectory, settleDirectory, runs, request, members, dismiss })
+      return Service.of({
+        run,
+        isListOnly,
+        cancel,
+        get,
+        replayDirectory,
+        settleDirectory,
+        runs,
+        request,
+        members,
+        dismiss,
+      })
     }),
   )
 
@@ -1977,9 +2034,8 @@ function sealed(job: BackgroundJobStore.Row, digest: string) {
 }
 
 /**
- * A run refused before it was recorded: connected tools are off, or the request is not valid. It carries the caller's
- * request as given (it was never decoded, so `metadata` may save nothing for it) and is neither kept in the ledger nor
- * published.
+ * A refusal before a run was recorded. It is returned only to the caller, with no ledger entry or event. When the
+ * request did not decode it carries the caller's request as given, so `metadata` may save nothing for it.
  */
 function unrecorded(
   id: Connect.RunID,
@@ -1987,6 +2043,7 @@ function unrecorded(
   created: number,
   code: Connect.RefusalCode,
   message: string,
+  target?: Connect.Target,
 ): Connect.Run {
   const given = (typeof request === "object" && request !== null ? request : {}) as Partial<Connect.Request>
   return {
@@ -1997,6 +2054,7 @@ function unrecorded(
       state: "refused",
       refusal: code,
       ...(given.action === "review" ? { verdict: "not-reviewed" as const } : {}),
+      ...(target ? { target } : {}),
       summary: clip(message, Connect.MAX_SUMMARY),
       findings: [],
       sessions: [],
@@ -2065,7 +2123,7 @@ interface ReadOrigin {
 export async function reviewRoot(
   directory: string,
   instance: { readonly directory: string; readonly worktree: string },
-): Promise<{ readonly root: string; readonly prefixes: readonly string[]; readonly origins: readonly ReadOrigin[] }> {
+) {
   const folder = await realpath(directory)
   const place = async (root: string, prefixes: readonly string[] = []) => {
     const origins: ReadOrigin[] = []
@@ -2091,6 +2149,7 @@ export async function reviewRoot(
     await verifyReadOrigins(origins)
     return {
       root,
+      requested: { alias: path.resolve(directory), canonical: folder },
       prefixes: alias ? [...new Set([...prefixes, requested])] : prefixes,
       origins: Object.freeze(origins),
     }
@@ -2108,6 +2167,101 @@ export async function reviewRoot(
   }
 }
 
+type CheckedReadPlace = Awaited<ReturnType<typeof checkedReadPlace>>
+
+async function checkedReadPlace(
+  directory: string,
+  instance: Parameters<typeof reviewRoot>[1],
+  rules: PermissionV1.Ruleset,
+) {
+  const place = await reviewRoot(directory, instance)
+  const rulePrefixes = literalRulePrefixes(place.root, rules)
+  const ruleOrigins = await literalRuleOrigins(place.root, rulePrefixes)
+  return {
+    ...place,
+    origins: [...place.origins, ...ruleOrigins],
+    requestedOrigins: place.origins,
+    rulePrefixes,
+    ruleOrigins,
+  }
+}
+
+async function verifyReadPlace(place: CheckedReadPlace) {
+  await verifyReadOrigins([place.requested, { alias: place.root, canonical: place.root }, ...place.requestedOrigins])
+  const current = await literalRuleOrigins(place.root, place.rulePrefixes)
+  if (
+    current.length !== place.ruleOrigins.length ||
+    current.some((origin, index) => {
+      const previous = place.ruleOrigins[index]!
+      return origin.alias !== previous.alias || path.relative(origin.canonical, previous.canonical) !== ""
+    })
+  )
+    throw new Error("The review's original read aliases changed")
+}
+
+function literalRulePrefixes(root: string, rules: PermissionV1.Ruleset) {
+  const literals = new Map<string, string[]>()
+  const rootDrive = root.slice(0, 3).replaceAll("\\", "/").toLowerCase()
+  // The diff is collected outside the read tool. Keep its blocking rules even if that tool would deny the file.
+  for (const pattern of ConnectPolicy.readPatterns(rules, [])) {
+    const normalized = pattern.replaceAll("\\", "/")
+    if (!path.isAbsolute(normalized)) continue
+    // For Windows, keep probing on the local project drive. UNC and device paths can open a remote connection.
+    const drive = normalized.match(/^[A-Za-z]:\//)?.[0]
+    if (process.platform === "win32" && drive?.toLowerCase() !== rootDrive) continue
+    const wildcard = normalized.search(/[*?]/)
+    const boundary =
+      wildcard < 0
+        ? normalized.length
+        : Math.max(normalized.lastIndexOf("/", wildcard), path.parse(normalized).root.length)
+    const literal = normalized.slice(0, boundary)
+    const matching = literals.get(literal) ?? []
+    matching.push(pattern)
+    literals.set(literal, matching)
+  }
+  return literals
+}
+
+async function literalRuleOrigins(root: string, prefixes: ReadonlyMap<string, readonly string[]>) {
+  const origins = new Map<string, ReadOrigin>()
+  for (const [alias, patterns] of prefixes) {
+    const canonical = await resolveRulePath(alias)
+    if (Wildcard.match(canonical, alias)) continue
+    if (FSUtil.contains(root, canonical)) {
+      origins.set(alias, { alias, canonical })
+      continue
+    }
+    if (!FSUtil.contains(canonical, root)) continue
+    // A verified alias of an ancestor only contributes the spelling that still resolves to this checkout.
+    const projected = originCandidatePath(canonical, path.relative(canonical, root), { alias, canonical })
+    if (projected === undefined || !patterns.some((pattern) => ConnectPolicy.overlaps(pattern, `${projected}/*`)))
+      continue
+    if (path.relative(await realpath(projected), root) === "")
+      origins.set(projected, { alias: projected, canonical: root })
+  }
+  return [...origins.values()]
+}
+
+async function resolveRulePath(literal: string) {
+  // A diff can name a file absent from the current checkout. Pin its projected path under the deepest verified
+  // parent. The projection stays the same if an ordinary file appears, but changes if an alias is redirected.
+  let current = literal
+  for (let depth = 0; depth < 128; depth++) {
+    const canonical = await realpath(current).catch((error: unknown) => {
+      if (!gone(error)) throw error
+      return undefined
+    })
+    if (canonical !== undefined) return path.join(canonical, path.relative(current, literal))
+    const entry = await lstat(current).catch((error: unknown) => {
+      if (!gone(error)) throw error
+      return undefined
+    })
+    if (entry || path.dirname(current) === current) break
+    current = path.dirname(current)
+  }
+  throw new Error("The review's absolute read rule cannot be resolved")
+}
+
 async function verifyReadOrigins(origins: readonly ReadOrigin[]) {
   for (const origin of origins)
     if (path.relative(await realpath(origin.alias), origin.canonical) !== "")
@@ -2119,7 +2273,9 @@ function originCandidatePath(root: string, relative: string, origin: ReadOrigin)
   if (path.isAbsolute(relative) || relative.split(/[\\/]/).includes("..")) return undefined
   const target = path.resolve(root, relative)
   if (!FSUtil.contains(origin.canonical, target)) return undefined
-  return path.join(origin.alias, path.relative(origin.canonical, target)).replaceAll("\\", "/")
+  const suffix = path.relative(origin.canonical, target).replaceAll("\\", "/")
+  const alias = origin.alias.replaceAll("\\", "/")
+  return suffix ? `${alias.replace(/\/$/, "")}/${suffix}` : alias
 }
 
 /**

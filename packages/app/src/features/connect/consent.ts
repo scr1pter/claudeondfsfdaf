@@ -1,4 +1,5 @@
 import type { PermissionRequest } from "@vectordevai/sdk/v2"
+import { Connect } from "@vectordevai/schema/connect"
 
 // What a connected-tools question asks the user to agree to. The engine's connect hub asks `connect` (hand a review
 // to VectorScope), `connect_model` (a review on a priced model, or on one the repository's review.json picks) and
@@ -28,4 +29,9 @@ export function connectConsentDiff(request: Pick<PermissionRequest, "permission"
   if (request.permission !== "connect_write" || connectConsentDetails(request) === undefined) return undefined
   const diff = request.metadata?.diff
   return typeof diff === "string" && diff.length > 0 ? diff : undefined
+}
+
+/** This consent dock can show a write's scope and preview. Cloud transfers need their own destination display. */
+export function canConfirmConnectWrite(request: Pick<PermissionRequest, "permission" | "metadata">) {
+  return request.permission === "connect_write" && Connect.writeApprovalDetails(request.metadata) !== undefined
 }

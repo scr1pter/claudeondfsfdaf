@@ -246,6 +246,39 @@ describe("Brain digest", () => {
 })
 
 describe("Brain recall and attach", () => {
+  test("outward recall and replay include only imports that the owner put into use", async () => {
+    await run({}, ({ brain, place }) =>
+      Effect.gen(function* () {
+        const proposal = { kind: "lesson", scope: "repository" } as const
+        const promotedByAgent = "Check the retry order with a bounded parser fixture."
+        const approvedByOwner = "Test retry order using a deterministic clock."
+        const proposed = yield* brain.propose(place, { ...proposal, origin: "import", text: promotedByAgent })
+        const active = yield* brain.propose(place, { ...proposal, origin: "agent", text: promotedByAgent })
+        expect(active.type).toBe("promoted")
+        if (proposed.type === "refused" || active.type === "refused")
+          throw new Error("The import fixture did not activate")
+        expect(active.entry).toMatchObject({ id: proposed.entry.id, status: "active", origin: "import" })
+        const approved = yield* brain.propose(place, { ...proposal, origin: "import", text: approvedByOwner })
+        if (approved.type === "refused") throw new Error("The owner approval fixture did not import")
+        yield* brain.update(place, approved.entry.id, { action: "approve" }, "user")
+
+        const input = { query: "retry order test fixture", budget: 300, personal: true }
+        const shown = yield* brain.recall(place, { ...input, audience: "outward" })
+        expect(shown.ids).toEqual([approved.entry.id])
+        expect(shown.text).toContain(approvedByOwner)
+        const ids = [approved.entry.id, proposed.entry.id]
+        const replayed = yield* brain.lines(place, ids, { personal: true, audience: "outward" })
+        expect([...replayed.keys()]).toEqual([approved.entry.id])
+        const other = yield* brain.lines({ ...place, repository: "other-repo" }, ids, {
+          personal: true,
+          audience: "outward",
+        })
+        expect(other.size).toBe(0)
+        expect((yield* brain.recall(place, input)).text).toContain(promotedByAgent)
+      }),
+    )
+  })
+
   test("memory about a file attaches when it is read, once, and a scoped rule is already in the digest", async () => {
     const result = await run({ ".vector/RULES.md": RULES }, ({ brain, place, root }) =>
       Effect.gen(function* () {

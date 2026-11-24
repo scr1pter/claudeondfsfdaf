@@ -2,9 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { randomBytes } from "node:crypto"
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -34,6 +36,7 @@ import { MessageID, SessionID } from "../../src/session/schema"
 import { UnattendedShell } from "../../src/session/unattended-shell"
 import { ShellTool } from "../../src/tool/shell"
 import { Sandbox } from "../../src/tool/shell/sandbox"
+import * as UnattendedSeccomp from "../../src/tool/shell/unattended-seccomp"
 import type { Tool } from "../../src/tool/tool"
 import { Truncate } from "../../src/tool/truncate"
 import { resetDatabase } from "../fixture/db"
@@ -792,7 +795,7 @@ describe("the capability an engine reports", () => {
   )
 
   // The self-test alone, past the root-ownership check, so a runner that is not root covers it too.
-  ;(process.platform === "win32" ? tool.live.skip : tool.live)(
+  ;(process.platform === "win32" || !UnattendedSeccomp.supported() ? tool.live.skip : tool.live)(
     "comes from a self-test that runs the fixed arguments and counts only exit 0",
     () =>
       Effect.gen(function* () {
@@ -800,17 +803,22 @@ describe("the capability an engine reports", () => {
         const folder = scratch()
         yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(folder, { recursive: true, force: true })))
         const recorded = path.join(folder, "args")
+        const policy = path.join(folder, "policy")
+        const shell = "/bin/sh"
         const fake = (code: number) => {
           const file = path.join(folder, `bwrap-${code}`)
-          writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' "$@" > '${recorded}'\nexit ${code}\n`)
+          writeFileSync(
+            file,
+            `#!/bin/sh\nprintf '%s\\0' "$@" > '${recorded}'\ncat <&3 > '${policy}' || exit 1\nexit ${code}\n`,
+          )
           chmodSync(file, 0o755)
           return file
         }
-        expect(yield* UnattendedShell.selfTest(spawner, fake(1))).toBe(false)
-        expect(readFileSync(recorded, "utf8").split("\n").slice(0, -1)).toEqual([...UnattendedShell.SELF_TEST])
-        // The program it starts is one every system bubblewrap runs on has, NixOS included.
-        expect(UnattendedShell.SELF_TEST.slice(-3)).toEqual(["/bin/sh", "-c", ":"])
-        expect(yield* UnattendedShell.selfTest(spawner, fake(0))).toBe(true)
+        expect(yield* UnattendedShell.selfTest(spawner, fake(1), shell)).toBe(false)
+        expect(readFileSync(recorded, "utf8").split("\0").slice(0, -1)).toEqual(UnattendedShell.selfTestArgs(shell))
+        expect(readFileSync(policy)).toEqual(Buffer.from(UnattendedSeccomp.filter()!))
+        expect(UnattendedShell.selfTestArgs(shell).slice(-3)).toEqual([shell, "-c", ":"])
+        expect(yield* UnattendedShell.selfTest(spawner, fake(0), shell)).toBe(true)
       }),
   )
 })
@@ -860,7 +868,7 @@ describe("Sandbox.unattended", () => {
     }
   })
 
-  test.skipIf(!offline)(
+  test.skipIf(Sandbox.unattendedBinary() === undefined)(
     "wraps a command with no network, private /tmp and /run, the secrets hidden and a scrubbed environment",
     () => {
       const workspace = scratch()
@@ -901,9 +909,13 @@ describe("Sandbox.unattended", () => {
         if (decided.type !== "sandboxed") return
         expect(decided.notice).toBe(Sandbox.UNATTENDED_NOTICE)
         expect(decided.wrapped.mechanism).toBe("bubblewrap")
+        expect(decided.wrapped.seccomp).toEqual(UnattendedSeccomp.filter())
+        const command = UnattendedSeccomp.command(Sandbox.unattendedBootstrap()!, ["/bin/sh", "-c", "true"])
+        expect(decided.wrapped.args.slice(-command.length)).toEqual(command)
         const args = decided.wrapped.args.join("\n")
         for (const expected of [
           "--unshare-net",
+          "--seccomp\n3",
           "--cap-drop\nALL",
           "--tmpfs\n/tmp",
           `--tmpfs\n${home}/.ssh`,
@@ -980,7 +992,19 @@ describe("Sandbox.unattended", () => {
         })
         expect(decided.type).toBe("sandboxed")
         if (decided.type !== "sandboxed") return
-        const inside = Bun.spawnSync([decided.wrapped.command, ...decided.wrapped.args], { env: decided.wrapped.env })
+        const filter = path.join(workspace, "test-filter")
+        writeFileSync(filter, decided.wrapped.seccomp!)
+        const fd = openSync(filter, "r")
+        const inside = (() => {
+          try {
+            return Bun.spawnSync([decided.wrapped.command, ...decided.wrapped.args], {
+              env: decided.wrapped.env,
+              stdio: ["ignore", "pipe", "pipe", fd],
+            })
+          } finally {
+            closeSync(fd)
+          }
+        })()
         const outside = Bun.spawnSync(["/bin/sh", "-c", command], { env: { PATH: process.env.PATH, HOME: home } })
         expect(inside.stdout.toString()).toBe(`readable home=${home}\n`)
         expect(outside.stdout.toString()).toBe(

@@ -18460,6 +18460,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "ConflictError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictError"
+                }
+              }
+            }
           }
         },
         "description": "Approve or deny a permission request from the AI assistant.",
@@ -18476,6 +18486,11 @@
                   },
                   "message": {
                     "type": "string"
+                  },
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [true],
+                    "description": "Required with Allow once after the user explicitly approves a Connect write or cloud handoff."
                   }
                 },
                 "required": ["reply"],
@@ -22306,6 +22321,16 @@
                       "$ref": "#/components/schemas/PermissionNotFoundError"
                     }
                   ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ConflictError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictError"
                 }
               }
             }
@@ -29124,6 +29149,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "ConflictError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictError"
+                }
+              }
+            }
           }
         },
         "description": "Respond to a pending permission request owned by a session.",
@@ -29139,6 +29174,11 @@
                   },
                   "message": {
                     "type": "string"
+                  },
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [true],
+                    "description": "Required with Allow once after the user explicitly approves a Connect write or cloud handoff."
                   }
                 },
                 "required": ["reply"],

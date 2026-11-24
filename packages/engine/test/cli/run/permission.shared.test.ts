@@ -25,7 +25,8 @@ function req(input: Partial<PermissionRequest> = {}): PermissionRequest {
 
 describe("run permission shared", () => {
   test("replies immediately for allow once", () => {
-    const out = permissionRun(createPermissionBodyState(req()), "perm-1", "once")
+    const request = req()
+    const out = permissionRun(createPermissionBodyState(request), request, "once")
 
     expect(out.reply).toEqual({
       requestID: "perm-1",
@@ -33,25 +34,57 @@ describe("run permission shared", () => {
     })
   })
 
+  test("shows the Connect write description and patch before an explicit one-time reply", () => {
+    const diff = "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-before\n+after\n"
+    const request = req({
+      permission: "connect_write",
+      metadata: { runID: "cr_1", description: "Merge a fix into your checkout.", diff },
+    })
+    const state = createPermissionBodyState(request)
+    expect(permissionInfo(request)).toMatchObject({
+      title: "Apply review fixes",
+      lines: ["Merge a fix into your checkout."],
+      diff,
+    })
+    expect(permissionOptions(state)).toEqual(["once", "reject"])
+    expect(permissionRun(state, request, "once").reply).toEqual({
+      requestID: request.id,
+      reply: "once",
+      confirm: true,
+    })
+    expect(permissionRun(state, request, "reject").reply).toBeUndefined()
+    expect(permissionRun(state, { ...request, id: "different-request" }, "once").reply).toBeUndefined()
+  })
+
+  test.each(["connect_write", "connect_cloud"])("only offers rejection for an unsupported %s ask", (permission) => {
+    const request = req({ permission, metadata: { description: "Send results to the connected service." } })
+    const state = createPermissionBodyState(request)
+    expect(state.selected).toBe("reject")
+    expect(permissionOptions(state)).toEqual(["reject"])
+    expect(permissionRun(state, request, "once").reply).toBeUndefined()
+  })
+
   test("requires confirmation for allow always", () => {
-    const next = permissionRun(createPermissionBodyState(req({ always: ["*"] })), "perm-1", "always")
+    const request = req({ always: ["*"] })
+    const next = permissionRun(createPermissionBodyState(request), request, "always")
     expect(next.state.stage).toBe("always")
     expect(next.state.selected).toBe("confirm")
     expect(next.reply).toBeUndefined()
 
-    expect(permissionRun(next.state, "perm-1", "confirm").reply).toEqual({
+    expect(permissionRun(next.state, request, "confirm").reply).toEqual({
       requestID: "perm-1",
       reply: "always",
     })
 
-    expect(permissionRun(next.state, "perm-1", "cancel").state).toMatchObject({
+    expect(permissionRun(next.state, request, "cancel").state).toMatchObject({
       stage: "permission",
       selected: "always",
     })
   })
 
   test("builds trimmed reject replies and stage transitions", () => {
-    const next = permissionRun(createPermissionBodyState(req()), "perm-1", "reject")
+    const request = req()
+    const next = permissionRun(createPermissionBodyState(request), request, "reject")
     expect(next.state.stage).toBe("reject")
 
     const out = permissionReject({ ...next.state, message: "  use rg  " }, "perm-1")
@@ -80,9 +113,10 @@ describe("run permission shared", () => {
   test.each(["browser_sensitive", "computer_observe", "computer_interact", "computer_sensitive"])(
     "does not offer or accept permanent approval for %s",
     (permission) => {
-      const state = createPermissionBodyState(req({ permission, always: ["*"] }))
+      const request = req({ permission, always: ["*"] })
+      const state = createPermissionBodyState(request)
       expect(permissionOptions(state)).toEqual(["once", "reject"])
-      expect(permissionRun(state, "perm-1", "always")).toEqual({ state })
+      expect(permissionRun(state, request, "always")).toEqual({ state })
     },
   )
 

@@ -116,7 +116,7 @@ function sensitive(): PermissionRequest {
   }
 }
 
-function mount(request = app(), onDecide?: (reply: string) => Promise<boolean>) {
+function mount(request = app(), onDecide?: (reply: "once" | "always" | "reject") => Promise<boolean>) {
   const composer = document.createElement("textarea")
   composer.value = "hello"
   document.body.append(composer)
@@ -382,6 +382,53 @@ function controller(request = app()) {
     return { state: createController(), ...contexts }
   })
 }
+
+describe("Connect permission dock", () => {
+  const write: PermissionRequest = {
+    ...app("write-request"),
+    permission: "connect_write",
+    patterns: ["fixture.ts"],
+    always: [],
+    metadata: { runID: "cr_fixture", description: "Merge this fix.", diff: "-before\n+after" },
+  }
+
+  test("shows the merge patch and confirms only a deliberate Allow once for the displayed request", async () => {
+    const state = controller(write)
+    const view = mount(write, (reply) => Promise.resolve(state.state.decide(reply, write.id) ?? false))
+    expect(view.host.textContent).toContain("Merge this fix.")
+    expect(view.host.querySelector("pre")?.textContent).toBe("-before\n+after")
+    expect(state.modern).not.toHaveBeenCalled()
+    expect(state.state.decide("once", "earlier-request")).toBeUndefined()
+    expect(state.state.decide("always", write.id)).toBeUndefined()
+    expect(state.legacy).not.toHaveBeenCalled()
+
+    pointer(view.button("Allow once"))
+    await Promise.resolve()
+    expect(state.modern).toHaveBeenCalledTimes(1)
+    expect(state.modern).toHaveBeenCalledWith(
+      { requestID: write.id, reply: "once", confirm: true },
+      { throwOnError: true },
+    )
+  })
+
+  test("offers only Deny for a missing write preview or cloud scope", async () => {
+    for (const request of [
+      { ...write, metadata: { ...write.metadata, diff: "" } },
+      { ...write, permission: "connect_cloud" },
+    ]) {
+      const state = controller(request)
+      const view = mount(request)
+      expect(view.button("Allow once")).toBeUndefined()
+      expect(view.button("Deny")).toBeDefined()
+      expect(state.state.decide("once", request.id)).toBeUndefined()
+      expect(state.modern).not.toHaveBeenCalled()
+      expect(await state.state.decide("reject", request.id)).toBe(true)
+      expect(state.modern).toHaveBeenCalledTimes(1)
+      expect(state.modern).toHaveBeenCalledWith({ requestID: request.id, reply: "reject" }, { throwOnError: true })
+      expect(state.legacy).not.toHaveBeenCalled()
+    }
+  })
+})
 
 describe("Hands permission controller", () => {
   test("keeps only computer asks composable, while the pending decision still blocks execution", () => {

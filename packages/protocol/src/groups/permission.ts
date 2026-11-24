@@ -6,7 +6,7 @@ import { Project } from "@vectordevai/schema/project"
 import { Session } from "@vectordevai/schema/session"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { PermissionNotFoundError, SessionNotFoundError } from "../errors"
+import { ConflictError, PermissionNotFoundError, SessionNotFoundError } from "../errors"
 import { LocationQuery, locationQueryOpenApi } from "./location"
 
 export const makePermissionGroup = <
@@ -118,12 +118,9 @@ export const makePermissionGroup = <
     .add(
       HttpApiEndpoint.post("session.permission.reply", "/api/session/:sessionID/permission/:requestID/reply", {
         params: { sessionID: Session.ID, requestID: Permission.ID },
-        payload: Schema.Struct({
-          reply: Permission.Reply,
-          message: Schema.String.pipe(Schema.optional),
-        }),
+        payload: Permission.ReplyBody,
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, PermissionNotFoundError],
+        error: [SessionNotFoundError, PermissionNotFoundError, ConflictError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

@@ -11,7 +11,9 @@ import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { Npm } from "@vectordevai/core/npm"
 import type { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
+import { Hands } from "@vectordevai/schema/hands"
 import { Auth } from "@/auth"
+import type { ConnectAdapter } from "@/connect/adapter"
 import { ConnectDirectory } from "@/connect/directory"
 import { ConnectOwner } from "@/connect/owner"
 import { ConnectHub } from "@/connect/hub"
@@ -40,13 +42,18 @@ interface Probe {
   fail: boolean
   exits: Exit.Exit<SessionV1.WithParts>[]
 }
-const control: { current?: Probe } = {}
+const control: { current?: Probe; ownerStarts: number } = { ownerStarts: 0 }
+const listOnlyMember: ConnectAdapter.Adapter = {
+  id: Hands.ID,
+  owner: "hands",
+  describe: () => Effect.die(new Error("The owner must not probe a list-only hand-off.")),
+}
 const replacements: LayerNode.Replacements = [
   [RuntimeFlags.node, RuntimeFlags.layer({ experimentalConnect: true })],
   [Auth.node, Layer.mock(Auth.Service)({ all: () => Effect.succeed({}), get: () => Effect.succeed(undefined) })],
   [Npm.node, NpmTest.noop],
   // This regression owns model-resolution/runner arbitration, not Linux-only VectorScope execution.
-  [ConnectHub.node, ConnectHub.nodeWith([connectConsentMember])],
+  [ConnectHub.node, ConnectHub.nodeWith([connectConsentMember, listOnlyMember])],
 ]
 
 // Decorate the real runner to observe the human waiter; its production state machine and work are unchanged.
@@ -56,6 +63,10 @@ const runner = Layer.effect(
     const original = yield* SessionRunState.Service
     return SessionRunState.Service.of({
       ...original,
+      startRunning: (id, interrupted, work) =>
+        Effect.sync(() => {
+          control.ownerStarts++
+        }).pipe(Effect.andThen(original.startRunning(id, interrupted, work))),
       ensureRunning: (id, interrupted, work) =>
         Effect.gen(function* () {
           const probe = control.current
@@ -171,6 +182,7 @@ const on = sweepGraph(true)
 
 afterEach(async () => {
   delete control.current
+  control.ownerStarts = 0
   delete fence.mode
   for (const item of swept.splice(0)) item.release()
   await disposeAllInstances()
@@ -228,6 +240,37 @@ on.live(
       expect(swept[0]?.input.olderThanMs).toBeUndefined()
     }),
   30_000,
+)
+
+it.live("an owner list-only refusal creates no conversation runner, transcript or ledger row", () =>
+  Effect.gen(function* () {
+    const llm = yield* TestLLMServer
+    const directory = yield* tmpdirScoped({
+      trusted: true,
+      config: { ...testProviderConfig(llm.url), model: "lmstudio/test-model", permission: { connect: "ask" } },
+    })
+    yield* provideInstance(directory)(
+      Effect.gen(function* () {
+        const owner = yield* ConnectOwner.Service
+        const sessions = yield* Session.Service
+        const permissions = yield* Permission.Service
+        const conversation = yield* sessions.create({ title: "List-only Connect" })
+        for (const background of [false, true]) {
+          const run = yield* owner.review(conversation.id, { to: Hands.ID, background })
+          expect(run.result).toMatchObject({
+            state: "refused",
+            refusal: "unknown",
+            summary: "computer is only listed; connect cannot hand work to it.",
+          })
+        }
+        expect(control.ownerStarts).toBe(0)
+        expect(yield* sessions.messages({ sessionID: conversation.id })).toEqual([])
+        expect(yield* owner.runs(conversation.id)).toEqual([])
+        expect(yield* permissions.list()).toEqual([])
+        expect(yield* llm.inputs).toEqual([])
+      }),
+    )
+  }),
 )
 
 for (const fail of [false, true])
