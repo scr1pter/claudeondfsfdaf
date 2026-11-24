@@ -315,7 +315,7 @@ export function GithubAgentsSetup(props: {
                     </>
                   }
                 >
-                  Reviews every pull request.
+                  Configured to review eligible pull requests automatically.
                 </Show>
                 <Show when={current().url}>
                   {(url) => (

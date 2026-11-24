@@ -256,12 +256,12 @@ test("Vectorscope opens the workflow setup pull request only after showing what 
   await testInfo.attach("opened", { path: testInfo.outputPath("opened.png"), contentType: "image/png" })
 })
 
-test("Vectorscope says the workflow reviews every pull request instead of offering to set it up", async ({ page }) => {
+test("Vectorscope reports automatic review configuration for the current workflow", async ({ page }) => {
   const panel = await openVectorscope(page, { agents: { workflow: "current", autoReview: true } })
   const card = await openWorkflowCard(page, panel)
 
   await expect(card).toContainText("Ready in acme/app")
-  await expect(card).toContainText("Reviews every pull request.")
+  await expect(card).toContainText("Configured to review eligible pull requests automatically.")
   await expect(card).not.toContainText("Reviews when someone comments")
   await expect(card.getByRole("link", { name: "View the workflow" })).toHaveAttribute("href", WORKFLOW_URL)
   await expect(card.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
@@ -299,9 +299,9 @@ test("Vectorscope says when the workflow only reviews on a /vector review commen
 
   await expect(card).toContainText("Ready in acme/app")
   await expect(card).toContainText("Reviews when someone comments /vector review.")
-  await expect(card).not.toContainText("Reviews every pull request")
+  await expect(card).not.toContainText("Configured to review eligible pull requests automatically.")
   await expect(card.getByRole("link", { name: "View the workflow" })).toHaveAttribute("href", WORKFLOW_URL)
-  // Reviewing every pull request stays a choice in the workflow setup below.
+  // Automatic review stays a choice in the workflow setup below.
   await expect(card.getByLabel("Review pull requests automatically")).not.toBeChecked()
   await expect(card.getByRole("button", { name: "Open setup pull request" })).toHaveCount(0)
   expect((await calls(page)).preview).toEqual([])

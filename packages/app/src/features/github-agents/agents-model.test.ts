@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { readdirSync, readFileSync } from "node:fs"
 import {
   ACTIONS_COPY,
   agentHandle,
@@ -9,6 +10,9 @@ import {
   type AgentsStatus,
   type BrainPreview,
 } from "./agents-model"
+
+const unsupportedClaims =
+  /\b(?:hosted|compute|cloud\s+hours|cloud\s+capacity|our\s+cloud|exclusive|every\s+PR|every\s+pull\s+request|guaranteed|24\/7|SLA|when\s+my\s+Mac\s+is\s+off)\b/gi
 
 const status = (patch: Partial<AgentsStatus> = {}): AgentsStatus => ({
   signedIn: true,
@@ -114,8 +118,27 @@ describe("GitHub agents view", () => {
 
   test("Actions copy names the user's repository and minutes without availability promises", () => {
     expect(ACTIONS_COPY).toBe("in your own repo, on your own Actions minutes")
-    expect(ACTIONS_COPY).not.toMatch(
-      /hosted|compute|cloud hours|cloud capacity|our cloud|exclusive|every PR|every pull request|guaranteed|24\/7|SLA/i,
-    )
+    expect(ACTIONS_COPY).not.toMatch(unsupportedClaims)
+  })
+
+  test("GitHub agent surfaces avoid unsupported hosting, availability and review claims", () => {
+    const directory = new URL("./", import.meta.url)
+    const files = [
+      ...readdirSync(directory)
+        .filter((file) => file.endsWith(".tsx"))
+        .map((file) => new URL(file, directory)),
+      new URL("../scheduled/automations.tsx", directory),
+      new URL("../../components/settings-v2/github-agents.tsx", directory),
+    ]
+    expect(files.length).toBeGreaterThan(2)
+    for (const file of files) {
+      const code = readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1")
+      expect({ file: file.pathname, claims: code.match(unsupportedClaims) ?? [] }).toEqual({
+        file: file.pathname,
+        claims: [],
+      })
+    }
   })
 })
