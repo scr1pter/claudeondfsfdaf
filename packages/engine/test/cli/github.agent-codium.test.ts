@@ -67,7 +67,6 @@ import { UNTRUSTED_DATA_RULE, untrustedJson } from "../../src/cli/cmd/github.pol
 import { lookupSchedule } from "../../src/cli/cmd/github.schedule"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { allowConversationRestore, decryptConversation, encryptConversation } from "../../src/cli/cmd/github.session"
-import { InstanceRef } from "../../src/effect/instance-ref"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Provider } from "../../src/provider/provider"
 import { Instruction } from "../../src/session/instruction"
@@ -112,7 +111,7 @@ import {
   type FakeArtifact,
   type GatewayAction,
 } from "./github.agent-fixture"
-import { artifactZip } from "./github.session-fixture"
+import { artifactZip, sessionArchive } from "./github.session-fixture"
 
 const guard = NetworkGuard.use()
 const web = FakeWeb.start({ sites: {} })
@@ -198,27 +197,7 @@ const writeNotes = (dir: string) => ({ filePath: path.join(dir, "NOTES.md"), con
  * the restore may use only its export and import. Projects resolve to this instance's own.
  */
 const archiveShare = Effect.fn("AgentCodiumTest.archiveShare")(function* () {
-  const ctx = yield* InstanceRef
-  if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
-  const bridge = yield* EventV2Bridge.Service
-  const built = yield* Layer.build(
-    SessionArchive.node.implementation as Layer.Layer<
-      SessionArchive.Service,
-      never,
-      Database.Service | EventV2.Service | ProjectV2.Service
-    >,
-  ).pipe(
-    Effect.provideService(EventV2.Service, bridge),
-    Effect.provideService(
-      ProjectV2.Service,
-      ProjectV2.Service.of({
-        directories: () => Effect.die(new Error("The archive's import resolves only the project.")),
-        resolve: (directory) => Effect.succeed({ id: ctx.project.id, directory }),
-        commit: () => Effect.die(new Error("The archive's import resolves only the project.")),
-      }),
-    ),
-  )
-  const archive = Context.get(built, SessionArchive.Service)
+  const archive = yield* sessionArchive()
   const unused = () =>
     Effect.die(new Error("The conversation save and restore use only the archive's export and import."))
   return PublicSessionShare.Service.of({
