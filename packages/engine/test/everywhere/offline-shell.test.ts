@@ -807,7 +807,10 @@ describe("the capability an engine reports", () => {
         const shell = "/bin/sh"
         const fake = (code: number) => {
           const file = path.join(folder, `bwrap-${code}`)
-          writeFileSync(file, `#!/bin/sh\nprintf '%s\\0' "$@" > '${recorded}'\ncat <&3 > '${policy}' || exit 1\nexit ${code}\n`)
+          writeFileSync(
+            file,
+            `#!/bin/sh\nprintf '%s\\0' "$@" > '${recorded}'\ncat <&3 > '${policy}' || exit 1\nexit ${code}\n`,
+          )
           chmodSync(file, 0o755)
           return file
         }

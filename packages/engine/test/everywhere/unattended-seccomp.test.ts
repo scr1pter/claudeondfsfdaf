@@ -8,7 +8,12 @@ import * as UnattendedSeccomp from "../../src/tool/shell/unattended-seccomp"
 // Evaluate the compiled policy over synthetic seccomp_data. This test makes no network or socket calls.
 function decision(bytes: Uint8Array, arch: number, nr: number, family = 0, socketType = 0) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const input = new Map([[0, nr], [4, arch], [16, family], [24, socketType]])
+  const input = new Map([
+    [0, nr],
+    [4, arch],
+    [16, family],
+    [24, socketType],
+  ])
   let accumulator = 0
   let pc = 0
   while (pc < bytes.byteLength) {
@@ -59,26 +64,42 @@ test("x86 compatibility syscall numbers and unsupported filter configurations fa
   expect(UnattendedSeccomp.filter("arm64", "BE")).toBeUndefined()
 })
 
-test.skipIf(process.platform !== "linux")("the descriptor check starts a harmless command with only standard IO", () => {
-  const [shell, ...args] = UnattendedSeccomp.command("/bin/sh", ["/bin/sh", "-c", 'printf "%s" "$1"', "fixture", "hello there"])
-  const result = spawnSync(shell!, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 2_000, encoding: "utf8" })
-  expect(result.status).toBe(0)
-  expect(result.stdout).toBe("hello there")
-})
+test.skipIf(process.platform !== "linux")(
+  "the descriptor check starts a harmless command with only standard IO",
+  () => {
+    const [shell, ...args] = UnattendedSeccomp.command("/bin/sh", [
+      "/bin/sh",
+      "-c",
+      'printf "%s" "$1"',
+      "fixture",
+      "hello there",
+    ])
+    const result = spawnSync(shell!, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 2_000, encoding: "utf8" })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe("hello there")
+  },
+)
 
-test.skipIf(process.platform !== "linux")("the descriptor check refuses an extra fixture descriptor before execution", () => {
-  const folder = mkdtempSync(join(tmpdir(), "vector-seccomp-"))
-  const file = join(folder, "fixture")
-  writeFileSync(file, "fixture")
-  const fd = openSync(file, "r")
-  try {
-    rmSync(file)
-    const [shell, ...args] = UnattendedSeccomp.command("/bin/sh", ["/bin/sh", "-c", "printf unexpected"])
-    const result = spawnSync(shell!, args, { stdio: ["ignore", "pipe", "pipe", fd], timeout: 2_000, encoding: "utf8" })
-    expect(result.status).toBe(125)
-    expect(result.stdout).toBe("")
-  } finally {
-    closeSync(fd)
-    rmSync(folder, { recursive: true, force: true })
-  }
-})
+test.skipIf(process.platform !== "linux")(
+  "the descriptor check refuses an extra fixture descriptor before execution",
+  () => {
+    const folder = mkdtempSync(join(tmpdir(), "vector-seccomp-"))
+    const file = join(folder, "fixture")
+    writeFileSync(file, "fixture")
+    const fd = openSync(file, "r")
+    try {
+      rmSync(file)
+      const [shell, ...args] = UnattendedSeccomp.command("/bin/sh", ["/bin/sh", "-c", "printf unexpected"])
+      const result = spawnSync(shell!, args, {
+        stdio: ["ignore", "pipe", "pipe", fd],
+        timeout: 2_000,
+        encoding: "utf8",
+      })
+      expect(result.status).toBe(125)
+      expect(result.stdout).toBe("")
+    } finally {
+      closeSync(fd)
+      rmSync(folder, { recursive: true, force: true })
+    }
+  },
+)
