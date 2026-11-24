@@ -28,7 +28,7 @@ export async function routeFacts(input: {
   const [everywhere, remote, inPlan, remotePerk, presence, computer] = await Promise.all([
     input.ports.switch("everywhere"), input.ports.switch("remote"),
     input.ports.perk(input.sponsor, "everywhere"), input.ports.perk(input.sponsor, "remote"),
-    input.ports.presence(input.sponsor).catch(() => ({ online: false, computers: 0, reason: "unreachable" as const })),
+    input.ports.presence(input.sponsor).catch(() => ({ online: false, computers: 0, reason: "not-configured" as const })),
     readComputer(input.ctx.store, input.sponsor),
   ])
   // A platform that is not an enabled run source has no Actions route, so nothing is read for it (R-C8/R-A8).
@@ -47,7 +47,8 @@ export async function routeFacts(input: {
     repository: input.repository,
     github: input.github,
     laptop: {
-      configured: presence.reason !== "not-configured" && presence.reason !== "unreachable",
+      // The production adapter reports an unreachable relay only after checking Remote setup and entitlement.
+      configured: presence.reason !== "not-configured",
       perk: remotePerk,
       online: presence.online && Number.isSafeInteger(presence.computers) && presence.computers > 0,
       lastSeen: computer.lastSeen,
