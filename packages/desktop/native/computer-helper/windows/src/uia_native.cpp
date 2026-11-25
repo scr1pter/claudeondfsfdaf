@@ -241,8 +241,8 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
   static std::shared_ptr<NativeUia> make(std::shared_ptr<WindowsUiaDiagnostic> diagnostic) {
     const auto self = std::shared_ptr<NativeUia>(new NativeUia());
     const auto actor = self->actor_; actor->diagnostic = std::move(diagnostic);
-    // Native interfaces and provider calls are confined to this owned MTA. Late calls are quarantined;
-    // a timeout never creates replacement threads or lets old work publish into a new observation.
+    // Native interfaces and provider calls are confined to this owned MTA. A timed-out actor
+    // remains quarantined and its late work cannot publish into another observation.
     std::thread([weak = std::weak_ptr<NativeUia>(self), actor] {
       const auto initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
       HANDLE held_thread = nullptr;
@@ -272,20 +272,29 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     { std::lock_guard lock(actor_->mutex); if (actor_->closed) return; actor_->closed = true; discarded.swap(actor_->jobs); thread = actor_->thread; actor_->condition.notify_all(); }
     if (thread) (void)CoCancelCall(thread, 0);
   }
-  template<class Body> auto call(Body body) -> std::invoke_result_t<Body> {
+  template<class Body> auto call(Body body, WindowsUiaDeadline outer_deadline = WindowsUiaDeadline::max()) -> std::invoke_result_t<Body> {
     using Result = std::invoke_result_t<Body>;
     auto promise = std::make_shared<std::promise<Result>>(); auto result = promise->get_future();
     auto ticket = std::make_shared<CallTicket>(); ticket->deadline = now_ms() + 50; ticket->actor = actor_;
+    if (outer_deadline != WindowsUiaDeadline::max()) {
+      const auto limit = std::chrono::duration_cast<std::chrono::milliseconds>(outer_deadline.time_since_epoch()).count();
+      ticket->deadline = std::min(ticket->deadline, static_cast<uint64_t>(std::max<int64_t>(0, limit)));
+    }
     note(WindowsUiaPhase::actor_admission);
     { std::lock_guard lock(actor_->mutex); if (actor_->closed || actor_->quarantined || actor_->jobs.size() >= 8) unavailable();
-      note(WindowsUiaPhase::actor_queued); actor_->jobs.push_back([self = shared_from_this(), promise, ticket, body = std::move(body)]() mutable {
+      if (outer_deadline != WindowsUiaDeadline::max() && now_ms() >= ticket->deadline) unavailable();
+      note(WindowsUiaPhase::actor_queued); actor_->jobs.push_back([self = shared_from_this(), promise, ticket, outer_deadline, body = std::move(body)]() mutable {
         active_ticket = ticket.get();
-        try { self->note(WindowsUiaPhase::actor_budget); WindowsComCall budget;
+        try { self->note(WindowsUiaPhase::actor_budget);
+          if (outer_deadline != WindowsUiaDeadline::max() && now_ms() >= ticket->deadline) {
+            self->note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::worker_current); unavailable();
+          }
+          WindowsComCall budget(50, outer_deadline);
           self->note(WindowsUiaPhase::actor_current); current_call(); self->note(WindowsUiaPhase::actor_current_budget); if (!budget.current()) { self->note_budget_failure(budget); unavailable(); } self->prepare();
           auto value = body(); self->note(WindowsUiaPhase::actor_current); current_call(); self->note(WindowsUiaPhase::actor_current_budget); if (!budget.current()) { self->note_budget_failure(budget); unavailable(); } self->note(WindowsUiaPhase::actor_complete); promise->set_value(std::move(value)); }
         catch (...) { try { promise->set_exception(std::current_exception()); } catch (...) {} }
         active_ticket = nullptr;
-      }); actor_->condition.notify_one(); }
+      }); if (actor_->diagnostic) actor_->diagnostic->ticket_queued.store(true, std::memory_order_relaxed); actor_->condition.notify_one(); }
     const auto deadline = std::chrono::steady_clock::time_point(std::chrono::milliseconds(ticket->deadline));
     if (result.wait_until(deadline) != std::future_status::ready || now_ms() >= ticket->deadline) {
       note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait); ticket->cancelled.store(true); actor_->revoked.store(true); DWORD thread = 0; std::deque<std::function<void()>> discarded;
@@ -628,9 +637,14 @@ void require_uia_mutation_gate(const std::function<bool()>& gate) {
   if(!current)throw Failure{L"changed",L"Physical input detection no longer permits the accessibility action."};
 }
 
-WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic) {
+WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic, WindowsUiaDeadline root_deadline) {
   const auto native = NativeUia::make(diagnostic); WindowsUiaBackend backend;
-  backend.root = [native, diagnostic](const auto& window) { note_uia(diagnostic, WindowsUiaPhase::root_current); if (!windows_window_current(window)) unavailable(); return native->call([native, window] { return native->root(window); }); };
+  backend.root = [native, diagnostic, root_deadline](const auto& window) {
+    note_uia(diagnostic, WindowsUiaPhase::root_current);
+    if ((root_deadline != WindowsUiaDeadline::max() && std::chrono::steady_clock::now() >= root_deadline) ||
+        !windows_window_current(window)) unavailable();
+    return native->call([native, window] { return native->root(window); }, root_deadline);
+  };
   backend.security = [native](const auto& element) { return native->call([native, element] { return native->security(element); }); };
   backend.name = [native](const auto& element) { return native->call([native, element] { return native->name(element); }); };
   backend.value = [native](const auto& element) { return native->call([native, element] { return native->value(element); }); };
@@ -656,6 +670,67 @@ WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic
     try { return native->call([native, element, root] { return native->menu_target(element, root); }); } catch (...) { return {}; }
   };
   return backend;
+}
+
+UiaElement observe_first_uia_root(WindowsUiaBackend& backend, std::shared_ptr<WindowsUiaDiagnostic>& diagnostic,
+  const WindowsWindow& window, WindowsUiaDeadline deadline, const std::function<bool()>& current,
+  const std::function<WindowsUiaBackend(std::shared_ptr<WindowsUiaDiagnostic>, WindowsUiaDeadline)>& open) {
+  const auto still_current = [&] {
+    try {
+      return std::chrono::steady_clock::now() < deadline && current() && std::chrono::steady_clock::now() < deadline;
+    } catch (...) { return false; }
+  };
+  try { return backend.root(window); }
+  catch (const Failure& failure) {
+    if (failure.code != L"no_ui_tree" || !diagnostic) throw;
+    bool retired = false;
+    try { retired = backend.available && !backend.available(); } catch (...) {}
+    if (!retired || diagnostic->failure_status(false)) throw;
+    const auto phase = diagnostic->failure_phase(false);
+    const auto expiry = diagnostic->failure_expiry(false);
+    // root_wrap follows a matched native handle and precedes the runtime ID read. The caller has no root yet.
+    const bool caller_expired = expiry == WindowsUiaExpiry::caller_wait &&
+      (phase == WindowsUiaPhase::root_element || phase == WindowsUiaPhase::root_wrap ||
+       phase == WindowsUiaPhase::runtime_id || phase == WindowsUiaPhase::prepare_connection);
+    // At runtime_id the worker checks its ticket immediately before calling GetRuntimeId.
+    const bool worker_expired = expiry == WindowsUiaExpiry::worker_current && phase == WindowsUiaPhase::runtime_id;
+    if (!caller_expired && !worker_expired) throw;
+    if (!still_current()) throw;
+
+    // A retired actor may still return late. Its ticket and snapshot belong only to the first attempt.
+    const auto first_failure = std::current_exception();
+    WindowsUiaBackend replacement;
+    std::shared_ptr<WindowsUiaDiagnostic> replacement_diagnostic;
+    try {
+      if (backend.close) backend.close();
+      if (std::chrono::steady_clock::now() < deadline) {
+        replacement_diagnostic = std::make_shared<WindowsUiaDiagnostic>();
+        replacement = open(replacement_diagnostic, deadline);
+      }
+    } catch (...) { /* Keep the original refusal if a fresh actor could not be created. */ }
+    const auto discard = [&] { try { if (replacement.close) replacement.close(); } catch (...) {} };
+    if (!replacement.root || !still_current()) {
+      discard();
+      throw;
+    }
+    const auto adopt = [&] {
+      backend = std::move(replacement);
+      diagnostic = std::move(replacement_diagnostic);
+    };
+    UiaElement root;
+    try { root = replacement.root(window); }
+    catch (...) {
+      if (!replacement_diagnostic->ticket_queued.load(std::memory_order_relaxed)) {
+        discard();
+        std::rethrow_exception(first_failure);
+      }
+      adopt();
+      throw;
+    }
+    adopt();
+    if (!still_current()) unavailable();
+    return root;
+  }
 }
 
 namespace {
