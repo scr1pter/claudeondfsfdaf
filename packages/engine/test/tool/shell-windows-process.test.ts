@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { ChildProcess } from "effect/unstable/process"
-import { execFile, spawn } from "node:child_process"
+import { spawn } from "node:child_process"
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -187,6 +187,10 @@ describe("Windows background command preparation", () => {
 const windows = test.skipIf(process.platform !== "win32")
 
 describe("native Windows job containment (hosted Windows only)", () => {
+  windows("the process observer recognizes a live fixture PID", () => {
+    expect(alive(process.pid)).toBe(true)
+  })
+
   windows(
     "real cmd, PowerShell and Git Bash preserve selected shell semantics in a spaced Unicode directory",
     async () => {
@@ -566,34 +570,39 @@ function counter(cwd: string) {
   return {
     pid,
     count,
-    script: `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${literal(pid)},[string]$PID); while($true){[IO.File]::AppendAllText(${literal(count)},'x'); Start-Sleep -Milliseconds 25}`,
+    script: `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${literal(pid)},[string]$PID); while($true){[IO.File]::AppendAllText(${literal(count)},'x'); [Threading.Thread]::Sleep(25)}`,
   }
 }
 function tree(worker: ReturnType<typeof counter>, stay: boolean) {
   const encoded = Buffer.from(worker.script, "utf16le").toString("base64")
-  return `$ErrorActionPreference='Stop'; $p=Start-Process -FilePath ${literal(powershell())} -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand','${encoded}') -PassThru -NoNewWindow -RedirectStandardOutput ${literal(worker.count + ".stdout")} -RedirectStandardError ${literal(worker.count + ".stderr")}; $until=[DateTime]::UtcNow.AddSeconds(10); while(!(Test-Path ${literal(worker.count)}) -and [DateTime]::UtcNow -lt $until){Start-Sleep -Milliseconds 25}; if(!(Test-Path ${literal(worker.count)})){throw 'worker did not become ready'}; ${stay ? "while($true){Start-Sleep -Milliseconds 50}" : "exit 7"}`
+  // The descendant still has separate stdout/stderr. Static .NET APIs avoid PowerShell module discovery in this fixture.
+  return [
+    "$ErrorActionPreference='Stop'",
+    "$start=[Diagnostics.ProcessStartInfo]::new()",
+    `$start.FileName=${literal(powershell())}`,
+    `$start.Arguments='-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}'`,
+    "$start.UseShellExecute=$false",
+    "$start.CreateNoWindow=$true",
+    "$start.RedirectStandardOutput=$true",
+    "$start.RedirectStandardError=$true",
+    "$child=[Diagnostics.Process]::Start($start)",
+    "$until=[DateTime]::UtcNow.AddSeconds(10)",
+    `$count=${literal(worker.count)}`,
+    "while(![IO.File]::Exists($count) -and [DateTime]::UtcNow -lt $until){[Threading.Thread]::Sleep(25)}",
+    "if(![IO.File]::Exists($count)){throw 'worker did not become ready'}",
+    stay ? "while($true){[Threading.Thread]::Sleep(50)}" : "exit 7",
+  ].join("; ")
 }
 function alive(pid: number) {
   if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid observed test PID")
-  // Read-only process observation; tests never kill a PID recovered from a file.
-  return new Promise<boolean>((resolve, reject) =>
-    execFile(
-      powershell(),
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `if(Get-Process -Id ${pid} -ErrorAction SilentlyContinue){exit 1}; exit 0`,
-      ],
-      { timeout: 5000, windowsHide: true },
-      (error) => {
-        if (!error) return resolve(false)
-        if (error.code === 1) return resolve(true)
-        reject(error)
-      },
-    ),
-  )
+  // Signal 0 is a read-only OS query. Access errors must not falsely prove that the process is gone.
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false
+    throw error
+  }
 }
 function rawHolder(command: ChildProcess.StandardCommand, script = WindowsHolder.script) {
   const input = WindowsProcess.normalize(command)
