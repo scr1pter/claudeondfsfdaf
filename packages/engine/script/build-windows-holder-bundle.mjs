@@ -18,6 +18,10 @@ const nativeDirectory = "packages/engine/native/windows-holder/"
 const revisionPattern = /^[0-9a-f]{40}$/
 const numberPattern = /^[1-9][0-9]{0,29}$/
 const compilerPlatforms = { x64: "x64", arm64: "ARM64" }
+const visualStudioGenerators = new Map([
+  ["17.0", "Visual Studio 17 2022"],
+  ["18.0", "Visual Studio 18 2026"],
+])
 const outputName = "vector-windows-holder-bundle"
 const compilerVariables = new Set([
   "SYSTEMROOT",
@@ -166,13 +170,15 @@ async function readCommittedSource(revision, runner) {
 }
 
 function windowsToolchain(runner) {
+  const generator = visualStudioGenerators.get(runner.env.VisualStudioVersion?.trim())
   const toolset = runner.env.VCToolsVersion?.trim()
   const sdk = runner.env.WindowsSDKVersion?.trim().replace(/[\\/]$/, "")
-  if (!/^\d+\.\d+\.\d+$/.test(toolset ?? "") || !/^10\.0\.\d+\.\d+$/.test(sdk ?? ""))
+  if (!generator || !/^\d+\.\d+\.\d+$/.test(toolset ?? "") || !/^10\.0\.\d+\.\d+$/.test(sdk ?? ""))
     throw new Error("The pinned MSVC developer environment is unavailable.")
   return {
     cmake: path.win32.join(runner.env.ProgramFiles, "CMake", "bin", "cmake.exe"),
     env: Object.fromEntries(Object.entries(runner.env).filter(([name]) => compilerVariables.has(name.toUpperCase()))),
+    generator,
     sdk,
     toolset,
   }
@@ -204,6 +210,7 @@ function runCmake(toolchain, source, arch, step, args) {
             [...output.matchAll(/\berror\s+((?:C|D|RC|LNK|MSB)\d{4})\b/gi)].map((match) => match[1].toUpperCase()),
           ),
         ].slice(0, 8),
+        generator: toolchain.generator,
         spawnError: ["ENOENT", "ETIMEDOUT", "ENOBUFS", "EACCES"].includes(result.error?.code)
           ? result.error.code
           : null,
@@ -234,7 +241,7 @@ async function buildWindowsHolder(input, runner) {
         "-B",
         build,
         "-G",
-        "Visual Studio 17 2022",
+        toolchain.generator,
         "-A",
         `${compilerPlatforms[arch]},version=${toolchain.sdk}`,
         "-T",
