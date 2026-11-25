@@ -7,27 +7,42 @@ import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { descriptorReceipt, inspectOwnDescriptorMetadata } from "./sandbox-fd-observation"
 import { mcpProbeCode } from "./sandbox-mcp-code"
 
+export async function withToolProbeProfile<Result>(
+  probeTool: (root: string) => Promise<Result>,
+  probeTerminal?: () => Promise<void>,
+): Promise<Result> {
+  const root = await fs.mkdtemp(path.join(process.env.RUNNER_TEMP!, "tool-process-probe-"))
+  try {
+    for (const [name, directory] of Object.entries({
+      XDG_DATA_HOME: "data",
+      XDG_CONFIG_HOME: "config",
+      XDG_STATE_HOME: "state",
+      XDG_CACHE_HOME: "cache",
+    })) {
+      process.env[name] = path.join(root, directory)
+      await fs.mkdir(process.env[name]!, { recursive: true })
+    }
+    process.env.VECTOR_DISABLE_MODELS_FETCH = "true"
+    process.env.VECTOR_BRAIN_EMBED = "off"
+    process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
+    process.env.VECTOR_PURE = "1"
+
+    const result = await probeTool(root)
+    // The PTY event store uses the same XDG paths that the tool initialized.
+    await probeTerminal?.()
+    return result
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+}
+
 /**
  * CI-only: the real ShellTool must not signal an engine-shaped process outside its tool namespace. A build without the
  * bubblewrap floor has no such namespace: its tools share the engine's UID and PID namespace, so the probe records what
  * they can see with signal 0, which leaves the target's inspector closed, and asserts only the guards that build keeps.
  */
-export async function probeToolProcesses(syntheticProof?: string) {
+export async function probeToolProcesses(root: string, syntheticProof?: string) {
   const floor = ProcessIsolation.FLOOR
-  const root = await fs.mkdtemp(path.join(process.env.RUNNER_TEMP!, "tool-process-probe-"))
-  for (const [name, directory] of Object.entries({
-    XDG_DATA_HOME: "data",
-    XDG_CONFIG_HOME: "config",
-    XDG_STATE_HOME: "state",
-    XDG_CACHE_HOME: "cache",
-  })) {
-    process.env[name] = path.join(root, directory)
-    await fs.mkdir(process.env[name]!, { recursive: true })
-  }
-  process.env.VECTOR_DISABLE_MODELS_FETCH = "true"
-  process.env.VECTOR_BRAIN_EMBED = "off"
-  process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
-  process.env.VECTOR_PURE = "1"
   const errorCode = (error: unknown) =>
     error && typeof error === "object" && "code" in error && typeof error.code === "string"
       ? error.code.slice(0, 40)
@@ -688,6 +703,5 @@ export async function probeToolProcesses(syntheticProof?: string) {
     }
   } finally {
     network.uninstall()
-    await fs.rm(root, { recursive: true, force: true })
   }
 }

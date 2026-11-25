@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto"
 import { GithubSecrets } from "../../src/cli/cmd/github.secrets"
 import { GithubSessionProof } from "../../src/cli/cmd/github.session-proof"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
-import { probeToolProcesses } from "./sandbox-tool-probe"
+import { probeToolProcesses, withToolProbeProfile } from "./sandbox-tool-probe"
 
 const execute = promisify(execFile)
 const self = fileURLToPath(import.meta.url)
@@ -335,17 +335,18 @@ if (process.argv[2] === "--module-load-check") {
     config.uid !== process.getuid?.()
   )
     throw new Error("The agent home was not created empty with its own .config")
-  let syntheticProof: string | undefined
-  if (process.env.VECTOR_MODE === "codium") {
-    if (!holder.sessionProof()) throw new Error("The disposable Codium fixture has no evidence of its proof descriptor")
-    syntheticProof = syntheticProofIdentity()
-  }
-  const toolProcess = await probeToolProcesses(syntheticProof)
-  if (syntheticProof) {
-    // The PTY's Config graph snapshots flags and XDG paths; the tool probe installs its synthetic profile first.
-    const { probePtyDescriptors } = await import("./sandbox-pty-probe")
-    await probePtyDescriptors(syntheticProof)
-  }
+  const codium = process.env.VECTOR_MODE === "codium"
+  if (codium && !holder.sessionProof()) throw new Error("The disposable Codium fixture has no evidence of its proof descriptor")
+  const syntheticProof = codium ? syntheticProofIdentity() : undefined
+  const toolProcess = await withToolProbeProfile(
+    (root) => probeToolProcesses(root, syntheticProof),
+    syntheticProof
+      ? async () => {
+          const { probePtyDescriptors } = await import("./sandbox-pty-probe")
+          await probePtyDescriptors(syntheticProof)
+        }
+      : undefined,
+  )
   // This is a real shell child of the engine-shaped process; it receives only the OS environment, never the holder.
   const scanner = ProcessIsolation.launch("/bin/bash", [
     "--noprofile",

@@ -109,41 +109,65 @@ test("the existing Bun cell executes its installed Bun artifact while host asser
   expect(workflow).toContain("runtime: bun")
 })
 
-test("the sandbox entry defers PTY configuration until the synthetic tool profile is installed", async () => {
+test("the sandbox profile lasts from tool configuration through PTY event storage", async () => {
   await using temporary = await tmpdir()
   const engine = fileURLToPath(new URL("../..", import.meta.url))
   const entry = path.join(temporary.path, "startup-profile.ts")
   const output = path.join(temporary.path, "receipt.json")
-  const profile = path.join(temporary.path, "profile")
   await Bun.write(
     entry,
     `
       import fs from "node:fs/promises"
       import path from "node:path"
       await import(${JSON.stringify(path.join(engine, "test/fixture/sandbox-probe.ts"))})
-      process.env.VECTOR_DISABLE_MODELS_FETCH = "true"
-      process.env.XDG_CACHE_HOME = ${JSON.stringify(profile)}
-      const { Flag } = await import(${JSON.stringify(path.join(engine, "../core/src/flag/flag.ts"))})
-      const { Global } = await import(${JSON.stringify(path.join(engine, "../core/src/global.ts"))})
-      const { EgressGuard } = await import(${JSON.stringify(path.join(engine, "../core/src/local-mode/guard.ts"))})
-      const { ModelCatalog } = await import(${JSON.stringify(path.join(engine, "../core/src/model-catalog.ts"))})
+      const { withToolProbeProfile } = await import(${JSON.stringify(path.join(engine, "test/fixture/sandbox-tool-probe.ts"))})
       const { LayerNode } = await import(${JSON.stringify(path.join(engine, "../core/src/effect/layer-node.ts"))})
       const { Effect } = await import(${JSON.stringify(fileURLToPath(import.meta.resolve("effect")))})
-      const network = EgressGuard.installStrict()
+      let profile
+      let network
+      let databaseOpened = false
       try {
-        await Effect.runPromise(
-          Effect.gen(function* () {
-            const catalog = yield* ModelCatalog.Service
-            yield* catalog.refresh(true)
-          }).pipe(Effect.provide(LayerNode.compile(ModelCatalog.node)), Effect.scoped),
+        const startup = await withToolProbeProfile(
+          async (root) => {
+            profile = root
+            const { Flag } = await import(${JSON.stringify(path.join(engine, "../core/src/flag/flag.ts"))})
+            const { Global } = await import(${JSON.stringify(path.join(engine, "../core/src/global.ts"))})
+            const { EgressGuard } = await import(${JSON.stringify(path.join(engine, "../core/src/local-mode/guard.ts"))})
+            const { ModelCatalog } = await import(${JSON.stringify(path.join(engine, "../core/src/model-catalog.ts"))})
+            network = EgressGuard.installStrict()
+            await Effect.runPromise(
+              Effect.gen(function* () {
+                const catalog = yield* ModelCatalog.Service
+                yield* catalog.refresh(true)
+              }).pipe(Effect.provide(LayerNode.compile(ModelCatalog.node)), Effect.scoped),
+            )
+            return {
+              disabled: Flag.VECTOR_DISABLE_MODELS_FETCH,
+              cacheMatches: Global.Path.cache === path.join(root, "cache", "vector"),
+            }
+          },
+          async () => {
+            const { EventV2 } = await import(${JSON.stringify(path.join(engine, "../core/src/event.ts"))})
+            const { Database } = await import(${JSON.stringify(path.join(engine, "../core/src/database/database.ts"))})
+            await Effect.runPromise(
+              Effect.gen(function* () {
+                yield* EventV2.Service
+                const database = Database.path()
+                const stat = yield* Effect.promise(() => fs.stat(database))
+                databaseOpened = path.dirname(database) === path.join(profile, "data", "vector") && stat.isFile()
+              }).pipe(Effect.provide(LayerNode.compile(EventV2.node)), Effect.scoped),
+            )
+          },
         )
+        const profileRemoved = await fs.stat(profile).then(() => false, (error) => error.code === "ENOENT")
         await fs.writeFile(${JSON.stringify(output)}, JSON.stringify({
-          disabled: Flag.VECTOR_DISABLE_MODELS_FETCH,
-          cache: Global.Path.cache,
+          ...startup,
+          databaseOpened,
+          profileRemoved,
           refused: network.attempts().filter(attempt => !attempt.allowed).map(({ kind, host }) => ({ kind, host })),
         }))
       } finally {
-        network.uninstall()
+        network?.uninstall()
       }
     `,
   )
@@ -197,6 +221,8 @@ test("the sandbox entry defers PTY configuration until the synthetic tool profil
     cwd: temporary.path,
     env: {
       PATH: process.env.PATH ?? "",
+      RUNNER_TEMP: temporary.path,
+      TMPDIR: temporary.path,
       XDG_CACHE_HOME: path.join(temporary.path, "before-profile", "cache"),
       XDG_DATA_HOME: path.join(temporary.path, "data"),
       XDG_CONFIG_HOME: path.join(temporary.path, "config"),
@@ -209,5 +235,11 @@ test("the sandbox entry defers PTY configuration until the synthetic tool profil
   })
   const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
   expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
-  expect(await Bun.file(output).json()).toEqual({ disabled: true, cache: path.join(profile, "vector"), refused: [] })
+  expect(await Bun.file(output).json()).toEqual({
+    disabled: true,
+    cacheMatches: true,
+    databaseOpened: true,
+    profileRemoved: true,
+    refused: [],
+  })
 }, 30_000)
