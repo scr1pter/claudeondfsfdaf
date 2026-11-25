@@ -9,7 +9,6 @@ using System;
 using System.IO;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Web.Script.Serialization;
@@ -81,10 +80,18 @@ public static class VectorShellHolder {
     try {
       Startup(4);
       var stream=Console.OpenStandardInput();
-      var read=Task.Run(()=>Line(stream,262144));
-      if(!read.Wait(15000) || read.Result==null) throw new Exception("Configuration timeout or EOF");
+      stream=new BufferedStream(stream,4096);
+      string configLine=null; bool readFailed=false;
+      var reader=new Thread(()=> {
+        try { configLine=Line(stream,262144); }
+        catch(Exception) { readFailed=true; }
+      });
+      reader.IsBackground=true; reader.Start();
+      if(!reader.Join(15000)) throw new Exception("Configuration timeout or EOF");
+      if(readFailed) throw new Exception("Configuration read failed");
+      if(configLine==null) throw new Exception("Configuration timeout or EOF");
       var json=new JavaScriptSerializer(); json.MaxJsonLength=262144;
-      var cfg=json.Deserialize<Launch>(read.Result);
+      var cfg=json.Deserialize<Launch>(configLine);
       if(cfg==null || String.IsNullOrEmpty(cfg.file) || String.IsNullOrEmpty(cfg.commandLine) || cfg.commandLine.Length>32766 || cfg.env==null) throw new Exception("Invalid configuration");
       Startup(5);
       Check(SetHandleInformation(GetStdHandle(-10),1,0),"Control inheritance");

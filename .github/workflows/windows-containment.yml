@@ -6,6 +6,7 @@ on:
       - .github/workflows/windows-containment.yml
       - .github/workflows/windows-holder-bundle.yml
       - .github/actions/install-ripgrep-windows/**
+      - packages/engine/native/windows-holder/**
       - packages/engine/src/tool/shell/windows-*.ts
       - packages/engine/test/tool/shell-windows-process.test.ts
       - packages/engine/test/tool/windows-holder-diagnostic.test.ts
@@ -102,3 +103,10 @@ jobs:
         timeout-minutes: 5
         working-directory: packages/engine
         run: GITHUB_ACTIONS=false bun test --preload=./script/windows-holder-ci.ts test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
+      - name: Install the pinned Electron runtime for the packaged holder check
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Verify the holder in a packaged Electron utility
+        timeout-minutes: 4
+        working-directory: packages/desktop
+        run: bun --no-env-file scripts/verify-windows-holder-electron.ts

@@ -1,16 +1,17 @@
 import { ChildProcess } from "effect/unstable/process"
-import { windowsHolderCarrier } from "../../src/tool/shell/windows-holder-carrier"
+import { windowsHolderCompanion } from "../../src/tool/shell/windows-holder-direct"
 import { WindowsProcess } from "../../src/tool/shell/windows-process"
 
 const root = "C:\\Windows"
+const check = process.env.VECTOR_WINDOWS_HOLDER_BUNDLE_CHECK
 if (
   process.platform !== "win32" ||
   process.arch !== "x64" ||
   process.env.CI !== "true" ||
   process.env.RUNNER_ENVIRONMENT !== "github-hosted" ||
   process.env.GITHUB_JOB !== "engine-windows" ||
-  process.env.VECTOR_WINDOWS_HOLDER_BUNDLE_CHECK !== "1" ||
-  !windowsHolderCarrier(root)
+  check !== "direct" ||
+  windowsHolderCompanion(root)?.wire !== "vsh1"
 ) {
   throw new Error("The Windows bundle check requires its active hosted holder.")
 }

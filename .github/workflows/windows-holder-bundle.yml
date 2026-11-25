@@ -28,7 +28,7 @@ env:
 jobs:
   build:
     name: Build the reviewed Windows containment holder
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 10
     outputs:
       artifact-id: ${{ steps.artifact.outputs.artifact-id }}
@@ -45,6 +45,10 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
+      - name: Configure the pinned MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
       - name: Compile the holder and pin its manifest
         id: build
         env:
