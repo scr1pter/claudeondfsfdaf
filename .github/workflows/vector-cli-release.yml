@@ -166,10 +166,20 @@ jobs:
           bun packages/cloud/src/prepare-cli-release-catalog.ts
           cmp "$VECTOR_CATALOG_FILE" cli-release-catalog/api.json
 
-  release:
+  windows-holder-build:
     needs: validate
+    if: inputs.phase == 'prepare' || inputs.phase == 'stage'
+    uses: ./.github/workflows/windows-holder-bundle.yml
+    with:
+      source_revision: ${{ inputs.source_revision }}
+      targets: x64,arm64
+
+  release:
+    needs: [validate, windows-holder-build]
     name: Prepare or publish all twelve native targets
-    if: inputs.phase == 'prepare' || inputs.phase == 'stage' || inputs.phase == 'commit'
+    if: >-
+      !cancelled() && needs.validate.result == 'success' &&
+      (inputs.phase == 'commit' || ((inputs.phase == 'prepare' || inputs.phase == 'stage') && needs.windows-holder-build.result == 'success'))
     runs-on: ubuntu-24.04
     environment: production-release
     timeout-minutes: 90
@@ -208,6 +218,14 @@ jobs:
         if: inputs.phase == 'prepare' || inputs.phase == 'stage'
         run: bun packages/cloud/src/prepare-cli-release-catalog.ts
 
+      - name: Download the verified Windows holder bundle
+        if: (inputs.phase == 'prepare' || inputs.phase == 'stage') && needs.windows-holder-build.outputs.artifact-id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.windows-holder-build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/vector-windows-holder-bundle
+          merge-multiple: true
+
       - name: Build all twelve standalone native binaries
         if: inputs.phase == 'prepare' || inputs.phase == 'stage'
         working-directory: packages/engine
@@ -218,6 +236,8 @@ jobs:
           VECTOR_TARGETS: ""
           VECTOR_RELEASE_CATALOG_PATH: ${{ github.workspace }}/cli-release-catalog/api.json
           VECTOR_RELEASE_CATALOG_SHA256: ${{ inputs.catalog_sha256 }}
+          VECTOR_WINDOWS_HOLDER_MANIFEST: ${{ runner.temp }}/vector-windows-holder-bundle/manifest.json
+          VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256: ${{ needs.windows-holder-build.outputs.manifest-digest }}
         run: bun script/build.ts
 
       - name: Prepare immutable native archives and manifest
