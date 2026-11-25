@@ -27,7 +27,7 @@ on:
       direct_holder_backend:
         description: Background-command integration launch mode
         type: choice
-        options: [staged, carrier, legacy]
+        options: [staged, carrier, native, legacy]
         default: staged
       direct_holder_shard8:
         description: Run the ordinary Windows Engine shard 8/18 with the selected x64 integration backend
@@ -108,11 +108,12 @@ jobs:
 
   direct-holder-build:
     if: github.event_name == 'workflow_dispatch' && (inputs.direct_holder_comparison || inputs.direct_holder_shard1 || inputs.direct_holder_shard8 || inputs.direct_holder_delay_config)
-    runs-on: windows-latest
+    runs-on: ${{ inputs.direct_holder_backend == 'native' && 'windows-2025' || 'windows-latest' }}
     timeout-minutes: 10
     env:
       VECTOR_DIRECT_HOLDER_FIXTURE: "1"
       VECTOR_DIRECT_HOLDER_ARCH: ${{ inputs.direct_holder_arch }}
+      VECTOR_DIRECT_HOLDER_BACKEND: ${{ inputs.direct_holder_backend }}
     outputs:
       payload_digest: ${{ steps.compile.outputs.payload_digest }}
     steps:
@@ -136,6 +137,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
+      - name: Configure the pinned MSVC environment
+        if: inputs.direct_holder_backend == 'native'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
       - name: Compile the pinned holder source
         id: compile
         shell: cmd
@@ -240,7 +246,7 @@ jobs:
           fixture=packages/engine/test/fixture/windows-holder-integration
           source=packages/engine/src/tool/shell/windows-process.ts
           case "$VECTOR_DIRECT_HOLDER_BACKEND" in
-            staged) patch="$fixture/windows-process.integration.patch" ;;
+            staged|native) patch="$fixture/windows-process.integration.patch" ;;
             carrier) patch="$fixture/windows-process.carrier.patch" ;;
             *) exit 1 ;;
           esac
@@ -268,16 +274,16 @@ jobs:
         timeout-minutes: 10
         working-directory: packages/engine
         shell: bash
-        run: bun --no-env-file test test/tool/shell-windows-process.test.ts --timeout 60000
+        run: bun --no-env-file test test/tool/shell-windows-process.test.ts --timeout ${{ inputs.direct_holder_backend == 'native' && 30000 || 60000 }}
       - name: Run Windows durable background command integration
         if: ${{ !(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) }}
         timeout-minutes: 5
         working-directory: packages/engine
         shell: bash
-        run: bun --no-env-file test test/task/shells.test.ts --timeout 60000
+        run: bun --no-env-file test test/task/shells.test.ts --timeout ${{ inputs.direct_holder_backend == 'native' && 30000 || 60000 }}
       - name: Run Windows task management command integration
         if: ${{ !(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) }}
         timeout-minutes: 5
         working-directory: packages/engine
         shell: bash
-        run: bun --no-env-file test test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
+        run: bun --no-env-file test test/tool/task-manage.test.ts --timeout ${{ inputs.direct_holder_backend == 'native' && 30000 || 60000 }} -t 'background commands|running commands'

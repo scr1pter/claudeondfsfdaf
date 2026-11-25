@@ -4,12 +4,20 @@ import { appendFile, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, wri
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { validateNativeWindowsHolder } from "../test/fixture/windows-holder-integration/native/pe.ts"
 
 const holderSource = new URL("../src/tool/shell/windows-holder.ts", import.meta.url)
 const processSource = new URL("../src/tool/shell/windows-process.ts", import.meta.url)
 // Pin the actual maintained source, independent of the revision that adds this diagnostic.
 const sourceSHA = "daf3b29805a8b100ff0843f2c6df4d8e01d8e1464352aeff2602bbba6709ad8e"
 const processSHA = "30c42a270453d34d1ec5230a5b2b65c428206cef13f0fa20233943c38353d706"
+const nativeDirectory = new URL("../test/fixture/windows-holder-integration/native/", import.meta.url)
+const nativePins = {
+  "CMakeLists.txt": "c143e07587873815e5511235741f20f0bcfb399aab426536f193d8419bd1bb32",
+  "holder.cpp": "63ee641b8a872c6773cf334423b8097cc68bb621ab4217866804b87e1c9ee608",
+  "pe.ts": "8175b04a3ebfe38b50a9915be77f08704bdefa76008e451665bbd8b7d55228cd",
+  "protocol.ts": "e670b87ac937911f2a87c644ee32dd6576823f2aad9abea3af5bfb79db3bb915",
+}
 const executableLimit = 1_048_576
 export const startupMs = 15_000
 const stopMs = 2_000
@@ -80,6 +88,7 @@ function windowsRunner(mode) {
   }
   return {
     arch,
+    native: env.VECTOR_DIRECT_HOLDER_BACKEND === "native",
     env,
     systemRoot: env.SystemRoot,
     run: env.GITHUB_RUN_ID,
@@ -159,13 +168,14 @@ function verifyArchitectureNeutralIL(bytes, pe, section, clrRva) {
 
 export function artifactReceipt(runner, binary) {
   return Buffer.from(JSON.stringify({
-    version: 1,
+    version: runner.native ? 2 : 1,
     arch: runner.arch ?? "x64",
     run: runner.run,
     attempt: runner.attempt,
     revision: runner.revision,
     sourceSHA,
     processSHA,
+    ...(runner.native ? { wire: "VSH1", nativeInputsSHA: sha(JSON.stringify(nativePins)) } : {}),
     executableSHA: sha(binary),
   }))
 }
@@ -182,44 +192,113 @@ export function validateArtifact(runner, receipt, binary, expectedDigest) {
   ) {
     throw new Error("The direct-holder artifact does not match its build job")
   }
-  validateExecutable(binary, runner.arch)
+  if (runner.native) validateNativeWindowsHolder(binary, runner.arch)
+  else validateExecutable(binary, runner.arch)
 }
 
-async function build(runner) {
-  const source = compiledSource(await regularBytes(holderSource, 65_536), runner.arch)
-  pinnedSource(await regularBytes(processSource, 65_536), processSHA)
+export async function verifyNativeInputs() {
+  return Object.fromEntries(
+    await Promise.all(Object.entries(nativePins).map(async ([file, digest]) => [
+      file,
+      pinnedSource(await regularBytes(new URL(file, nativeDirectory), 65_536), digest),
+    ])),
+  )
+}
+
+async function buildNative(runner, staging) {
+  const toolset = runner.env.VCToolsVersion?.trim()
+  const sdk = runner.env.WindowsSDKVersion?.trim().replace(/[\\/]$/, "")
+  if (!/^\d+\.\d+\.\d+$/.test(toolset ?? "") || !/^10\.0\.\d+\.\d+$/.test(sdk ?? ""))
+    throw new Error("Invalid hosted MSVC toolchain")
+  const inputs = await verifyNativeInputs()
+  for (const file of ["holder.cpp", "CMakeLists.txt"])
+    await writeFile(path.join(staging, file), inputs[file], { flag: "wx" })
+  const buildDir = path.join(staging, "build")
+  function cmake(step, args) {
+    console.log("Windows native holder " + step)
+    const result = spawnSync("cmake", args, {
+      cwd: staging,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: 1_048_576,
+      timeout: 120_000,
+    })
+    if (result.error || result.status !== 0) {
+      const output = [result.stdout, result.stderr].join("\n")
+      const report = {
+        step,
+        exitCode: result.status,
+        signal: result.signal,
+        cmakeErrors: Math.min(8, output.match(/^\s*CMake Error(?=[: \t])/gm)?.length ?? 0),
+        msvcCodes: [...new Set(
+          [...output.matchAll(/\berror\s+((?:C|D|RC|LNK|MSB)\d{4})\b/gi)].map((match) => match[1].toUpperCase()),
+        )].slice(0, 8),
+        spawnError: ["ENOENT", "ETIMEDOUT", "ENOBUFS", "EACCES"].includes(result.error?.code) ? result.error.code : null,
+      }
+      console.log("Windows native holder build failure: " + JSON.stringify(report))
+      throw new Error("The MSVC holder fixture could not be built")
+    }
+  }
+  cmake("configure", [
+    "-S",
+    staging,
+    "-B",
+    buildDir,
+    "-A",
+    `${runner.arch === "x64" ? "x64" : "ARM64"},version=${sdk}`,
+    "-T",
+    `version=${toolset}`,
+    "--fresh",
+  ])
+  cmake("compile", ["--build", buildDir, "--config", "Release", "--target", "vector-holder-probe"])
+  return path.join(buildDir, "Release", "holder.exe")
+}
+
+async function buildManaged(runner, staging, source) {
   const framework = path.win32.join(runner.systemRoot, "Microsoft.NET", "Framework64", "v4.0.30319")
   const compiler = path.win32.join(framework, "csc.exe")
   const references = ["System.dll", "System.Core.dll", "System.Web.Extensions.dll"].map(
     (file) => "/reference:" + path.win32.join(framework, file),
   )
-  const staging = await mkdtemp(path.join(os.tmpdir(), "vector-direct-holder-build-"))
+  const input = path.join(staging, "VectorShellHolder.cs")
+  const output = path.join(staging, "holder.exe")
+  await writeFile(input, source, { flag: "wx" })
+  const result = spawnSync(
+    compiler,
+    [
+      "/nologo",
+      "/noconfig",
+      "/target:exe",
+      "/platform:" + architectures[runner.arch].platform,
+      "/main:VectorStandaloneEntryPoint",
+      ...references,
+      "/out:" + output,
+      input,
+    ],
+    { ...launchInputs(runner.systemRoot, staging, runner.env).options, stdio: "ignore", timeout: 30_000 },
+  )
+  if (result.error || result.status !== 0) throw new Error("The stock Windows compiler could not build the fixture")
+  return output
+}
+
+async function build(runner) {
+  const source = await regularBytes(holderSource, 65_536)
+  pinnedSource(source, sourceSHA)
+  pinnedSource(await regularBytes(processSource, 65_536), processSHA)
+  const staging = await mkdtemp(path.join(runner.native ? runner.env.RUNNER_TEMP : os.tmpdir(), "vector-direct-holder-build-"))
   try {
-    const input = path.join(staging, "VectorShellHolder.cs")
-    const output = path.join(staging, "holder.exe")
-    await writeFile(input, source, { flag: "wx" })
-    const result = spawnSync(
-      compiler,
-      [
-        "/nologo",
-        "/noconfig",
-        "/target:exe",
-        "/platform:" + architectures[runner.arch].platform,
-        "/main:VectorStandaloneEntryPoint",
-        ...references,
-        "/out:" + output,
-        input,
-      ],
-      { ...launchInputs(runner.systemRoot, staging, runner.env).options, stdio: "ignore", timeout: 30_000 },
-    )
-    if (result.error || result.status !== 0) throw new Error("The stock Windows compiler could not build the fixture")
+    const output = runner.native
+      ? await buildNative(runner, staging)
+      : await buildManaged(runner, staging, compiledSource(source, runner.arch))
     const bytes = await regularBytes(output, executableLimit)
-    validateExecutable(bytes, runner.arch)
     const receipt = artifactReceipt(runner, bytes)
+    const digest = artifactDigest(receipt, bytes)
+    validateArtifact(runner, receipt, bytes, digest)
     await mkdir(runner.artifact)
     await writeFile(path.join(runner.artifact, "holder.exe"), bytes, { flag: "wx" })
     await writeFile(path.join(runner.artifact, "receipt.json"), receipt, { flag: "wx" })
-    await appendFile(runner.env.GITHUB_OUTPUT, "payload_digest=" + artifactDigest(receipt, bytes) + "\n")
+    await appendFile(runner.env.GITHUB_OUTPUT, "payload_digest=" + digest + "\n")
   } finally {
     await rm(staging, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 })
   }

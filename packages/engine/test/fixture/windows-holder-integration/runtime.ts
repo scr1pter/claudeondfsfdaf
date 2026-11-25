@@ -7,10 +7,11 @@ export { HolderStagingDeadline as IntegrationHolderDeadline } from "./stage"
 let recorded = false
 let deliveryRecorded = false
 
-export function recordStagedDelivery(delayed: boolean, timings: DeliveryReceipt) {
+export function recordStagedDelivery(delayed: boolean, timings: DeliveryReceipt, native = false) {
   if (deliveryRecorded) return
   deliveryRecorded = true
-  console.log("Verified Windows staged transport: " + JSON.stringify({ delayed, ...timings }))
+  const label = native ? "Verified Windows native Win32 transport: " : "Verified Windows staged transport: "
+  console.log(label + JSON.stringify({ delayed, ...timings }))
 }
 
 /** Verify staging with the same single deadline as the attempted native process startup. */
@@ -18,7 +19,8 @@ export async function prepareIntegrationHolder(deadline: number) {
   const context = integrationRunner()
   const { asset } = await import(new URL("./asset.generated.ts", import.meta.url).href)
   if (
-    process.env.VECTOR_DIRECT_HOLDER_BACKEND !== "staged" ||
+    (context.backend !== "staged" && !context.native) ||
+    asset.native !== context.native ||
     asset.arch !== context.arch ||
     asset.run !== context.run ||
     asset.attempt !== context.attempt ||
@@ -33,5 +35,5 @@ export async function prepareIntegrationHolder(deadline: number) {
     recorded = true
     console.log("Verified private Windows holder staging elapsed ms: " + Math.round(performance.now() - start))
   }
-  return { ...holder, delayConfig: context.delayConfig, reportDelivery: context.reportDelivery }
+  return { ...holder, native: context.native, delayConfig: context.delayConfig, reportDelivery: context.reportDelivery }
 }

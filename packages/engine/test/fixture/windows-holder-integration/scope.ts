@@ -4,13 +4,14 @@ export function integrationRunner() {
   const env = process.env
   const arch = env.VECTOR_DIRECT_HOLDER_ARCH
   const backend = env.VECTOR_DIRECT_HOLDER_BACKEND
+  const native = backend === "native"
   // The ordinary Engine lane disables Actions-specific application paths in its test process.
   const selection = env.VECTOR_DIRECT_HOLDER_SHARD
   const shard = selection === "1" || selection === "8"
   const delayConfig = env.VECTOR_DIRECT_HOLDER_DELAY_CONFIG === "1"
   if (
     (arch !== "x64" && arch !== "arm64") ||
-    (backend !== "staged" && backend !== "carrier") ||
+    (backend !== "staged" && backend !== "carrier" && !native) ||
     (selection !== undefined && !shard) ||
     (shard && arch !== "x64") ||
     (delayConfig && (!shard || backend !== "staged")) ||
@@ -43,5 +44,5 @@ export function integrationRunner() {
   ) {
     throw new Error("Invalid direct holder integration runner identity")
   }
-  return { arch, temporary, run, attempt, revision, delayConfig, reportDelivery: selection === "1" || delayConfig }
+  return { arch, backend, native, temporary, run, attempt, revision, delayConfig, reportDelivery: native || selection === "1" || delayConfig }
 }

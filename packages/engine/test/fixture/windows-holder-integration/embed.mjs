@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { lstat, readFile, readdir, realpath, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { validateArtifact } from "../../../script/diagnose-direct-windows-holder.mjs"
+import { validateArtifact, verifyNativeInputs } from "../../../script/diagnose-direct-windows-holder.mjs"
 import { integrationRunner } from "./scope.ts"
 
 async function artifactFile(file, limit) {
@@ -14,6 +14,7 @@ async function artifactFile(file, limit) {
 
 try {
   const runner = integrationRunner()
+  if (runner.native) await verifyNativeInputs()
   const artifact = path.join(runner.temporary, "vector-direct-holder")
   if (
     !(await lstat(artifact)).isDirectory() ||
@@ -36,6 +37,7 @@ try {
   }
   const asset = {
     arch: runner.arch,
+    native: runner.native,
     run: runner.run,
     attempt: runner.attempt,
     revision: runner.revision,
