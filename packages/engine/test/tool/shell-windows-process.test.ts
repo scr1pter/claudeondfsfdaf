@@ -195,6 +195,7 @@ describe("native Windows job containment (hosted Windows only)", () => {
       await access(bash)
       const commands = [
         {
+          label: "cmd",
           value: ChildProcess.make('echo "space & quote" & echo second', [], {
             shell: path.join(systemRoot(), "System32", "cmd.exe"),
             cwd: dir.path,
@@ -203,10 +204,12 @@ describe("native Windows job containment (hosted Windows only)", () => {
           expected: '"space & quote"',
         },
         {
+          label: "PowerShell",
           value: ps('[Console]::Write(\'space "quote" and trailing \\\'); [Console]::Error.Write(" stderr")', dir.path),
           expected: 'space "quote" and trailing \\',
         },
         {
+          label: "Git Bash",
           value: ChildProcess.make("printf '%s' 'space \"quote\"'; printf '%s' ' stderr' >&2", [], {
             shell: bash,
             cwd: dir.path,
@@ -224,6 +227,9 @@ describe("native Windows job containment (hosted Windows only)", () => {
           onOutput: async (chunk) => {
             output.push(Buffer.from(chunk))
           },
+        }).catch((cause) => {
+          if (!(cause instanceof WindowsProcess.WindowsProcessStartupTimeout)) throw cause
+          throw new Error(`Windows shell case: ${entry.label}: ${cause.message}`, { cause })
         })
         try {
           expect(await handle.completion).toEqual({ exitCode: 0, terminated: true })

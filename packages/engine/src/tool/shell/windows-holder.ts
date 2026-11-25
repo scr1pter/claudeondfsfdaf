@@ -170,6 +170,34 @@ export const startupPhases = [
   "payload-created",
 ] as const
 
+type DeliveryEvent =
+  | "launchReturnedMs"
+  | "spawnEventMs"
+  | "configWrittenMs"
+  | "configWriteFailedMs"
+  | "firstStderrMs"
+  | "firstMarkerMs"
+  | "readyMs"
+  | "watchdogMs"
+  | "exitMs"
+  | "closeMs"
+  | "closeDeadlineMs"
+
+export type DeliveryReceipt = Partial<Record<DeliveryEvent, number>>
+
+/** Closed, failure-safe startup timings. The observer never receives command or stream data. */
+export function deliveryTimeline(elapsed: () => number) {
+  const timings: DeliveryReceipt = {}
+  return {
+    mark(event: DeliveryEvent) {
+      timings[event] ??= Math.min(60_000, Math.max(0, Math.round(elapsed() / 10) * 10))
+    },
+    snapshot(): DeliveryReceipt {
+      return { ...timings }
+    },
+  }
+}
+
 const startup = (step: number) => `[Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"startup","step":${step}}'); `
 
 // Resolve the Windows PowerShell built-in by its Microsoft strong name. The helper intentionally has no inherited

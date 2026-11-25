@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 import { PassThrough, Writable } from "node:stream"
 import { coldHolderScript, observeHolder, startupTimeline } from "../../script/diagnose-windows-holder"
 import { WindowsHolder } from "../../src/tool/shell/windows-holder"
+import { WindowsProcess } from "../../src/tool/shell/windows-process"
 
 const workflow = Bun.YAML.parse(
   readFileSync(new URL("../../../../.github/workflows/windows-containment.yml", import.meta.url), "utf8"),
@@ -18,6 +19,54 @@ test("the first containment probe has its own Windows host and never warms the n
   expect(diagnostic).not.toBe(integration)
   expect(diagnostic!["runs-on"]).toBe("windows-latest")
   expect(integration!["runs-on"]).toBe("windows-latest")
+})
+
+test("the real startup failure includes closed transport timings from its own holder", () => {
+  const source = readFileSync(new URL("../../src/tool/shell/windows-process.ts", import.meta.url), "utf8")
+  for (const milestone of [
+    "launchReturnedMs",
+    "spawnEventMs",
+    "configWrittenMs",
+    "configWriteFailedMs",
+    "firstStderrMs",
+    "firstMarkerMs",
+    "readyMs",
+    "watchdogMs",
+  ]) {
+    expect(source).toContain(`"${milestone}"`)
+  }
+  expect(source).toContain("holder startup transport:")
+  expect(source).toContain("JSON.stringify(timings)")
+  expect(source).toMatch(
+    /if \(cause === state\.failure && timings\.watchdogMs !== undefined\)\s+throw new WindowsProcessStartupTimeout\(/,
+  )
+  expect(source).toContain("throw new WindowsProcessError(message, terminationProven, { cause })")
+  expect(source).toMatch(
+    /child\.stdin\.write\(config,[^\n]+\)\n\s+try \{\n\s+const pid = await bounded\(ready\.promise, STARTUP_MS,/,
+  )
+  const shellTest = readFileSync(new URL("./shell-windows-process.test.ts", import.meta.url), "utf8")
+  expect(shellTest).toContain("if (!(cause instanceof WindowsProcess.WindowsProcessStartupTimeout)) throw cause")
+})
+
+test("the production reader marks the first valid startup frame even if a later frame in the same chunk is invalid", () => {
+  let elapsed = 217
+  const delivery = WindowsHolder.deliveryTimeline(() => elapsed)
+  const reader = new WindowsProcess.StatusReader(() => delivery.mark("firstMarkerMs"))
+  expect(reader.push(Buffer.from('VECTOR_SHELL/1 {"type":"startup",'))).toEqual([])
+  expect(delivery.snapshot()).toEqual({})
+
+  elapsed = 353
+  expect(() => reader.push(Buffer.from('"step":1}\nVECTOR_SHELL/1 {"type":"startup","step":3}\n'))).toThrow(
+    "Invalid Windows holder startup phase",
+  )
+  expect(delivery.snapshot()).toEqual({ firstMarkerMs: 350 })
+  const snapshot = delivery.snapshot()
+
+  elapsed = 65_000
+  expect(reader.push(Buffer.from('VECTOR_SHELL/1 {"type":"startup","step":2}\n'))).toEqual([])
+  delivery.mark("watchdogMs")
+  expect(delivery.snapshot()).toEqual({ firstMarkerMs: 350, watchdogMs: 60_000 })
+  expect(snapshot).toEqual({ firstMarkerMs: 350 })
 })
 
 test("the cold probe adds only fixed phase writes to the production holder and fits the command line", () => {

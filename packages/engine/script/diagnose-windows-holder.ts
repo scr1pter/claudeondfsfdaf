@@ -3,11 +3,10 @@ import { access, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type { Readable, Writable } from "node:stream"
-import { WindowsHolder } from "../src/tool/shell/windows-holder"
+import { WindowsHolder, type DeliveryReceipt } from "../src/tool/shell/windows-holder"
 
 const STARTUP_MS = 15_000
 const CLOSE_MS = 20_000
-const MAX_REPORTED_MS = 60_000
 
 const coldPhases = [
   "host-entered",
@@ -23,17 +22,6 @@ const coldPhases = [
 
 type ColdPhase = (typeof coldPhases)[number]
 type Milestone = { phase: ColdPhase; elapsedMs: number }
-type DeliveryEvent =
-  | "launchReturnedMs"
-  | "spawnEventMs"
-  | "configWrittenMs"
-  | "configWriteFailedMs"
-  | "firstStderrMs"
-  | "firstMarkerMs"
-  | "watchdogMs"
-  | "exitMs"
-  | "closeMs"
-  | "closeDeadlineMs"
 type Observation = {
   phase: string
   ready: boolean
@@ -41,7 +29,7 @@ type Observation = {
   proven: boolean
   timedOut: boolean
   timedOutAtMs?: number
-  delivery?: Partial<Record<DeliveryEvent, number>>
+  delivery?: DeliveryReceipt
 }
 
 interface DiagnosticChild {
@@ -205,23 +193,19 @@ export function observeHolder(
     const state: Observation = { phase: "spawn", ready: false, closed: false, proven: false, timedOut: false }
     const started = clock.now()
     const elapsed = () => clock.now() - started
-    const delivery: Observation["delivery"] = timeline ? {} : undefined
-    function mark(event: DeliveryEvent) {
-      if (!delivery || delivery[event] !== undefined) return
-      delivery[event] = Math.min(MAX_REPORTED_MS, Math.max(0, Math.round(elapsed() / 10) * 10))
-    }
+    const delivery = timeline ? WindowsHolder.deliveryTimeline(elapsed) : undefined
     const child = launch()
-    mark("launchReturnedMs")
+    delivery?.mark("launchReturnedMs")
     const timeout = () => {
       if (state.timedOut) return
-      mark("watchdogMs")
+      delivery?.mark("watchdogMs")
       state.timedOut = true
       if (timeline) state.timedOutAtMs = Math.round(elapsed())
       child.kill()
     }
     const cancelWatchdog = clock.schedule(timeout, timeline ? Math.max(0, STARTUP_MS - elapsed()) : STARTUP_MS)
     const cancelClose = clock.schedule(() => {
-      mark("closeDeadlineMs")
+      delivery?.mark("closeDeadlineMs")
       child.stdin.destroy()
       child.stdout.destroy()
       child.stderr.destroy()
@@ -230,16 +214,16 @@ export function observeHolder(
     function finish() {
       cancelWatchdog()
       cancelClose()
-      resolve({ ...state, ...(delivery ? { delivery: { ...delivery } } : {}) })
+      resolve({ ...state, ...(delivery ? { delivery: delivery.snapshot() } : {}) })
     }
-    child.once("spawn", () => mark("spawnEventMs"))
-    child.once("exit", () => mark("exitMs"))
+    child.once("spawn", () => delivery?.mark("spawnEventMs"))
+    child.once("exit", () => delivery?.mark("exitMs"))
     child.stdin.on("error", () => {})
     child.stdout.resume()
     let pending = ""
     let bytes = 0
     child.stderr.on("data", (chunk: Buffer) => {
-      if (chunk.length) mark("firstStderrMs")
+      if (chunk.length) delivery?.mark("firstStderrMs")
       bytes += chunk.length
       if (bytes > 16_384) {
         state.phase = "status-bound"
@@ -259,7 +243,7 @@ export function observeHolder(
             child.kill()
             return
           }
-          if (phase === "host-entered") mark("firstMarkerMs")
+          if (phase === "host-entered") delivery?.mark("firstMarkerMs")
           state.phase = phase
           continue
         }
@@ -276,7 +260,7 @@ export function observeHolder(
           const value: unknown = JSON.parse(line.slice(15))
           if (!value || typeof value !== "object" || !("type" in value)) throw new Error("Invalid status")
           if (value.type === "startup" && "step" in value && value.step === 1 && Object.keys(value).length === 2)
-            mark("firstMarkerMs")
+            delivery?.mark("firstMarkerMs")
           if (value.type === "ready") {
             if (timeline) {
               const time = elapsed()
@@ -307,10 +291,10 @@ export function observeHolder(
       state.phase = "spawn-error"
     })
     child.once("close", () => {
-      mark("closeMs")
+      delivery?.mark("closeMs")
       state.closed = true
       finish()
     })
-    child.stdin.write(config(), (error) => mark(error ? "configWriteFailedMs" : "configWrittenMs"))
+    child.stdin.write(config(), (error) => delivery?.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
   })
 }

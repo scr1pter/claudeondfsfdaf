@@ -26,6 +26,8 @@ export class WindowsProcessError extends Error {
   }
 }
 
+export class WindowsProcessStartupTimeout extends WindowsProcessError {}
+
 const STARTUP_MS = 15_000
 const PERSIST_MS = 10_000
 const STOP_MS = 2_000
@@ -106,6 +108,8 @@ export class StatusReader {
   private startupStep = 0
   private startupComplete = false
 
+  constructor(private readonly onFirstStartupPhase?: () => void) {}
+
   get startupPhase() {
     return WindowsHolder.startupPhases[this.startupStep]!
   }
@@ -135,6 +139,7 @@ export class StatusReader {
         )
           throw new Error("Invalid Windows holder startup phase")
         this.startupStep = next
+        if (next === 1) this.onFirstStartupPhase?.()
         continue
       }
       this.startupComplete = true
@@ -204,6 +209,8 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
       return value ? [[key, value]] : []
     }),
   )
+  const launchStarted = performance.now()
+  const delivery = WindowsHolder.deliveryTimeline(() => performance.now() - launchStarted)
   const child = preflight(() =>
     spawn(holder, WindowsHolder.argumentsForHolder(), {
       cwd: path.win32.join(root, "System32"),
@@ -212,6 +219,8 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
       stdio: ["pipe", "pipe", "pipe"],
     }),
   )
+  delivery.mark("launchReturnedMs")
+  child.once("spawn", () => delivery.mark("spawnEventMs"))
   const ready = deferred<number>()
   const running = deferred<void>()
   const closed = deferred<void>()
@@ -308,13 +317,15 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
   child.once("exit", () => {
     timers.push(setTimeout(() => overdue("Windows shell output did not close after holder exit"), CLOSE_MS))
   })
-  const reader = new StatusReader()
+  const reader = new StatusReader(() => delivery.mark("firstMarkerMs"))
   child.stderr.on("data", (chunk: Buffer) => {
+    if (chunk.length) delivery.mark("firstStderrMs")
     try {
       for (const message of reader.push(chunk)) {
         if (state.terminal) throw new Error("Unexpected status after Windows holder termination")
         if (message.type === "ready") {
           if (state.pid !== undefined) throw new Error("Duplicate Windows holder readiness")
+          delivery.mark("readyMs")
           state.pid = message.pid
           ready.resolve(message.pid)
           continue
@@ -375,13 +386,12 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
       finish()
     }
   })()
-  child.stdin.write(config)
+  child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
   try {
-    const pid = await bounded(
-      ready.promise,
-      STARTUP_MS,
-      () => `Windows containment helper startup timed out (last phase: ${reader.startupPhase})`,
-    )
+    const pid = await bounded(ready.promise, STARTUP_MS, () => {
+      delivery.mark("watchdogMs")
+      return `Windows containment helper startup timed out (last phase: ${reader.startupPhase})`
+    })
     await bounded(callbacks.onReady(pid), PERSIST_MS, "Saving the background shell PID timed out")
     if (state.stopping || state.failure || state.closed || callbacks.signal?.aborted)
       throw state.failure ?? new Error("Background shell stopped during startup")
@@ -391,11 +401,16 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
     return { pid, completion: completion.promise, stop: () => stop() }
   } catch (cause) {
     await stop(cause).catch(() => {})
-    throw new WindowsProcessError(
-      state.failure?.message ?? "Windows shell startup failed",
-      state.closed && state.proof && state.drained,
-      { cause },
-    )
+    const message = state.failure?.message ?? "Windows shell startup failed"
+    const terminationProven = state.closed && state.proof && state.drained
+    const timings = delivery.snapshot()
+    if (cause === state.failure && timings.watchdogMs !== undefined)
+      throw new WindowsProcessStartupTimeout(
+        `${message} (holder startup transport: ${JSON.stringify(timings)})`,
+        terminationProven,
+        { cause },
+      )
+    throw new WindowsProcessError(message, terminationProven, { cause })
   }
 }
 
