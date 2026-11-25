@@ -4,29 +4,45 @@ import path from "node:path"
 import { spawn, execFile, type SpawnOptions } from "node:child_process"
 import { promisify } from "node:util"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import { descriptorReceipt, inspectOwnDescriptorMetadata } from "./sandbox-fd-observation"
 import { mcpProbeCode } from "./sandbox-mcp-code"
+
+export async function withToolProbeProfile<Result>(
+  probeTool: (root: string) => Promise<Result>,
+  probeTerminal?: () => Promise<void>,
+): Promise<Result> {
+  const root = await fs.mkdtemp(path.join(process.env.RUNNER_TEMP!, "tool-process-probe-"))
+  try {
+    for (const [name, directory] of Object.entries({
+      XDG_DATA_HOME: "data",
+      XDG_CONFIG_HOME: "config",
+      XDG_STATE_HOME: "state",
+      XDG_CACHE_HOME: "cache",
+    })) {
+      process.env[name] = path.join(root, directory)
+      await fs.mkdir(process.env[name]!, { recursive: true })
+    }
+    process.env.VECTOR_DISABLE_MODELS_FETCH = "true"
+    process.env.VECTOR_BRAIN_EMBED = "off"
+    process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
+    process.env.VECTOR_PURE = "1"
+
+    const result = await probeTool(root)
+    // The PTY event store uses the same XDG paths that the tool initialized.
+    await probeTerminal?.()
+    return result
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+}
 
 /**
  * CI-only: the real ShellTool must not signal an engine-shaped process outside its tool namespace. A build without the
  * bubblewrap floor has no such namespace: its tools share the engine's UID and PID namespace, so the probe records what
  * they can see with signal 0, which leaves the target's inspector closed, and asserts only the guards that build keeps.
  */
-export async function probeToolProcesses() {
+export async function probeToolProcesses(root: string, syntheticProof?: string) {
   const floor = ProcessIsolation.FLOOR
-  const root = await fs.mkdtemp(path.join(process.env.RUNNER_TEMP!, "tool-process-probe-"))
-  for (const [name, directory] of Object.entries({
-    XDG_DATA_HOME: "data",
-    XDG_CONFIG_HOME: "config",
-    XDG_STATE_HOME: "state",
-    XDG_CACHE_HOME: "cache",
-  })) {
-    process.env[name] = path.join(root, directory)
-    await fs.mkdir(process.env[name]!, { recursive: true })
-  }
-  process.env.VECTOR_DISABLE_MODELS_FETCH = "true"
-  process.env.VECTOR_BRAIN_EMBED = "off"
-  process.env.VECTOR_DISABLE_PROJECT_CONFIG = "1"
-  process.env.VECTOR_PURE = "1"
   const errorCode = (error: unknown) =>
     error && typeof error === "object" && "code" in error && typeof error.code === "string"
       ? error.code.slice(0, 40)
@@ -93,7 +109,10 @@ export async function probeToolProcesses() {
       file === "/bin/true"
         ? []
         : mode === "ipc"
-          ? ["-e", 'process.send({kind:"fixed-control"});process.disconnect()']
+          ? [
+              "-e",
+              `const ipc=require("node:fs").fstatSync(3,{bigint:true}); const descriptor=(${inspectOwnDescriptorMetadata})(String(ipc.dev)+":"+String(ipc.ino),["1","3"]); process.send({kind:"fixed-control",descriptor});process.disconnect()`,
+            ]
           : ["-e", "0"]
     const child = spawn(file, args, options)
     const observation: {
@@ -121,7 +140,14 @@ export async function probeToolProcesses() {
         observation.error = error.code ?? error.name
       })
       child.on("message", (value: unknown) => {
-        if (value && typeof value === "object" && "kind" in value && value.kind === "fixed-control")
+        if (
+          value &&
+          typeof value === "object" &&
+          "kind" in value &&
+          value.kind === "fixed-control" &&
+          "descriptor" in value &&
+          descriptorReceipt(value.descriptor, true)
+        )
           observation.acknowledged = true
       })
       child.once("close", (code, signal) => {
@@ -398,7 +424,13 @@ export async function probeToolProcesses() {
       dummy.send("report")
       if ((await loaderReport).opened !== false) throw new Error("A refused loader signalled the disposable engine")
       const signal = floor ? "'SIGUSR1'" : "0"
-      const code = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),${signal});sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};process.stdout.write(JSON.stringify(result))`
+      const processObservation = `const fs=require('node:fs');let visible=true;try{fs.readFileSync('/proc/'+process.argv[1]+'/cmdline')}catch{visible=false}let sent=false;try{process.kill(Number(process.argv[1]),${signal});sent=true}catch{}const result={visible,sent,pid:process.pid,ppid:process.ppid};`
+      const emitObservation = "process.stdout.write(JSON.stringify(result))"
+      const code = processObservation + emitObservation
+      // A separate fixed receipt accompanies the existing real ShellTool call only for the dummy Codium proof.
+      const shellCode = syntheticProof
+        ? `${processObservation}result.descriptor=(${inspectOwnDescriptorMetadata})(${JSON.stringify(syntheticProof)});${emitObservation}`
+        : code
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
       phase = "actual-shell-tool"
       const output = await Effect.runPromise(
@@ -413,7 +445,7 @@ export async function probeToolProcesses() {
               const tool = yield* info.init()
               return yield* tool.execute(
                 {
-                  command: `${quote(node)} -e ${quote(code)} ${dummy.pid}`,
+                  command: `${quote(node)} -e ${quote(shellCode)} ${dummy.pid}`,
                   timeout: 10000,
                 },
                 {
@@ -435,6 +467,14 @@ export async function probeToolProcesses() {
         }).pipe(Effect.scoped, Effect.provide(layer), Effect.timeout("20 seconds")),
       )
       const actual: unknown = JSON.parse(output.output)
+      const shellProofExcluded =
+        !!syntheticProof &&
+        !!actual &&
+        typeof actual === "object" &&
+        "descriptor" in actual &&
+        descriptorReceipt(actual.descriptor, false)
+      if (syntheticProof && !shellProofExcluded)
+        throw new Error("The actual ShellTool did not exclude the synthetic proof descriptor")
       const observed: { visible: boolean; sent: boolean }[] = []
       function assertBlocked(value: unknown, label: string) {
         if (
@@ -613,6 +653,7 @@ export async function probeToolProcesses() {
       return {
         floor,
         actualShellTool: true,
+        shellProofExcluded,
         sameUid: true,
         // Observed values: without the floor these may be false, and the runner asserts them only for a floor build.
         targetInvisible: observed.every((value) => !value.visible),
@@ -662,6 +703,5 @@ export async function probeToolProcesses() {
     }
   } finally {
     network.uninstall()
-    await fs.rm(root, { recursive: true, force: true })
   }
 }
