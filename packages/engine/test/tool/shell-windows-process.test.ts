@@ -666,7 +666,18 @@ async function fixture() {
   await mkdir(directory)
   return {
     path: directory,
-    [Symbol.asyncDispose]: () => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+    async [Symbol.asyncDispose]() {
+      // Bun can return EBUSY immediately on Windows while the OS releases a stopped process's directory.
+      for (let retries = 0; ; retries++) {
+        try {
+          await rm(root, { recursive: true, force: true })
+          return
+        } catch (error) {
+          if (retries === 5 || (error as NodeJS.ErrnoException).code !== "EBUSY") throw error
+          await Bun.sleep((retries + 1) * 100)
+        }
+      }
+    },
   }
 }
 function counter(cwd: string) {
