@@ -138,7 +138,15 @@ const booleanSelectors = [
   "production_benchmark",
   "offline_footprint",
 ] as const
-const ordinaryJobs = ["computer-helper", "unit", "desktop-engine-node", "engine-linux", "engine-windows", "e2e"]
+const ordinaryJobs = [
+  "computer-helper",
+  "unit",
+  "desktop-engine-node",
+  "engine-linux",
+  "windows-holder-build",
+  "engine-windows",
+  "e2e",
+]
 const targetJobs = {
   all: "computer-helper",
   linux: "computer-helper",
