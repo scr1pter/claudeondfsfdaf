@@ -35,6 +35,7 @@ try {
       throw new Error("The integration checkout does not match the compiled holder")
   }
   const asset = {
+    arch: runner.arch,
     run: runner.run,
     attempt: runner.attempt,
     revision: runner.revision,
@@ -44,7 +45,7 @@ try {
   await writeFile(new URL("./asset.generated.ts", import.meta.url), `export const asset = ${JSON.stringify(asset)}\n`, {
     flag: "wx",
   })
-  console.log("Verified and embedded the paired Windows x64 holder for integration.")
+  console.log("Verified and embedded the paired Windows holder for integration.")
 } catch {
   console.error("The direct Windows holder could not be verified and embedded for this test job.")
   process.exitCode = 1

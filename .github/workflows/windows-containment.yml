@@ -21,11 +21,11 @@ on:
         options: [x64, arm64]
         default: x64
       direct_holder_integration:
-        description: Exercise the x64 background-command integration with the direct holder
+        description: Exercise background-command integration with the verified holder
         type: boolean
         default: false
       direct_holder_backend:
-        description: x64 integration launch mode
+        description: Background-command integration launch mode
         type: choice
         options: [staged, carrier]
         default: staged
@@ -105,7 +105,7 @@ jobs:
       payload_digest: ${{ steps.compile.outputs.payload_digest }}
     steps:
       - name: Check the hosted integration selection
-        if: (inputs.direct_holder_integration && inputs.direct_holder_arch != 'x64') || (inputs.direct_holder_backend == 'carrier' && !inputs.direct_holder_integration)
+        if: (inputs.direct_holder_integration && inputs.direct_holder_arch != 'x64' && inputs.direct_holder_backend != 'carrier') || (inputs.direct_holder_backend == 'carrier' && !inputs.direct_holder_integration)
         shell: cmd
         run: exit /b 1
       - name: Checkout the exact comparison revision
@@ -163,12 +163,13 @@ jobs:
         run: bun --no-env-file script/diagnose-direct-windows-holder.mjs measure
 
   direct-holder-integration:
-    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && inputs.direct_holder_arch == 'x64' && inputs.direct_holder_integration
+    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && inputs.direct_holder_integration && (inputs.direct_holder_arch == 'x64' || inputs.direct_holder_backend == 'carrier')
     needs: direct-holder-build
-    runs-on: windows-latest
+    runs-on: ${{ inputs.direct_holder_arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
     timeout-minutes: 25
     env:
       VECTOR_DIRECT_HOLDER_FIXTURE: "1"
+      VECTOR_DIRECT_HOLDER_ARCH: ${{ inputs.direct_holder_arch }}
       VECTOR_DIRECT_HOLDER_BACKEND: ${{ inputs.direct_holder_backend }}
       VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
     steps:
@@ -187,10 +188,10 @@ jobs:
           install-flags: --frozen-lockfile --ignore-scripts
       - name: Install native ripgrep
         uses: ./.github/actions/install-ripgrep-windows
-      - name: Download the paired same-run x64 artifact
+      - name: Download the paired same-run holder artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: direct-holder-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          name: direct-holder-${{ inputs.direct_holder_arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/vector-direct-holder
       - name: Embed the verified holder and apply the isolated test patch
         shell: bash

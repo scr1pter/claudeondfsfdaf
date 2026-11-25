@@ -23,6 +23,7 @@ export async function preparePowerShellCarrier() {
     throw new Error("The verified Windows carrier was not selected for its hosted x64 fixture.")
   const { asset } = await import(new URL("./asset.generated.ts", import.meta.url).href)
   if (
+    asset.arch !== context.arch ||
     asset.run !== context.run ||
     asset.attempt !== context.attempt ||
     asset.revision !== context.revision ||
@@ -36,6 +37,11 @@ export async function preparePowerShellCarrier() {
   const bytes = Buffer.from(asset.base64, "base64")
   if (!bytes.length || bytes.length > maximumBytes || createHash("sha256").update(bytes).digest("hex") !== asset.sha256)
     throw new Error("Invalid Windows carrier fixture bytes.")
+  // The ARM64 console entrypoint verifies that the carrier itself is a native process before entering the holder.
+  const entry =
+    context.arch === "arm64"
+      ? "$assembly.EntryPoint"
+      : "$assembly.GetType('VectorShellHolder',$true).GetMethod('Run',[Type]::EmptyTypes)"
 
   // Only validated numeric length and hex digest enter this fixed script. Stdin starts with the paired fixture bytes.
   const script = String.raw`$ErrorActionPreference='Stop'
@@ -55,8 +61,8 @@ try {
   finally { $sha.Dispose() }
   if ($hex -cne '${asset.sha256}') { throw 'Invalid fixture prefix' }
   [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"startup","step":2}')
-  $type=[Reflection.Assembly]::Load($bytes).GetType('VectorShellHolder',$true)
-  $entry=$type.GetMethod('Run',[Type]::EmptyTypes)
+  $assembly=[Reflection.Assembly]::Load($bytes)
+  $entry=${entry}
   if ($null -eq $entry -or -not $entry.IsStatic -or $entry.ReturnType -ne [int]) { throw 'Invalid fixture entry point' }
 } catch {
   [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"error","terminationProven":true,"message":"The Windows carrier could not verify and load the holder"}')
