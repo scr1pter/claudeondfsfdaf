@@ -110,6 +110,25 @@ function fileSha256([string]$path) {
   } finally { $stream.Dispose() }
 }
 
+function holderDigest([string]$name, [string]$releaseTarget) {
+  $arch = switch -CaseSensitive ($releaseTarget) {
+    'windows-arm64' { 'arm64' }
+    'windows-x64' { 'x64' }
+    'windows-x64-baseline' { 'x64' }
+    default { throw 'Invalid Windows holder target.' }
+  }
+  $match = [regex]::Match($name, "\Avector-holder-${arch}-([a-f0-9]{64})\.exe\z")
+  if (-not $match.Success) { throw 'Invalid Windows holder filename.' }
+  return $match.Groups[1].Value
+}
+
+function Assert-Holder([string]$path, [string]$digest) {
+  $attributes = [IO.File]::GetAttributes($path)
+  if ($attributes -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) { throw 'The Windows holder must be a regular file.' }
+  $size = [IO.FileInfo]::new($path).Length
+  if ($size -le 0 -or $size -gt 1048576 -or (fileSha256 $path) -cne $digest) { throw 'Windows holder checksum or size did not match.' }
+}
+
 try {
   [IO.Directory]::CreateDirectory($stage) | Out-Null
   if ($OperationId) { Write-OperationStatus 'preparing' 'Downloading and verifying the requested Vector release.' }
@@ -119,9 +138,11 @@ try {
     $info = Get-Item -LiteralPath $metadata -Force
     if (-not $info.PSIsContainer -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Invalid standalone metadata directory.' }
     $row = [IO.File]::ReadAllText($receipt)
-    if ($row -cnotmatch '^vector-standalone\t1\t[^\t\r\n]+\t[^\t\r\n]+\t(latest|beta)\t[^\t\r\n]+\t[a-f0-9]{64}\t[a-f0-9]{64}\n$') { throw 'Invalid standalone receipt.' }
+    if ($row -cnotmatch '\Avector-standalone\t(1|2)\t[^\t\r\n]+\t[^\t\r\n]+\t(latest|beta)\t[^\t\r\n]+\t[a-f0-9]{64}\t[a-f0-9]{64}(\t[^\t\r\n]+)?\n\z') { throw 'Invalid standalone receipt.' }
     $fields = $row.TrimEnd("`n").Split("`t")
     if ($fields[2].Length -gt 100 -or $fields[2] -cnotmatch $versionPattern -or $fields[3] -cnotmatch '^(darwin-(arm64|x64(-baseline)?)|linux-(arm64|x64(-baseline)?)(-musl)?|windows-(arm64|x64(-baseline)?))$') { throw 'Invalid receipt version or target.' }
+    if (($fields[1] -ceq '1' -and $fields.Length -ne 8) -or ($fields[1] -ceq '2' -and $fields.Length -ne 9)) { throw 'Invalid standalone receipt.' }
+    if ($fields[1] -ceq '2') { $null = holderDigest $fields[8] $fields[3] }
     $priorChannel = $fields[4]
     if ($fields[5] -cne $BinaryName -or (fileSha256 $destination) -cne $fields[6]) { throw 'Existing executable differs from its standalone receipt; it was not overwritten.' }
     $names = @(Get-ChildItem -LiteralPath $metadata -Force | ForEach-Object { $_.Name } | Sort-Object)
@@ -145,20 +166,34 @@ try {
   if ((Get-Item -LiteralPath $archive).Length -ne [long]$release.size -or (fileSha256 $archive) -cne $release.sha256) { throw 'Archive checksum or size did not match; existing installation is unchanged.' }
   $extracted = Join-Path $stage 'extracted'
   [IO.Directory]::CreateDirectory($extracted) | Out-Null
+  $holder = $null
+  $expectedEntries = @('DEPENDENCY_NOTICES.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'vector.exe')
   $zip = [IO.Compression.ZipFile]::OpenRead($archive)
   try {
-    $entries = @($zip.Entries.FullName | Sort-Object)
-    if (($entries -join '|') -cne 'DEPENDENCY_NOTICES.md|LICENSE|THIRD_PARTY_NOTICES.md|vector.exe') { throw 'Archive contains unexpected paths or duplicate entries.' }
+    $entries = @($zip.Entries.FullName)
+    if ($entries.Length -ne 4 -and $entries.Length -ne 5) { throw 'Archive contains unexpected paths or duplicate entries.' }
+    foreach ($name in $expectedEntries) {
+      if (@($entries -ceq $name).Length -ne 1) { throw 'Archive contains unexpected paths or duplicate entries.' }
+    }
+    if ($entries.Length -eq 5) {
+      $holder = $entries | Where-Object { $_ -cnotin $expectedEntries }
+      $digest = holderDigest $holder $target
+    }
     [long]$total = 0
     foreach ($entry in $zip.Entries) {
       $kind = ($entry.ExternalAttributes -shr 16) -band 0xf000
       if ($kind -ne 0 -and $kind -ne 0x8000) { throw 'Archive links and special files are forbidden.' }
       if ($entry.ExternalAttributes -band [int][IO.FileAttributes]::ReparsePoint) { throw 'Archive reparse points are forbidden.' }
+      if ($holder -and $entry.FullName -ceq $holder -and ($entry.Length -le 0 -or $entry.Length -gt 1048576)) { throw 'Windows holder exceeds its size limit.' }
       $total += $entry.Length
       if ($total -gt 1000000000) { throw 'Extracted archive is too large.' }
       [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $extracted $entry.FullName), $false)
     }
   } finally { $zip.Dispose() }
+  if ($holder) {
+    $stagedHolder = [IO.Path]::Combine($extracted, $holder)
+    Assert-Holder $stagedHolder $digest
+  }
   $stagedBinary = Join-Path $extracted 'vector.exe'
   $reported = & $stagedBinary --version
   if ($LASTEXITCODE -ne 0 -or ($reported -join "`n") -cne $release.version) { throw 'Verified binary reports a different version; existing installation is unchanged.' }
@@ -167,7 +202,9 @@ try {
   foreach ($name in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'DEPENDENCY_NOTICES.md')) { [IO.File]::Move((Join-Path $extracted $name), (Join-Path $newMetadata $name)) }
   $channel = if ($Version -eq 'beta' -or $release.version.Contains('-') -or ($Version -ne 'latest' -and $priorChannel -eq 'beta')) { 'beta' } else { 'latest' }
   $binaryHash = fileSha256 $stagedBinary
-  [IO.File]::WriteAllText((Join-Path $newMetadata 'receipt.tsv'), "vector-standalone`t1`t$($release.version)`t$target`t$channel`t$BinaryName`t$binaryHash`t$($release.sha256)`n", $utf8)
+  $receiptSchema = if ($holder) { '2' } else { '1' }
+  $receiptSuffix = if ($holder) { "`t$holder`n" } else { "`n" }
+  [IO.File]::WriteAllText((Join-Path $newMetadata 'receipt.tsv'), "vector-standalone`t$receiptSchema`t$($release.version)`t$target`t$channel`t$BinaryName`t$binaryHash`t$($release.sha256)$receiptSuffix", $utf8)
   if ($WaitForProcessId -gt 0) {
     $expected = $WaitForStartTicks.ToString()
     if ((parentTicks) -ne $expected) { throw 'The upgrading process identity changed before preparation.' }
@@ -188,11 +225,26 @@ try {
       [Threading.Thread]::Sleep(200)
     }
   }
-  $replaced = $true
-  if ($hadOriginal) { [IO.File]::Replace($stagedBinary, $destination, $oldBinary) } else { [IO.File]::Move($stagedBinary, $destination) }
+  if ($holder) {
+    $holderDestination = [IO.Path]::Combine($InstallDir, $holder)
+    if (-not [IO.File]::Exists($holderDestination)) {
+      try { [IO.File]::Move($stagedHolder, $holderDestination) } catch {
+        # A different standalone binary may install the same digest under its own lock.
+        if (-not [IO.File]::Exists($holderDestination)) { throw }
+      }
+    }
+    Assert-Holder $holderDestination $digest
+  }
+  if ($hadOriginal) {
+    $replaced = $true
+    [IO.File]::Replace($stagedBinary, $destination, $oldBinary)
+  } else {
+    [IO.File]::Move($stagedBinary, $destination)
+    $replaced = $true
+  }
   if (Test-Path -LiteralPath $metadata) { [IO.Directory]::Move($metadata, $oldMetadata) }
-  $metadataReplaced = $true
   [IO.Directory]::Move($newMetadata, $metadata)
+  $metadataReplaced = $true
   $committed = $true
   try { Write-OperationStatus 'complete' "Vector $($release.version) is installed." } catch { Write-Warning "Vector is installed, but completion status could not be written: $statusPath" }
   Write-Host "Vector $($release.version) installed at $destination"
@@ -206,7 +258,11 @@ try {
     } catch { $rollbackFailed = $true }
     try {
       if ($replaced) {
-        if (Test-Path -LiteralPath $oldBinary) { [IO.File]::Replace($oldBinary, $destination, [System.Management.Automation.Language.NullString]::Value) } elseif (-not $hadOriginal) { [IO.File]::Delete($destination) }
+        if ([IO.File]::Exists($oldBinary)) {
+          if ([IO.File]::Exists($destination)) {
+            [IO.File]::Replace($oldBinary, $destination, [System.Management.Automation.Language.NullString]::Value)
+          } else { [IO.File]::Move($oldBinary, $destination) }
+        } elseif (-not $hadOriginal) { [IO.File]::Delete($destination) }
       }
     } catch { $rollbackFailed = $true }
   }
