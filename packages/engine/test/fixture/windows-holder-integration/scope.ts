@@ -3,14 +3,18 @@ import path from "node:path"
 export function integrationRunner() {
   const env = process.env
   const arch = env.VECTOR_DIRECT_HOLDER_ARCH
+  const backend = env.VECTOR_DIRECT_HOLDER_BACKEND
+  // The ordinary Engine lane disables Actions-specific application paths in its test process.
+  const shard8 = env.VECTOR_DIRECT_HOLDER_SHARD8 === "1"
   if (
     (arch !== "x64" && arch !== "arm64") ||
-    (arch === "arm64" && env.VECTOR_DIRECT_HOLDER_BACKEND !== "carrier") ||
+    (arch === "arm64" && backend !== "carrier") ||
+    (shard8 && (arch !== "x64" || (backend !== "staged" && backend !== "carrier"))) ||
     process.platform !== "win32" ||
     process.arch !== arch ||
     env.RUNNER_ARCH !== arch.toUpperCase() ||
     env.CI !== "true" ||
-    env.GITHUB_ACTIONS !== "true" ||
+    env.GITHUB_ACTIONS !== (shard8 ? "false" : "true") ||
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
     env.RUNNER_ENVIRONMENT !== "github-hosted" ||
     env.VECTOR_DIRECT_HOLDER_FIXTURE !== "1" ||
