@@ -9,9 +9,18 @@
 // The relay forwards only ciphertext and the API's signed job offers, and never logs a ticket, an account, an offer
 // or a frame.
 
-import { AccountRelay, INTERNAL_ACTIONS, KILL_KEY, NONCE_HEADER, TICKET_HEADER, answer, failure } from "./account-relay"
+import {
+  AccountRelay,
+  INTERNAL_ACTIONS,
+  KILL_KEY,
+  NONCE_HEADER,
+  SIGNED_AT_HEADER,
+  TICKET_HEADER,
+  answer,
+  failure,
+} from "./account-relay"
 import { readPrefix } from "./bytes"
-import { internalSecret, verifyInternalSignature } from "./internal"
+import { internalSecret, verifyInternalRequest } from "./internal"
 import { RELAY_LIMITS } from "./limits"
 import { CLOSE, CLOSE_REASON, CONNECT_PATH, RELAY_SUBPROTOCOL } from "./protocol"
 import { workersRuntime, type Env, type Runtime } from "./runtime"
@@ -86,7 +95,7 @@ async function internal(request: Request, env: Env, runtime: Runtime, url: URL):
   if (!read.complete || read.bytes.byteLength > RELAY_LIMITS.internalBodyBytes)
     return failure(413, "INTERNAL_TOO_LARGE")
   const body = read.bytes
-  const check = await verifyInternalSignature(
+  const check = await verifyInternalRequest(
     secret,
     { method: request.method, path: `${url.pathname}${url.search}`, headers: request.headers, body },
     runtime.now(),
@@ -111,7 +120,11 @@ async function internal(request: Request, env: Env, runtime: Runtime, url: URL):
   return stub.fetch(
     new Request(`https://relay.invalid/internal/${action}`, {
       method: "POST",
-      headers: { "content-type": "application/json", [NONCE_HEADER]: check.nonce },
+      headers: {
+        "content-type": "application/json",
+        [NONCE_HEADER]: check.nonce,
+        ...(action === "flags" ? { [SIGNED_AT_HEADER]: String(check.signedAt) } : {}),
+      },
       body: JSON.stringify(parsed),
     }),
   )
