@@ -1,0 +1,113 @@
+diff --git a/packages/engine/src/tool/shell/windows-process.ts b/packages/engine/src/tool/shell/windows-process.ts
+--- a/packages/engine/src/tool/shell/windows-process.ts
++++ b/packages/engine/src/tool/shell/windows-process.ts
+@@ -2 +2 @@
+-import { access, stat } from "node:fs/promises"
++import { stat } from "node:fs/promises"
+@@ -7,0 +8,4 @@
++import {
++  IntegrationHolderDeadline,
++  prepareIntegrationHolder,
++} from "../../../test/fixture/windows-holder-integration/runtime"
+@@ -108 +112 @@
+-  private startupStep = 0
++  private startupStep: number
+@@ -111 +115,6 @@
+-  constructor(private readonly onFirstStartupPhase?: () => void) {}
++  constructor(
++    private readonly onFirstStartupPhase?: () => void,
++    private readonly firstStartupStep: 1 | 4 = 1,
++  ) {
++    this.startupStep = firstStartupStep - 1
++  }
+@@ -114 +123 @@
+-    return WindowsHolder.startupPhases[this.startupStep]!
++    return this.startupStep < this.firstStartupStep ? "spawn" : WindowsHolder.startupPhases[this.startupStep]!
+@@ -142 +151 @@
+-        if (next === 1) this.onFirstStartupPhase?.()
++        if (next === this.firstStartupStep) this.onFirstStartupPhase?.()
+@@ -181 +190 @@
+-  // Defense in depth: the holder spawns PowerShell directly, never through ProcessIsolation.launch, so it refuses here
++  // Defense in depth: the holder starts directly, never through ProcessIsolation.launch, so it refuses here
+@@ -190,5 +199 @@
+-    throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true)
+-  const holder = path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+-  await access(holder).catch((cause) => {
+-    throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true, { cause })
+-  })
++    throw new WindowsProcessError("Windows containment helper is unavailable", true)
+@@ -212,0 +218 @@
++  const startupDeadline = launchStarted + STARTUP_MS
+@@ -214,8 +220,35 @@
+-  const child = preflight(() =>
+-    spawn(holder, WindowsHolder.argumentsForHolder(), {
+-      cwd: path.win32.join(root, "System32"),
+-      env: helperEnv,
+-      windowsHide: true,
+-      stdio: ["pipe", "pipe", "pipe"],
+-    }),
+-  )
++  const startupTimeout = (phase: (typeof WindowsHolder.startupPhases)[number]) => {
++    delivery.mark("watchdogMs")
++    return `Windows containment helper startup timed out (last phase: ${phase})`
++  }
++  const staged = await prepareIntegrationHolder(startupDeadline).catch((cause) => {
++    if (cause instanceof IntegrationHolderDeadline) {
++      const message = startupTimeout("spawn")
++      throw new WindowsProcessStartupTimeout(
++        `${message} (holder startup transport: ${JSON.stringify(delivery.snapshot())})`,
++        true,
++      )
++    }
++    throw new WindowsProcessError("The verified Windows integration holder is unavailable", true)
++  })
++  if (callbacks.signal?.aborted) {
++    void staged.release()
++    throw new WindowsProcessError("Background shell stopped before startup", true)
++  }
++  if (performance.now() >= startupDeadline) {
++    void staged.release()
++    throw new WindowsProcessStartupTimeout(startupTimeout("spawn"), true)
++  }
++  const child = (() => {
++    try {
++      return spawn(staged.executable, [], {
++        cwd: path.win32.join(root, "System32"),
++        env: helperEnv,
++        windowsHide: true,
++        stdio: ["pipe", "pipe", "pipe"],
++      })
++    } catch {
++      void staged.release()
++      throw new WindowsProcessError("The Windows integration holder could not start", true)
++    }
++  })()
+@@ -301 +334 @@
+-  child.on("error", (cause) => {
++  child.on("error", () => {
+@@ -304 +337 @@
+-    void stop(cause).catch(() => {})
++    void stop(new Error("The Windows integration holder could not start")).catch(() => {})
+@@ -313,0 +347 @@
++    void staged.release()
+@@ -320 +354,2 @@
+-  const reader = new StatusReader(() => delivery.mark("firstMarkerMs"))
++  // This verified direct native holder has no PowerShell bootstrap frames. Its first real frame is step 4.
++  const reader = new StatusReader(() => delivery.mark("firstMarkerMs"), 4)
+@@ -327,0 +363,4 @@
++          if (performance.now() >= startupDeadline) {
++            void stop(new Error(startupTimeout(reader.startupPhase))).catch(() => {})
++            continue
++          }
+@@ -389 +427,0 @@
+-  child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
+@@ -391,4 +429,5 @@
+-    const pid = await bounded(ready.promise, STARTUP_MS, () => {
+-      delivery.mark("watchdogMs")
+-      return `Windows containment helper startup timed out (last phase: ${reader.startupPhase})`
+-    })
++    if (performance.now() >= startupDeadline) throw new Error(startupTimeout(reader.startupPhase))
++    child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
++    const pid = await bounded(ready.promise, Math.max(0, Math.ceil(startupDeadline - performance.now())), () =>
++      startupTimeout(reader.startupPhase),
++    )

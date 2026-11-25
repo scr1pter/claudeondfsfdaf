@@ -20,12 +20,16 @@ on:
         type: choice
         options: [x64, arm64]
         default: x64
+      direct_holder_integration:
+        description: Exercise the x64 background-command integration with the direct holder
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && format('-direct-{0}', inputs.direct_holder_arch) || '' }}
+  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && format('-direct-{0}-{1}', inputs.direct_holder_arch, inputs.direct_holder_integration) || '' }}
   cancel-in-progress: true
 
 env:
@@ -95,6 +99,10 @@ jobs:
     outputs:
       payload_digest: ${{ steps.compile.outputs.payload_digest }}
     steps:
+      - name: Require x64 for the integration fixture
+        if: inputs.direct_holder_integration && inputs.direct_holder_arch != 'x64'
+        shell: cmd
+        run: exit /b 1
       - name: Checkout the exact comparison revision
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -117,7 +125,7 @@ jobs:
           retention-days: 1
 
   direct-holder-measure:
-    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison
+    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && !inputs.direct_holder_integration
     needs: direct-holder-build
     runs-on: ${{ inputs.direct_holder_arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
     timeout-minutes: 15
@@ -148,3 +156,66 @@ jobs:
         env:
           VECTOR_DIRECT_HOLDER_PAYLOAD_DIGEST: ${{ needs.direct-holder-build.outputs.payload_digest }}
         run: bun --no-env-file script/diagnose-direct-windows-holder.mjs measure
+
+  direct-holder-integration:
+    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && inputs.direct_holder_arch == 'x64' && inputs.direct_holder_integration
+    needs: direct-holder-build
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      VECTOR_DIRECT_HOLDER_FIXTURE: "1"
+      VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
+    steps:
+      - name: Check out the exact comparison revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Set up pinned Bun and dependencies
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile --ignore-scripts
+      - name: Install native ripgrep
+        uses: ./.github/actions/install-ripgrep-windows
+      - name: Download the paired same-run x64 artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: direct-holder-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vector-direct-holder
+      - name: Embed the verified holder and apply the isolated test patch
+        shell: bash
+        env:
+          VECTOR_DIRECT_HOLDER_PAYLOAD_DIGEST: ${{ needs.direct-holder-build.outputs.payload_digest }}
+        run: |
+          set -euo pipefail
+          fixture=packages/engine/test/fixture/windows-holder-integration
+          source=packages/engine/src/tool/shell/windows-process.ts
+          patch="$fixture/windows-process.integration.patch"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet "$GITHUB_SHA" -- "$source" packages/engine/src/tool/shell/windows-holder.ts "$fixture"
+          bun --no-env-file "$fixture/embed.mjs"
+          # Canonicalize those files only after verifying the actual checkout and its original artifact source digests.
+          git show "$GITHUB_SHA:$source" > "$source"
+          git show "$GITHUB_SHA:$patch" > "$patch"
+          # The source's full SHA is pinned in the paired artifact, so this zero-context patch has an exact base.
+          git apply --unidiff-zero --check "$patch"
+          git apply --unidiff-zero "$patch"
+      - name: Run the real Windows process ownership and termination cases
+        timeout-minutes: 10
+        working-directory: packages/engine
+        shell: bash
+        run: bun --no-env-file test test/tool/shell-windows-process.test.ts --timeout 60000
+      - name: Run Windows durable background command integration
+        timeout-minutes: 5
+        working-directory: packages/engine
+        shell: bash
+        run: bun --no-env-file test test/task/shells.test.ts --timeout 60000
+      - name: Run Windows task management command integration
+        timeout-minutes: 5
+        working-directory: packages/engine
+        shell: bash
+        run: bun --no-env-file test test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
