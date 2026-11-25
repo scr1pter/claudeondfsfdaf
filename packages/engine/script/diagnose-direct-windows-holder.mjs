@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url"
 const holderSource = new URL("../src/tool/shell/windows-holder.ts", import.meta.url)
 const processSource = new URL("../src/tool/shell/windows-process.ts", import.meta.url)
 // Pin the actual maintained source, independent of the revision that adds this diagnostic.
-const sourceSHA = "01c7efbb2abdf21c6806485b7e3383d12d67df3ea9891bb2e3ea1b416273fd4e"
+const sourceSHA = "daf3b29805a8b100ff0843f2c6df4d8e01d8e1464352aeff2602bbba6709ad8e"
 const processSHA = "30c42a270453d34d1ec5230a5b2b65c428206cef13f0fa20233943c38353d706"
 const executableLimit = 1_048_576
 export const startupMs = 15_000
@@ -227,7 +227,7 @@ async function build(runner) {
 
 export function directReader(StatusReader) {
   const reader = new StatusReader()
-  // These are local parser setup only. The direct executable emits the unchanged native steps 4 through 7.
+  // These are local parser setup only. The direct executable emits the unchanged native steps 4 through 12.
   const prefix = [1, 2, 3].map((step) => 'VECTOR_SHELL/1 {"type":"startup","step":' + step + "}\n").join("")
   if (reader.push(Buffer.from(prefix)).length || reader.startupPhase !== "compiler-returned") {
     throw new Error("Unexpected Windows holder status protocol")

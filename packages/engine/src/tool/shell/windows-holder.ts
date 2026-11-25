@@ -53,11 +53,15 @@ public static class VectorShellHolder {
   static void Check(bool ok,string operation) { if(!ok) throw new Exception(operation+" failed ("+Marshal.GetLastWin32Error()+")"); }
   static void Emit(object value) { Console.Error.WriteLine("VECTOR_SHELL/1 "+new JavaScriptSerializer().Serialize(value)); Console.Error.Flush(); }
   static void Startup(int step) { Console.Error.WriteLine("VECTOR_SHELL/1 {\"type\":\"startup\",\"step\":"+step+"}"); }
-  static string Line(Stream stream,int max) {
+  static string Line(Stream stream,int max,bool config=false) {
     using(var bytes=new MemoryStream()) {
       for(int n=0;n<=max;n++) {
-        int b=stream.ReadByte(); if(b<0) return null;
-        if(b==10) return new UTF8Encoding(false,true).GetString(bytes.ToArray());
+        int b=stream.ReadByte(); if(b<0) return null; if(config&&n==0) Startup(6);
+        if(b==10) {
+          if(config) Startup(7);
+          var line=new UTF8Encoding(false,true).GetString(bytes.ToArray());
+          if(config) Startup(8); return line;
+        }
         if(n==max) throw new Exception("Control line too large"); bytes.WriteByte((byte)b);
       }
     }
@@ -83,17 +87,16 @@ public static class VectorShellHolder {
       stream=new BufferedStream(stream,4096);
       string configLine=null; bool readFailed=false;
       var reader=new Thread(()=> {
-        try { configLine=Line(stream,262144); }
+        try { Startup(5); configLine=Line(stream,262144,true); }
         catch(Exception) { readFailed=true; }
       });
       reader.IsBackground=true; reader.Start();
-      if(!reader.Join(15000)) throw new Exception("Configuration timeout or EOF");
+      if(!reader.Join(15000)||(!readFailed&&configLine==null)) throw new Exception("Configuration timeout or EOF");
       if(readFailed) throw new Exception("Configuration read failed");
-      if(configLine==null) throw new Exception("Configuration timeout or EOF");
-      var json=new JavaScriptSerializer(); json.MaxJsonLength=262144;
+      var json=new JavaScriptSerializer(); json.MaxJsonLength=262144; Startup(9);
       var cfg=json.Deserialize<Launch>(configLine);
       if(cfg==null || String.IsNullOrEmpty(cfg.file) || String.IsNullOrEmpty(cfg.commandLine) || cfg.commandLine.Length>32766 || cfg.env==null) throw new Exception("Invalid configuration");
-      Startup(5);
+      Startup(10);
       Check(SetHandleInformation(GetStdHandle(-10),1,0),"Control inheritance");
       Check(SetHandleInformation(GetStdHandle(-12),1,0),"Status inheritance");
       job=CreateJobObjectW(IntPtr.Zero,null); Check(job!=IntPtr.Zero,"Create job");
@@ -117,9 +120,9 @@ public static class VectorShellHolder {
       env=Marshal.StringToHGlobalUni(block.ToString());
       var start=new SX(); start.si.cb=Marshal.SizeOf(typeof(SX)); start.si.flags=0x100;
       start.si.input=input; start.si.output=output; start.si.error=output; start.attrs=attrs;
-      Startup(6);
+      Startup(11);
       Check(CreateProcessW(cfg.file,new StringBuilder(cfg.commandLine),IntPtr.Zero,IntPtr.Zero,true,0x08080404,env,cfg.cwd,ref start,out child),"Create suspended job process"); assigned=true;
-      Startup(7);
+      Startup(12);
       var control=new Thread(()=> {
         try {
           bool acknowledged=false;
@@ -172,6 +175,11 @@ export const startupPhases = [
   "utility-loaded",
   "compiler-returned",
   "reading-config",
+  "config-reader-ready",
+  "config-first-byte",
+  "config-newline",
+  "config-utf8-decoded",
+  "config-serializer-ready",
   "config-decoded",
   "creating-payload",
   "payload-created",
@@ -189,15 +197,21 @@ type DeliveryEvent =
   | "exitMs"
   | "closeMs"
   | "closeDeadlineMs"
+  | `phase_${StartupPhase}Ms`
 
 export type DeliveryReceipt = Partial<Record<DeliveryEvent, number>>
 
 /** Closed, failure-safe startup timings. The observer never receives command or stream data. */
 export function deliveryTimeline(elapsed: () => number) {
   const timings: DeliveryReceipt = {}
+  const mark = (event: DeliveryEvent) => {
+    timings[event] ??= Math.min(60_000, Math.max(0, Math.round(elapsed() / 10) * 10))
+  }
   return {
-    mark(event: DeliveryEvent) {
-      timings[event] ??= Math.min(60_000, Math.max(0, Math.round(elapsed() / 10) * 10))
+    mark,
+    markStartupPhase(phase: StartupPhase) {
+      if (phase === "reading-config") mark("firstMarkerMs")
+      mark(`phase_${phase}Ms`)
     },
     snapshot(): DeliveryReceipt {
       return { ...timings }

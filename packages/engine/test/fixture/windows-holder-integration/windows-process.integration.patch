@@ -4,41 +4,46 @@ diff --git a/packages/engine/src/tool/shell/windows-process.ts b/packages/engine
 @@ -2 +2 @@
 -import { access, stat } from "node:fs/promises"
 +import { stat } from "node:fs/promises"
-@@ -7,0 +8,4 @@
+@@ -7,0 +8,5 @@
 +import {
 +  IntegrationHolderDeadline,
 +  prepareIntegrationHolder,
++  recordStagedDelivery,
 +} from "../../../test/fixture/windows-holder-integration/runtime"
-@@ -108 +112 @@
+@@ -108 +113 @@
 -  private startupStep = 0
 +  private startupStep: number
-@@ -111 +115,6 @@
+@@ -111 +116,6 @@
 -  constructor(private readonly onFirstStartupPhase?: () => void) {}
 +  constructor(
-+    private readonly onFirstStartupPhase?: () => void,
++    private readonly onStartupPhase?: (phase: WindowsHolder.StartupPhase) => void,
 +    private readonly firstStartupStep: 1 | 4 = 1,
 +  ) {
 +    this.startupStep = firstStartupStep - 1
 +  }
-@@ -114 +123 @@
+@@ -114 +124,5 @@
 -    return WindowsHolder.startupPhases[this.startupStep]!
 +    return this.startupStep < this.firstStartupStep ? "spawn" : WindowsHolder.startupPhases[this.startupStep]!
-@@ -142 +151 @@
++  }
++
++  get validatedStartupStep() {
++    return this.pending.byteLength ? undefined : this.startupStep
+@@ -142 +156 @@
 -        if (next === 1) this.onFirstStartupPhase?.()
-+        if (next === this.firstStartupStep) this.onFirstStartupPhase?.()
-@@ -181 +190 @@
++        this.onStartupPhase?.(this.startupPhase)
+@@ -181 +195 @@
 -  // Defense in depth: the holder spawns PowerShell directly, never through ProcessIsolation.launch, so it refuses here
 +  // Defense in depth: the holder starts directly, never through ProcessIsolation.launch, so it refuses here
-@@ -190,5 +199 @@
+@@ -190,5 +204 @@
 -    throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true)
 -  const holder = path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 -  await access(holder).catch((cause) => {
 -    throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true, { cause })
 -  })
 +    throw new WindowsProcessError("Windows containment helper is unavailable", true)
-@@ -212,0 +218 @@
+@@ -212,0 +223 @@
 +  const startupDeadline = launchStarted + STARTUP_MS
-@@ -214,8 +220,35 @@
+@@ -214,8 +225,39 @@
 -  const child = preflight(() =>
 -    spawn(holder, WindowsHolder.argumentsForHolder(), {
 -      cwd: path.win32.join(root, "System32"),
@@ -65,6 +70,10 @@ diff --git a/packages/engine/src/tool/shell/windows-process.ts b/packages/engine
 +    void staged.release()
 +    throw new WindowsProcessError("Background shell stopped before startup", true)
 +  }
++  if (staged.delayConfig && String(WindowsHolder.startupPhases[5]) !== "config-reader-ready") {
++    void staged.release()
++    throw new WindowsProcessError("The staged configuration reader marker is unavailable", true)
++  }
 +  if (performance.now() >= startupDeadline) {
 +    void staged.release()
 +    throw new WindowsProcessStartupTimeout(startupTimeout("spawn"), true)
@@ -82,32 +91,66 @@ diff --git a/packages/engine/src/tool/shell/windows-process.ts b/packages/engine
 +      throw new WindowsProcessError("The Windows integration holder could not start", true)
 +    }
 +  })()
-@@ -301 +334 @@
+@@ -253,0 +296,5 @@
++  let configurationSent = false
++  const writeConfiguration = () => {
++    configurationSent = true
++    child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
++  }
+@@ -283 +330,4 @@
+-    if (!child.stdin.destroyed && child.stdin.writable) child.stdin.end('{"type":"stop"}\n')
++    if (!child.stdin.destroyed && child.stdin.writable) {
++      if (!staged.delayConfig || configurationSent) child.stdin.end('{"type":"stop"}\n')
++      else child.stdin.end()
++    }
+@@ -301 +351 @@
 -  child.on("error", (cause) => {
 +  child.on("error", () => {
-@@ -304 +337 @@
+@@ -304 +354 @@
 -    void stop(cause).catch(() => {})
 +    void stop(new Error("The Windows integration holder could not start")).catch(() => {})
-@@ -313,0 +347 @@
+@@ -313,0 +364 @@
 +    void staged.release()
-@@ -320 +354,2 @@
+@@ -320 +371,2 @@
 -  const reader = new StatusReader(() => delivery.mark("firstMarkerMs"))
 +  // This verified direct native holder has no PowerShell bootstrap frames. Its first real frame is step 4.
-+  const reader = new StatusReader(() => delivery.mark("firstMarkerMs"), 4)
-@@ -327,0 +363,4 @@
++  const reader = new StatusReader(delivery.markStartupPhase, 4)
+@@ -326,0 +379,2 @@
++          if (staged.delayConfig && !configurationSent)
++            throw new Error("Windows holder reported readiness before its configuration")
+@@ -327,0 +382,4 @@
 +          if (performance.now() >= startupDeadline) {
 +            void stop(new Error(startupTimeout(reader.startupPhase))).catch(() => {})
 +            continue
 +          }
-@@ -389 +427,0 @@
+@@ -346,0 +405,16 @@
++      if (
++        !staged.delayConfig ||
++        configurationSent ||
++        state.failure ||
++        state.stopping ||
++        state.terminal ||
++        state.closed ||
++        state.finished ||
++        callbacks.signal?.aborted ||
++        performance.now() >= startupDeadline
++      ) return
++      // A complete, successfully processed chunk must contain the verified read-thread marker.
++      const step = reader.validatedStartupStep
++      if (step !== undefined && step > 5)
++        throw new Error("Windows holder advanced before its configuration was sent")
++      if (step === 5) writeConfiguration()
+@@ -389 +462,0 @@
 -  child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
-@@ -391,4 +429,5 @@
+@@ -391,4 +464,5 @@
 -    const pid = await bounded(ready.promise, STARTUP_MS, () => {
 -      delivery.mark("watchdogMs")
 -      return `Windows containment helper startup timed out (last phase: ${reader.startupPhase})`
 -    })
 +    if (performance.now() >= startupDeadline) throw new Error(startupTimeout(reader.startupPhase))
-+    child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
++    if (!staged.delayConfig) writeConfiguration()
 +    const pid = await bounded(ready.promise, Math.max(0, Math.ceil(startupDeadline - performance.now())), () =>
 +      startupTimeout(reader.startupPhase),
 +    )
+@@ -400,0 +475 @@
++    if (staged.reportDelivery) recordStagedDelivery(staged.delayConfig, delivery.snapshot())

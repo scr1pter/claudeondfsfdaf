@@ -1,9 +1,17 @@
+import type { DeliveryReceipt } from "../../../src/tool/shell/windows-holder"
 import { integrationRunner } from "./scope"
 import { stageWindowsHolder } from "./stage"
 
 export { HolderStagingDeadline as IntegrationHolderDeadline } from "./stage"
 
 let recorded = false
+let deliveryRecorded = false
+
+export function recordStagedDelivery(delayed: boolean, timings: DeliveryReceipt) {
+  if (deliveryRecorded) return
+  deliveryRecorded = true
+  console.log("Verified Windows staged transport: " + JSON.stringify({ delayed, ...timings }))
+}
 
 /** Verify staging with the same single deadline as the attempted native process startup. */
 export async function prepareIntegrationHolder(deadline: number) {
@@ -25,5 +33,5 @@ export async function prepareIntegrationHolder(deadline: number) {
     recorded = true
     console.log("Verified private Windows holder staging elapsed ms: " + Math.round(performance.now() - start))
   }
-  return holder
+  return { ...holder, delayConfig: context.delayConfig, reportDelivery: context.reportDelivery }
 }

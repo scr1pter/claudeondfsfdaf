@@ -33,12 +33,20 @@ on:
         description: Run the ordinary Windows Engine shard 8/18 with the selected x64 integration backend
         type: boolean
         default: false
+      direct_holder_shard1:
+        description: Run the ordinary Windows Engine shard 1/18 with the selected x64 integration backend
+        type: boolean
+        default: false
+      direct_holder_delay_config:
+        description: Send staged x64 configuration only after a validated config-reader-ready frame in the selected shard
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && format('-direct-{0}-{1}-{2}', inputs.direct_holder_arch, inputs.direct_holder_integration, inputs.direct_holder_backend) || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_shard8 && '-shard8' || '' }}
+  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && format('-direct-{0}-{1}-{2}', inputs.direct_holder_arch, inputs.direct_holder_integration, inputs.direct_holder_backend) || '' }}${{ github.event_name == 'workflow_dispatch' && (inputs.direct_holder_shard1 || inputs.direct_holder_shard8) && (inputs.direct_holder_shard1 && '-shard1' || '-shard8') || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_delay_config && '-delayed-config' || '' }}
   cancel-in-progress: true
 
 env:
@@ -46,7 +54,7 @@ env:
 
 jobs:
   cold-start:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.direct_holder_comparison && !inputs.direct_holder_shard8)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.direct_holder_comparison && !inputs.direct_holder_shard1 && !inputs.direct_holder_shard8 && !inputs.direct_holder_delay_config)
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -64,7 +72,7 @@ jobs:
         run: bun script/diagnose-windows-holder.ts
 
   native:
-    if: github.event_name != 'workflow_dispatch' || (!inputs.direct_holder_comparison && !inputs.direct_holder_shard8)
+    if: github.event_name != 'workflow_dispatch' || (!inputs.direct_holder_comparison && !inputs.direct_holder_shard1 && !inputs.direct_holder_shard8 && !inputs.direct_holder_delay_config)
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -99,7 +107,7 @@ jobs:
         run: GITHUB_ACTIONS=false bun test test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
 
   direct-holder-build:
-    if: github.event_name == 'workflow_dispatch' && (inputs.direct_holder_comparison || inputs.direct_holder_shard8)
+    if: github.event_name == 'workflow_dispatch' && (inputs.direct_holder_comparison || inputs.direct_holder_shard1 || inputs.direct_holder_shard8 || inputs.direct_holder_delay_config)
     runs-on: windows-latest
     timeout-minutes: 10
     env:
@@ -111,8 +119,12 @@ jobs:
       - name: Check the hosted integration selection
         if: >-
           (inputs.direct_holder_backend != 'staged' && !inputs.direct_holder_integration) ||
-          (inputs.direct_holder_shard8 && (!inputs.direct_holder_comparison || !inputs.direct_holder_integration ||
-            inputs.direct_holder_arch != 'x64' || inputs.direct_holder_backend == 'legacy'))
+          (inputs.direct_holder_shard1 && inputs.direct_holder_shard8) ||
+          ((inputs.direct_holder_shard1 || inputs.direct_holder_shard8) &&
+            (!inputs.direct_holder_comparison || !inputs.direct_holder_integration ||
+              inputs.direct_holder_arch != 'x64' || inputs.direct_holder_backend == 'legacy')) ||
+          (inputs.direct_holder_delay_config &&
+            (!(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) || inputs.direct_holder_backend != 'staged'))
         shell: cmd
         run: exit /b 1
       - name: Checkout the exact comparison revision
@@ -137,7 +149,7 @@ jobs:
           retention-days: 1
 
   direct-holder-measure:
-    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && !inputs.direct_holder_integration && !inputs.direct_holder_shard8
+    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && !inputs.direct_holder_integration && !inputs.direct_holder_shard1 && !inputs.direct_holder_shard8 && !inputs.direct_holder_delay_config
     needs: direct-holder-build
     runs-on: ${{ inputs.direct_holder_arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
     timeout-minutes: 15
@@ -172,10 +184,11 @@ jobs:
   direct-holder-integration:
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && inputs.direct_holder_integration &&
-      (!inputs.direct_holder_shard8 || (inputs.direct_holder_arch == 'x64' && inputs.direct_holder_backend != 'legacy'))
+      (!(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) ||
+        (inputs.direct_holder_arch == 'x64' && inputs.direct_holder_backend != 'legacy'))
     needs: direct-holder-build
     runs-on: ${{ inputs.direct_holder_arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
-    timeout-minutes: ${{ inputs.direct_holder_shard8 && 80 || 25 }}
+    timeout-minutes: ${{ (inputs.direct_holder_shard1 || inputs.direct_holder_shard8) && 80 || 25 }}
     env:
       VECTOR_DIRECT_HOLDER_FIXTURE: "1"
       VECTOR_DIRECT_HOLDER_ARCH: ${{ inputs.direct_holder_arch }}
@@ -194,9 +207,9 @@ jobs:
       - name: Set up pinned Bun and dependencies
         uses: ./.github/actions/setup-bun
         with:
-          install-flags: ${{ !inputs.direct_holder_shard8 && '--frozen-lockfile --ignore-scripts' || '' }}
+          install-flags: ${{ !(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) && '--frozen-lockfile --ignore-scripts' || '' }}
       - name: Install native ripgrep
-        timeout-minutes: ${{ inputs.direct_holder_shard8 && 5 || 25 }}
+        timeout-minutes: ${{ (inputs.direct_holder_shard1 || inputs.direct_holder_shard8) && 5 || 25 }}
         uses: ./.github/actions/install-ripgrep-windows
       - name: Download the paired same-run holder artifact
         if: inputs.direct_holder_backend != 'legacy'
@@ -205,13 +218,13 @@ jobs:
           name: direct-holder-${{ inputs.direct_holder_arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/vector-direct-holder
       - name: Configure git identity
-        if: inputs.direct_holder_shard8
+        if: inputs.direct_holder_shard1 || inputs.direct_holder_shard8
         shell: bash
         run: |
           git config --global user.email "bot@vectordev.ai"
           git config --global user.name "Vector"
       - name: Build Engine test dependencies
-        if: inputs.direct_holder_shard8
+        if: inputs.direct_holder_shard1 || inputs.direct_holder_shard8
         timeout-minutes: 20
         shell: bash
         env:
@@ -240,29 +253,30 @@ jobs:
           # The source's full SHA is pinned in the paired artifact, so this zero-context patch has an exact base.
           git apply --unidiff-zero --check "$patch"
           git apply --unidiff-zero "$patch"
-      - name: Run Engine shard 8/18 (${{ inputs.direct_holder_backend }})
-        if: inputs.direct_holder_shard8
+      - name: Run Engine shard ${{ inputs.direct_holder_shard1 && '1' || '8' }}/18 (${{ inputs.direct_holder_backend }})
+        if: inputs.direct_holder_shard1 || inputs.direct_holder_shard8
         timeout-minutes: 45
         working-directory: packages/engine
         shell: bash
         env:
-          VECTOR_DIRECT_HOLDER_SHARD8: "1"
+          VECTOR_DIRECT_HOLDER_SHARD: ${{ inputs.direct_holder_shard1 && '1' || '8' }}
+          VECTOR_DIRECT_HOLDER_DELAY_CONFIG: ${{ inputs.direct_holder_delay_config && '1' || '' }}
         # Match the ordinary Engine lane's Bun discovery, configured preloads and per-test deadline.
-        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --shard=8/18
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --shard="$VECTOR_DIRECT_HOLDER_SHARD/18"
       - name: Run the real Windows process ownership and termination cases
-        if: ${{ !inputs.direct_holder_shard8 }}
+        if: ${{ !(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) }}
         timeout-minutes: 10
         working-directory: packages/engine
         shell: bash
         run: bun --no-env-file test test/tool/shell-windows-process.test.ts --timeout 60000
       - name: Run Windows durable background command integration
-        if: ${{ !inputs.direct_holder_shard8 }}
+        if: ${{ !(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) }}
         timeout-minutes: 5
         working-directory: packages/engine
         shell: bash
         run: bun --no-env-file test test/task/shells.test.ts --timeout 60000
       - name: Run Windows task management command integration
-        if: ${{ !inputs.direct_holder_shard8 }}
+        if: ${{ !(inputs.direct_holder_shard1 || inputs.direct_holder_shard8) }}
         timeout-minutes: 5
         working-directory: packages/engine
         shell: bash

@@ -139,6 +139,11 @@ describe("Windows background command preparation", () => {
       "utility-loaded",
       "compiler-returned",
       "reading-config",
+      "config-reader-ready",
+      "config-first-byte",
+      "config-newline",
+      "config-utf8-decoded",
+      "config-serializer-ready",
       "config-decoded",
       "creating-payload",
       "payload-created",
@@ -147,7 +152,7 @@ describe("Windows background command preparation", () => {
       expect(reader.push(phase(index + 2))).toEqual([])
       expect(reader.startupPhase).toBe(expected)
     }
-    expect(() => reader.push(phase(8))).toThrow("startup phase")
+    expect(() => reader.push(phase(13))).toThrow("startup phase")
     expect(reader.push(message({ type: "ready", pid: 17 }))).toEqual([{ type: "ready", pid: 17 }])
     const ready = new WindowsProcess.StatusReader()
     ready.push(message({ type: "ready", pid: 17 }))

@@ -108,8 +108,8 @@ export function carrierDelivery(writePrefix: () => void, writeConfig: () => void
     },
     afterStatus(step: number | undefined, active: boolean) {
       if (!prefixSent || configSent || !active || step === undefined || step < 3) return
-      // Native step 4 announces the read. Later native phases require a successfully parsed configuration.
-      if (step > 4) throw new Error("Windows carrier advanced before its configuration was sent.")
+      // Step 5 announces the reader is ready. Later phases require received configuration bytes.
+      if (step > 5) throw new Error("Windows carrier advanced before its configuration was sent.")
       configSent = true
       writeConfig()
     },
