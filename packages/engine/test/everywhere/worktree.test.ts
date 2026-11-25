@@ -575,6 +575,56 @@ describe("Worktree.createUnattended", () => {
   )
 })
 
+describe("ordinary worktree mutations preserve unattended reservations", () => {
+  afterEach(() => disposeAllInstances())
+
+  it.instance(
+    "refuses to remove a job checkout through an alias or its unregistered parent",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture()
+        const input = yield* job(f.base)
+        const checkout = yield* create(input)
+        const alias = path.join(f.markers, "checkout-alias")
+        const service = yield* Worktree.Service
+        yield* Effect.promise(() => symlink(checkout.directory, alias, process.platform === "win32" ? "junction" : "dir"))
+
+        for (const directory of [alias, f.root]) {
+          const error = yield* Effect.flip(service.remove({ directory }))
+          expect(error).toBeInstanceOf(Worktree.RemoveFailedError)
+          expect(error.message).toBe("Cannot remove a Vector Everywhere worktree through this command.")
+        }
+
+        expect(yield* git(checkout.directory, ["rev-parse", "HEAD"])).toBe(f.base)
+        expect(yield* git(checkout.directory, ["symbolic-ref", "--short", "HEAD"])).toBe(input.branch)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "refuses to reset a job checkout and preserves its staged and untracked files",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture()
+        const checkout = yield* create(yield* job(f.base))
+        const staged = path.join(checkout.directory, "a.txt")
+        const untracked = path.join(checkout.directory, "notes.txt")
+        const service = yield* Worktree.Service
+        yield* Effect.promise(() => writeFile(staged, "updated\n"))
+        yield* git(checkout.directory, ["add", "a.txt"])
+        yield* Effect.promise(() => writeFile(untracked, "unfinished\n"))
+
+        const error = yield* Effect.flip(service.reset({ directory: checkout.directory }))
+        expect(error).toBeInstanceOf(Worktree.ResetFailedError)
+        expect(error.message).toBe("Cannot reset a Vector Everywhere worktree through this command.")
+        expect(yield* git(checkout.directory, ["show", ":a.txt"])).toBe("updated")
+        expect(yield* Effect.promise(() => readFile(untracked, "utf8"))).toBe("unfinished\n")
+        expect(yield* git(checkout.directory, ["rev-parse", "HEAD"])).toBe(f.base)
+      }),
+    { git: true },
+  )
+})
+
 // EV-13: the same service through the real HTTP API, with the owner's and a guest's credentials. The route must refuse
 // a guest, a folder the user's own config does not allow (checked before anything looks for an instance), a project
 // the owner has not opened and an untrusted one, and it must never load an instance itself. The server's own
