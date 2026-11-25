@@ -645,17 +645,12 @@ describe("background shell commands", () => {
       const { directory } = yield* TestInstance
       const root = yield* sessions.create()
       const pidfile = path.join(directory, "child.pid")
-      const command = [
-        "$p = Start-Process -FilePath ping -ArgumentList '-n','300','127.0.0.1' -PassThru -NoNewWindow",
-        `Set-Content -LiteralPath '${pidfile}' -Value $p.Id`,
-        "Wait-Process -Id $p.Id",
-      ].join("; ")
+      const child = `require('node:fs').writeFileSync(${JSON.stringify(pidfile)},String(process.pid));setInterval(()=>{},1000)`
+      const command = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'})`
       const shell = yield* shells.start({
         sessionID: root.id,
-        command: "ping in a child process",
-        process: ChildProcess.make("powershell", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
-          stdin: "ignore",
-        }),
+        command: "keep a child process running",
+        process: script(command),
         ops,
         agent: "build",
       })

@@ -28,7 +28,7 @@ jobs:
     uses: ./.github/workflows/windows-holder-bundle.yml
     with:
       source_revision: ${{ github.sha }}
-      targets: x64
+      targets: x64,arm64
 
   cold-start:
     runs-on: windows-latest
@@ -48,11 +48,21 @@ jobs:
         run: bun script/diagnose-windows-holder.ts
 
   native:
+    name: ${{ matrix.arch == 'x64' && 'native' || 'native (ARM64)' }}
     needs: windows-holder-build
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
     timeout-minutes: 20
     env:
       VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
+      VECTOR_WINDOWS_HOLDER_ARCH: ${{ matrix.arch }}
       VECTOR_WINDOWS_HOLDER_BUILD_RUN: ${{ needs.windows-holder-build.outputs.run }}
       VECTOR_WINDOWS_HOLDER_REVISION: ${{ needs.windows-holder-build.outputs.revision }}
       VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256: ${{ needs.windows-holder-build.outputs.manifest-digest }}
@@ -66,6 +76,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
+          architecture: ${{ matrix.arch }}
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
       - name: Download the exact holder built for this run

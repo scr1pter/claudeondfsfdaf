@@ -4,13 +4,15 @@ import { verifyWindowsHolderBundle, windowsHolderBundlePlugin } from "./windows-
 const { CI, GITHUB_JOB, GITHUB_RUN_ID, GITHUB_SHA, RUNNER_ARCH, RUNNER_ENVIRONMENT, RUNNER_TEMP } = process.env
 const { VECTOR_WINDOWS_HOLDER_BUILD_RUN, VECTOR_WINDOWS_HOLDER_REVISION, VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256 } =
   process.env
+const arch = GITHUB_JOB === "engine-windows" ? "x64" : process.env.VECTOR_WINDOWS_HOLDER_ARCH
 if (
   process.platform !== "win32" ||
-  process.arch !== "x64" ||
+  (arch !== "x64" && arch !== "arm64") ||
+  process.arch !== arch ||
   CI !== "true" ||
   (GITHUB_JOB !== "engine-windows" && GITHUB_JOB !== "native") ||
   (process.env.SystemRoot ?? process.env.SYSTEMROOT)?.toLowerCase() !== "c:\\windows" ||
-  RUNNER_ARCH !== "X64" ||
+  RUNNER_ARCH !== arch.toUpperCase() ||
   RUNNER_ENVIRONMENT !== "github-hosted" ||
   !RUNNER_TEMP ||
   !/^[a-z]:\\/i.test(RUNNER_TEMP) ||
@@ -25,7 +27,7 @@ if (
   throw new Error("Windows Engine CI requires the verified holder bundle from its own build.")
 }
 
-const architectures = ["x64"] as const
+const architectures = [arch] as const
 export const assets = await verifyWindowsHolderBundle({
   manifest: path.join(RUNNER_TEMP, "vector-windows-holder-bundle", "manifest.json"),
   pin: VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256,
@@ -33,6 +35,10 @@ export const assets = await verifyWindowsHolderBundle({
   architectures,
 })
 Bun.plugin(windowsHolderBundlePlugin(assets, architectures))
-const { trustedWindowsX64Holder } = await import("../src/tool/shell/windows-holder.asset")
-if (!trustedWindowsX64Holder || trustedWindowsX64Holder.sha256 !== assets.x64?.sha256)
-  throw new Error("Windows Engine CI could not activate the verified holder bundle.")
+const { trustedWindowsX64Holder, trustedWindowsArm64Holder } = await import("../src/tool/shell/windows-holder.asset")
+const [selected, other] =
+  arch === "x64"
+    ? [trustedWindowsX64Holder, trustedWindowsArm64Holder]
+    : [trustedWindowsArm64Holder, trustedWindowsX64Holder]
+if (selected?.arch !== arch || selected.sha256 !== assets[arch]?.sha256 || other !== undefined)
+  throw new Error("Windows Engine CI could not activate the verified holder bundle for its architecture.")
