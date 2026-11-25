@@ -485,31 +485,64 @@ function cachedAcl(reader: AclReader, paths: readonly string[]) {
 
 /**
  * Reads the output of ACL_SCRIPT: "U <sid>" for the user running Vector, "O <index> <sid>" for the owner of the path at
- * that index, and "R <index> <sid> <rights> <allow 0|1> <inherit-only 0|1>" for each of its access rules. A path with
- * no owner line could not be read.
+ * that index, and "R <index> <sid> <rights> <allow 0|1> <inherit-only 0|1>" for each access rule. A path is readable
+ * when its owner and all access rules are valid and the script finishes the block with "C <index>".
  */
 export function parseAcl(stdout: string, paths: readonly string[]): ReturnType<AclReader> {
-  const lines = stdout.split(/\r?\n/).map((line) => line.trim().split(/\s+/))
-  const entry = (index: number) => {
-    const owner = lines.find((line) => line[0] === "O" && line[1] === String(index))?.[2]
-    if (!owner) return undefined
-    return {
-      owner,
-      rules: lines
-        .filter((line) => line[0] === "R" && line[1] === String(index) && line.length === 6)
-        .map((line) => ({
-          sid: line[2]!,
-          rights: Number(line[3]),
-          allow: line[4] === "1",
-          inheritOnly: line[5] === "1",
-        }))
-        .filter((rule) => Number.isInteger(rule.rights)),
+  const blocks = paths.map((): string[][] => [])
+  let user: string | undefined
+  let previousIndex = -1
+  for (const raw of stdout.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line) continue
+    const fields = line.split(/\s+/)
+    const [kind, key] = fields
+    if (kind === "U") {
+      if (user !== undefined || previousIndex !== -1 || fields.length !== 2 || !validSid(key)) return { entries: {} }
+      user = key
+      continue
     }
+    // The script emits each path as one block, in the order it was requested.
+    const index = Number(key)
+    if (!/^(0|[1-9][0-9]*)$/.test(key) || index >= blocks.length || index < previousIndex) return { entries: {} }
+    blocks[index].push(fields)
+    previousIndex = index
+  }
+  const entry = (rows: readonly string[][]): Acl | undefined => {
+    const first = rows[0]
+    const last = rows.at(-1)
+    if (first?.[0] !== "O" || first.length !== 3 || !validSid(first[2])) return undefined
+    if (last?.[0] !== "C" || last.length !== 2) return undefined
+    const rules: AclRule[] = []
+    for (const row of rows.slice(1, -1)) {
+      const [kind, , sid, mask, allow, inheritOnly] = row
+      const rights = Number(mask)
+      if (
+        kind !== "R" ||
+        row.length !== 6 ||
+        !validSid(sid) ||
+        !/^-?[0-9]+$/.test(mask) ||
+        rights < -0x80000000 ||
+        rights > 0x7fffffff ||
+        (allow !== "0" && allow !== "1") ||
+        (inheritOnly !== "0" && inheritOnly !== "1")
+      )
+        return undefined
+      rules.push({ sid, rights, allow: allow === "1", inheritOnly: inheritOnly === "1" })
+    }
+    return { owner: first[2], rules }
   }
   return {
-    user: lines.find((line) => line[0] === "U")?.[1],
-    entries: Object.fromEntries(paths.map((target, index) => [target, entry(index)])),
+    user,
+    entries: Object.fromEntries(paths.map((target, index) => [target, entry(blocks[index])])),
   }
+}
+
+function validSid(value: string) {
+  // A SID has revision 1, a 48-bit identifier authority, and up to fifteen 32-bit subauthorities.
+  if (!/^S-1-(?:[0-9]{1,15}|0[xX][0-9a-fA-F]{1,12})(?:-[0-9]{1,10}){0,15}$/.test(value)) return false
+  const [authority, ...subauthorities] = value.split("-").slice(2)
+  return Number(authority) <= 0xffffffffffff && subauthorities.every((part) => Number(part) <= 0xffffffff)
 }
 
 // Owner and rules as SIDs, so the check does not depend on the language Windows names its accounts in. It calls .NET
@@ -527,6 +560,7 @@ const ACL_SCRIPT = [
   "    foreach ($r in $acl.GetAccessRules($true, $true, $sid)) {",
   "      [Console]::Out.WriteLine('R ' + $i + ' ' + $r.IdentityReference.Value + ' ' + $r.FileSystemRights.value__ + ' ' + [int]($r.AccessControlType -eq 'Allow') + ' ' + [int](([int]$r.PropagationFlags -band 2) -ne 0))",
   "    }",
+  "    [Console]::Out.WriteLine('C ' + $i)",
   "  } catch {}",
   "  $i++",
   "}",
