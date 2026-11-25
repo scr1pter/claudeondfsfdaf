@@ -596,10 +596,17 @@ export function createGithubApp(
         )) !== "ok"
       )
         throw denied("ACTOR_NOT_ALLOWED", "Reconnect this repository before attaching context.")
+      const observed = repository.visibility
+      const visibility =
+        (observed === "public" && !repository.private) ||
+        ((observed === "private" || observed === "internal") && repository.private)
+          ? observed
+          : undefined
       return {
         repositoryId: binding.repositoryId,
         generation: binding.generation,
         publicRepository: !repository.private,
+        ...(visibility === undefined ? {} : { visibility }),
       }
     } finally {
       await revoke(credential.token)

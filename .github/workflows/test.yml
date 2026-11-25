@@ -159,7 +159,8 @@ jobs:
       # Hosted native jobs use a disposable desktop and the driver's fixed isolated target only. Local and direct
       # workflow callers retain the off default; missing native scenarios are reported as skipped, never passed.
       isolated-desktop: true
-      stop_repeat: ${{ github.event_name == 'workflow_dispatch' && inputs.stop_repeat || 1 }}
+      # Dispatch can supply a numeric input as text. The reusable workflow requires a number.
+      stop_repeat: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('{0}', inputs.stop_repeat) || '1') }}
 
   # Measurement uses the registered dispatcher without enabling isolated input, desktop fixtures or publication.
   # The existing helper still enforces the old measured Mac lock after reproducibility and grant-free core checks.
