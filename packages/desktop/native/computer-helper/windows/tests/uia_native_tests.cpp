@@ -113,8 +113,8 @@ struct FirstRootFixture {
 size_t run_uia_native_tests() {
   size_t groups = 0; const auto test = [&](const std::function<void()>& body) { body(); ++groups; };
   test([] {
-    for (const auto phase : {WindowsUiaPhase::root_element, WindowsUiaPhase::runtime_id, WindowsUiaPhase::prepare_connection}) {
-      FirstRootFixture fixture; fixture.phase = phase;
+    const auto recovers = [](WindowsUiaPhase phase, WindowsUiaExpiry expiry) {
+      FirstRootFixture fixture; fixture.phase = phase; fixture.expiry = expiry;
       fixture.during_open = [&] {
         fixture.first_diagnostic->phase.store(WindowsUiaPhase::security_cache);
         fixture.first_diagnostic->note_timeout(WindowsUiaExpiry::worker_budget);
@@ -122,13 +122,18 @@ size_t run_uia_native_tests() {
       const auto root = fixture.observe();
       require(root == fixture.second.root && root != fixture.first.root && fixture.opened == 1 && fixture.first.roots == 1 && fixture.second.roots == 1,
         "uia-native.first-root-recovers-once-on-a-distinct-actor");
-      require(fixture.first_diagnostic->failure_phase(false) == phase && fixture.diagnostic->failure_phase(false) == WindowsUiaPhase::none,
+      require(fixture.first_diagnostic->failure_phase(false) == phase && fixture.first_diagnostic->failure_expiry(false) == expiry &&
+        fixture.diagnostic->failure_phase(false) == WindowsUiaPhase::none,
         "uia-native.first-root-late-first-diagnostic-cannot-enter-second");
       require(fixture.backend.hit(root, POINT{15, 15}) == fixture.second.element && fixture.first.points == 0,
         "uia-native.first-root-uses-replacement-for-later-observations");
       fixture.backend.close();
       require(fixture.first.closed == 1 && fixture.second.closed == 1, "uia-native.first-root-closes-adopted-actor");
-    }
+    };
+    for (const auto phase : {WindowsUiaPhase::root_element, WindowsUiaPhase::root_wrap,
+                             WindowsUiaPhase::runtime_id, WindowsUiaPhase::prepare_connection})
+      recovers(phase, WindowsUiaExpiry::caller_wait);
+    recovers(WindowsUiaPhase::runtime_id, WindowsUiaExpiry::worker_current);
   });
   test([] {
     FirstRootFixture fixture; fixture.first_succeeds = true;
@@ -145,18 +150,26 @@ size_t run_uia_native_tests() {
     refusal([&] { healthy.observe(); });
     FirstRootFixture worker; worker.expiry = WindowsUiaExpiry::worker_current;
     refusal([&] { worker.observe(); });
+    FirstRootFixture wrap_worker; wrap_worker.phase = WindowsUiaPhase::root_wrap; wrap_worker.expiry = WindowsUiaExpiry::worker_current;
+    refusal([&] { wrap_worker.observe(); });
+    FirstRootFixture budget; budget.phase = WindowsUiaPhase::runtime_id; budget.expiry = WindowsUiaExpiry::worker_budget;
+    refusal([&] { budget.observe(); });
     FirstRootFixture denied; denied.status = E_ACCESSDENIED;
     refusal([&] { denied.observe(); });
     FirstRootFixture changed; changed.code = L"changed";
     try { changed.observe(); throw std::runtime_error("uia-native.first-root-dropped-changed"); }
     catch (const Failure& failure) { require(failure.code == L"changed", "uia-native.first-root-keeps-changed"); }
-    require(healthy.opened == 0 && worker.opened == 0 && denied.opened == 0 && changed.opened == 0,
+    require(healthy.opened == 0 && worker.opened == 0 && wrap_worker.opened == 0 && budget.opened == 0 && denied.opened == 0 && changed.opened == 0,
       "uia-native.first-root-unknown-authority-never-retries");
   });
   test([] {
     FirstRootFixture expired; expired.deadline = std::chrono::steady_clock::now();
     refusal([&] { expired.observe(); });
     require(expired.opened == 0 && expired.diagnostic == expired.first_diagnostic, "uia-native.first-root-expired-before-open");
+    FirstRootFixture expired_worker; expired_worker.deadline = expired.deadline;
+    expired_worker.phase = WindowsUiaPhase::runtime_id; expired_worker.expiry = WindowsUiaExpiry::worker_current;
+    refusal([&] { expired_worker.observe(); });
+    require(expired_worker.opened == 0, "uia-native.worker-expiry-cannot-extend-stop-deadline");
     FirstRootFixture stale; stale.during_open = [&] { stale.current = false; };
     refusal([&] { stale.observe(); });
     require(stale.opened == 1 && stale.second.roots == 0 && stale.second.closed == 1 && stale.diagnostic == stale.first_diagnostic,
@@ -164,6 +177,10 @@ size_t run_uia_native_tests() {
     FirstRootFixture late; late.during_second = [&] { late.current = false; };
     refusal([&] { late.observe(); });
     require(late.opened == 1 && late.second.roots == 1, "uia-native.first-root-stale-result-cannot-escape");
+    FirstRootFixture stale_worker; stale_worker.phase = WindowsUiaPhase::runtime_id;
+    stale_worker.expiry = WindowsUiaExpiry::worker_current; stale_worker.current = false;
+    refusal([&] { stale_worker.observe(); });
+    require(stale_worker.opened == 0, "uia-native.worker-expiry-cannot-open-on-stale-authority");
   });
   test([] {
     FirstRootFixture fixture; fixture.second_fails = true;

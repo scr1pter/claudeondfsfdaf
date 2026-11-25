@@ -215,6 +215,7 @@ struct StopElement { UiaElement root, element; UiaSecurity security; UiaName nam
 StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& window, const OverlayStopRequest& request, OverlayDriverStage& stage, const std::shared_ptr<WindowsUiaDiagnostic>& diagnostic,
                          OverlayDriverLookup lookup, std::optional<OverlayDriverUiaFailure>& failure, const std::function<UiaElement()>& first_root = {}) {
   stage = OverlayDriverStage::stop_root; UiaElement root;
+  const auto initial_diagnostic = lookup == OverlayDriverLookup::first ? diagnostic : nullptr;
   try { root = first_root ? first_root() : uia.root(window); }
   catch (...) {
     // Sample the actor's existing health before click_stop's RAII closes it. This is not a new UIA
@@ -228,6 +229,9 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
         if (diagnostic) {
           if (const auto observed = overlay_driver_uia_stage(diagnostic->failure_phase(available))) stage = *observed;
           failure = OverlayDriverUiaFailure{lookup, OverlayDriverUiaCall::root, available, diagnostic->failure_expiry(available), diagnostic->failure_status(available)};
+          if (initial_diagnostic) {
+            failure->root_attempt = diagnostic == initial_diagnostic ? OverlayDriverUiaRootAttempt::initial : OverlayDriverUiaRootAttempt::replacement;
+          }
         }
       }
     } catch (...) {}
@@ -465,6 +469,11 @@ std::optional<JsonObject> uia_failure_wire(const OverlayDriverUiaFailure& value)
   result.Insert(L"actor", JsonValue::CreateStringValue(winrt::hstring(overlay_driver_uia_actors[value.available ? 0 : 1])));
   result.Insert(L"expiry", JsonValue::CreateStringValue(winrt::hstring(windows_uia_expiries[expiry])));
   result.Insert(L"hresult", JsonValue::CreateStringValue(winrt::hstring(hresult)));
+  if (value.root_attempt) {
+    const auto attempt = static_cast<size_t>(*value.root_attempt);
+    if (value.lookup != OverlayDriverLookup::first || value.call != OverlayDriverUiaCall::root || attempt >= overlay_driver_uia_root_attempts.size()) return {};
+    result.Insert(L"rootAttempt", JsonValue::CreateStringValue(winrt::hstring(overlay_driver_uia_root_attempts[attempt])));
+  }
   return result;
 }
 }
