@@ -10,6 +10,7 @@
 // or a frame.
 
 import { AccountRelay, INTERNAL_ACTIONS, KILL_KEY, NONCE_HEADER, TICKET_HEADER, answer, failure } from "./account-relay"
+import { readPrefix } from "./bytes"
 import { internalSecret, verifyInternalSignature } from "./internal"
 import { RELAY_LIMITS } from "./limits"
 import { CLOSE, CLOSE_REASON, CONNECT_PATH, RELAY_SUBPROTOCOL } from "./protocol"
@@ -80,8 +81,11 @@ async function internal(request: Request, env: Env, runtime: Runtime, url: URL):
   if (!secret) return failure(503, "INTERNAL_UNAVAILABLE")
   const declared = Number(request.headers.get("content-length") ?? "0")
   if (declared > RELAY_LIMITS.internalBodyBytes) return failure(413, "INTERNAL_TOO_LARGE")
-  const body = new Uint8Array(await request.arrayBuffer())
-  if (body.byteLength > RELAY_LIMITS.internalBodyBytes) return failure(413, "INTERNAL_TOO_LARGE")
+  const read = await readPrefix(request.body, RELAY_LIMITS.internalBodyBytes + 1)
+  if (!read) return failure(400, "INTERNAL_BAD_REQUEST")
+  if (!read.complete || read.bytes.byteLength > RELAY_LIMITS.internalBodyBytes)
+    return failure(413, "INTERNAL_TOO_LARGE")
+  const body = read.bytes
   const check = await verifyInternalSignature(
     secret,
     { method: request.method, path: `${url.pathname}${url.search}`, headers: request.headers, body },

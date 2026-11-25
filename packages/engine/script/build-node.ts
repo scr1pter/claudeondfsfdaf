@@ -6,7 +6,13 @@ import { linuxIsolationBuildPlugin, linuxIsolationCIMode } from "../../../script
 import { unguardedBunReferences } from "./node-bundle-guard"
 import { brainWorkerModule } from "./brain-worker-module"
 import { bundleBrainWorker } from "./brain-worker"
+import {
+  emitWindowsHolderCompanion,
+  prepareWindowsHolderBundle,
+  windowsHolderBundlePlugin,
+} from "./windows-holder-bundle"
 import desktop from "../../desktop/package.json"
+import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "path"
 import { fileURLToPath } from "url"
 
@@ -15,6 +21,24 @@ const __dirname = path.dirname(__filename)
 const dir = path.resolve(__dirname, "..")
 
 process.chdir(dir)
+
+const windowsHolderArchitectures = ["x64", "arm64"] as const
+const windowsHolderDirectory = path.join(dir, "dist/node/windows-holder")
+await rm(windowsHolderDirectory, { recursive: true, force: true })
+const manifestSha256 = process.env.VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256
+const windowsHolderAssets = await prepareWindowsHolderBundle({
+  argv: process.argv,
+  githubActions: process.env.GITHUB_ACTIONS,
+  declaredRevision: process.env.VECTOR_SOURCE_REVISION,
+  architectures: windowsHolderArchitectures,
+  manifestPath: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST,
+  manifestDigest: manifestSha256,
+  expectedWire: "vsh1",
+})
+const windowsHolderCompanion =
+  windowsHolderAssets && process.argv.includes("--windows-holder-electron")
+    ? await stageWindowsHolderCompanion(windowsHolderAssets)
+    : undefined
 
 const generated = await import("./generate.ts")
 
@@ -31,7 +55,12 @@ const result = await Bun.build({
   format: "esm",
   sourcemap: "linked",
   external: ["jsonc-parser", "@lydell/node-pty"],
-  plugins: [isolation],
+  plugins: [
+    isolation,
+    ...(windowsHolderAssets
+      ? [windowsHolderBundlePlugin(windowsHolderAssets, windowsHolderArchitectures, windowsHolderCompanion)]
+      : []),
+  ],
   define: {
     VECTOR_MODEL_CATALOG: generated.modelsData,
     VECTOR_CHANNEL: `'${Script.channel}'`,
@@ -61,4 +90,25 @@ for (const output of result.outputs.filter((item) => item.path.endsWith(".js")))
   )
 }
 
+if (windowsHolderCompanion) {
+  await writeFile(
+    path.join(windowsHolderDirectory, "desktop-build.json"),
+    JSON.stringify({ version: 1, manifestSha256, targets: windowsHolderCompanion.targets }),
+    { flag: "wx" },
+  )
+}
+
 console.log("Build complete")
+
+async function stageWindowsHolderCompanion(assets: NonNullable<typeof windowsHolderAssets>) {
+  if (!manifestSha256) throw new Error("Electron holder packaging requires the pinned build manifest.")
+  await mkdir(windowsHolderDirectory, { recursive: true })
+  const targets = await Promise.all(
+    windowsHolderArchitectures.map(async (arch) => {
+      const asset = assets[arch]
+      if (!asset) throw new Error("A required Electron holder architecture is missing.")
+      return [arch, await emitWindowsHolderCompanion(windowsHolderDirectory, asset)] as const
+    }),
+  )
+  return { placement: "electron" as const, targets: Object.fromEntries(targets) }
+}

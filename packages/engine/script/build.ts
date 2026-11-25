@@ -9,6 +9,11 @@ import { fileURLToPath } from "url"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { compileRuntime } from "../../../script/compile-runtime"
 import { bundleBrainWorker } from "./brain-worker"
+import {
+  emitWindowsHolderCompanion,
+  prepareWindowsHolderBundle,
+  windowsHolderBundlePlugin,
+} from "./windows-holder-bundle"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -55,10 +60,6 @@ const createEmbeddedWebUIBundle = async () => {
     `}`,
   ].join("\n")
 }
-
-const embeddedFileMap = skipEmbedWebUi ? null : await createEmbeddedWebUIBundle()
-// The brain's background reader, which carries this build's version and channel (bundleBrainWorker).
-const brainWorkerModule = `export default ${JSON.stringify(await bundleBrainWorker({ version: Script.version, channel: Script.channel }, isolation))}`
 
 const allTargets: {
   os: string
@@ -159,6 +160,20 @@ const targets = singleFlag
       return only.includes(key)
     })
 
+const windowsHolderAssets = await prepareWindowsHolderBundle({
+  argv: process.argv,
+  githubActions: process.env.GITHUB_ACTIONS,
+  declaredRevision: sourceRevision,
+  architectures: targets.filter((item) => item.os === "win32").map((item) => item.arch),
+  manifestPath: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST,
+  manifestDigest: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256,
+  expectedWire: "vsh1",
+})
+
+const embeddedFileMap = skipEmbedWebUi ? null : await createEmbeddedWebUIBundle()
+// The brain's background reader, which carries this build's version and channel (bundleBrainWorker).
+const brainWorkerModule = `export default ${JSON.stringify(await bundleBrainWorker({ version: Script.version, channel: Script.channel }, isolation))}`
+
 const executablePath = await compileRuntime({
   executable: process.env.VECTOR_BUN_EXECUTABLE_PATH,
   single: singleFlag,
@@ -192,6 +207,8 @@ for (const item of targets) {
     .join("-")
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
+  const windowsHolder = item.os === "win32" ? windowsHolderAssets?.[item.arch] : undefined
+  const companion = windowsHolder ? await emitWindowsHolderCompanion(`dist/${name}/bin`, windowsHolder) : undefined
 
   const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
   const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
@@ -208,7 +225,18 @@ for (const item of targets) {
   await Bun.build({
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
-    plugins: [plugin, isolation],
+    plugins: [
+      plugin,
+      isolation,
+      ...(windowsHolderAssets && companion
+        ? [
+            windowsHolderBundlePlugin(windowsHolderAssets, [item.arch], {
+              placement: "cli",
+              targets: { [item.arch]: companion },
+            }),
+          ]
+        : []),
+    ],
     external: ["node-gyp"],
     format: "esm",
     minify: true,
@@ -279,6 +307,7 @@ for (const item of targets) {
         vectorCatalogSha256: generated.modelsSha256,
         vectorStandalone: true,
         vectorSourceRevision: sourceRevision,
+        ...(companion ? { vectorWindowsHolder: companion } : {}),
         preferUnplugged: true,
         license: "SEE LICENSE IN LICENSE",
         files: ["bin", "LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"],
