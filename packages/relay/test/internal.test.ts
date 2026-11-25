@@ -237,6 +237,167 @@ describe("internal routes", () => {
     expect(namespace.calls[0]!.headers.get(INTERNAL_HEADERS.signature)).toBeNull()
   })
 
+  test("an absent or understated length stops at the body cap and cancels without reaching an object", async () => {
+    for (const length of [undefined, "1"]) {
+      const { env, runtime, namespace } = await worker()
+      const stream = { pulled: 0, cancelled: 0 }
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (stream.pulled === 1024) return controller.close()
+            stream.pulled++
+            controller.enqueue(new Uint8Array(1024))
+          },
+          cancel() {
+            stream.cancelled++
+          },
+        },
+        { highWaterMark: 0 },
+      )
+      const response = await handleRequest(
+        new Request(`https://relay.example${PATH}`, {
+          method: "POST",
+          headers: length ? { "content-length": length } : {},
+          body,
+        }),
+        env,
+        runtime,
+      )
+      expect(response.status).toBe(413)
+      expect(stream).toEqual({ pulled: RELAY_LIMITS.internalBodyBytes / 1024 + 1, cancelled: 1 })
+      expect(namespace.calls).toEqual([])
+    }
+  })
+
+  test("one oversized chunk is refused even if cancelling its open stream never settles", async () => {
+    const { env, runtime, namespace } = await worker()
+    const cancellation = Promise.withResolvers<void>()
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          controller.enqueue(new Uint8Array(RELAY_LIMITS.internalBodyBytes * 64))
+        },
+        cancel() {
+          cancelled = true
+          return cancellation.promise
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    try {
+      const response = await handleRequest(
+        new Request(`https://relay.example${PATH}`, { method: "POST", body }),
+        env,
+        runtime,
+      )
+      expect(response.status).toBe(413)
+      expect(cancelled).toBe(true)
+      expect(namespace.calls).toEqual([])
+    } finally {
+      cancellation.resolve()
+    }
+  }, 1000)
+
+  test("a streamed signed body of exactly the byte limit keeps its raw HMAC bytes", async () => {
+    const { env, runtime, namespace } = await worker()
+    const json = JSON.stringify({ account: ACCOUNT, note: "é" })
+    const text = json + " ".repeat(RELAY_LIMITS.internalBodyBytes - utf8(json).byteLength)
+    const signed = await headersFor(text)
+    const bytes = utf8(text)
+    let offset = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset === bytes.byteLength) return controller.close()
+        const end = Math.min(offset + 1024, bytes.byteLength)
+        controller.enqueue(bytes.subarray(offset, end))
+        offset = end
+      },
+    })
+    const response = await handleRequest(
+      new Request(`https://relay.example${PATH}`, { method: "POST", headers: signed, body }),
+      env,
+      runtime,
+    )
+    expect(response.status).toBe(200)
+    expect(namespace.calls).toHaveLength(1)
+    expect(namespace.calls[0]!.headers.get("x-vector-relay-nonce")).toBe(signed[INTERNAL_HEADERS.nonce]!)
+  })
+
+  test("a failed body read is refused before signature or object state", async () => {
+    const { env, runtime, namespace } = await worker()
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new Error("fixture body read failure"))
+      },
+    })
+    const response = await handleRequest(
+      new Request(`https://relay.example${PATH}`, { method: "POST", body }),
+      env,
+      runtime,
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: { code: "INTERNAL_BAD_REQUEST" } })
+    expect(namespace.calls).toEqual([])
+  })
+
+  test("method, action, secret and declared-size guards still reject before reading a body", async () => {
+    for (const input of [
+      { method: "PUT", action: "presence", status: 405 },
+      { method: "POST", action: "unknown", status: 404 },
+      { method: "POST", action: "presence", secret: "", status: 503 },
+      { method: "POST", action: "presence", length: String(RELAY_LIMITS.internalBodyBytes + 1), status: 413 },
+    ]) {
+      const { env, runtime, namespace } = await worker({ secret: input.secret })
+      let pulled = 0
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            pulled++
+            controller.error(new Error("early guards must not read the body"))
+          },
+        },
+        { highWaterMark: 0 },
+      )
+      const response = await handleRequest(
+        new Request(`https://relay.example/internal/v1/${input.action}`, {
+          method: input.method,
+          headers: input.length ? { "content-length": input.length } : {},
+          body,
+        }),
+        env,
+        runtime,
+      )
+      expect(response.status).toBe(input.status)
+      expect(pulled).toBe(0)
+      expect(namespace.calls).toEqual([])
+    }
+  })
+
+  test("an oversized body consumes no nonce before a later valid signed request", async () => {
+    const { env, runtime, namespace } = await worker()
+    const text = JSON.stringify({ account: ACCOUNT })
+    const signed = await headersFor(text, { nonce: "z".repeat(22) })
+    const oversized = await handleRequest(
+      new Request(`https://relay.example${PATH}`, {
+        method: "POST",
+        headers: signed,
+        body: new Uint8Array(RELAY_LIMITS.internalBodyBytes + 1),
+      }),
+      env,
+      runtime,
+    )
+    expect(oversized.status).toBe(413)
+    expect(namespace.calls).toEqual([])
+    const valid = await handleRequest(
+      new Request(`https://relay.example${PATH}`, { method: "POST", headers: signed, body: text }),
+      env,
+      runtime,
+    )
+    expect(valid.status).toBe(200)
+    expect(namespace.calls).toHaveLength(1)
+  })
+
   test("unsigned, badly signed or replayed calls are refused", async () => {
     const { call, env, runtime, namespace } = await worker()
     const forged = await call(
