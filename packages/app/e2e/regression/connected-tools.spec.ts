@@ -30,6 +30,7 @@ test("connected write approval shows the full patch as text before an explicit o
       },
     ],
   })
+  await page.route(/\/permission\/per_connected_write\/reply(?:\?|$)/, (route) => reply(route, true))
   await app.open()
   const dock = page.locator('[data-component="dock-prompt"][data-kind="permission"]')
   const patch = dock.getByRole("region", { name: "Changes to apply" })
@@ -39,13 +40,12 @@ test("connected write approval shows the full patch as text before an explicit o
   expect(await patch.textContent()).toBe(diff)
   await expect(patch.locator("script")).toHaveCount(0)
   await expect(dock.getByRole("button", { name: "Allow always", exact: true })).toHaveCount(0)
-  const reply = page.waitForRequest(
+  const approval = page.waitForRequest(
     (request) =>
-      request.method() === "POST" &&
-      new URL(request.url()).pathname === `/session/${rootID}/permissions/per_connected_write`,
+      request.method() === "POST" && new URL(request.url()).pathname === "/permission/per_connected_write/reply",
   )
   await dock.getByRole("button", { name: "Allow once", exact: true }).click()
-  expect((await reply).postDataJSON()).toEqual({ response: "once" })
+  expect((await approval).postDataJSON()).toEqual({ reply: "once", confirm: true })
 })
 
 test("connected settings keep an unsaved draft and focus when a run refreshes", async ({ page }) => {
