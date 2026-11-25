@@ -130,7 +130,8 @@ size_t run_uia_native_tests() {
       fixture.backend.close();
       require(fixture.first.closed == 1 && fixture.second.closed == 1, "uia-native.first-root-closes-adopted-actor");
     };
-    for (const auto phase : {WindowsUiaPhase::root_element, WindowsUiaPhase::runtime_id, WindowsUiaPhase::prepare_connection})
+    for (const auto phase : {WindowsUiaPhase::root_element, WindowsUiaPhase::root_wrap,
+                             WindowsUiaPhase::runtime_id, WindowsUiaPhase::prepare_connection})
       recovers(phase, WindowsUiaExpiry::caller_wait);
     recovers(WindowsUiaPhase::runtime_id, WindowsUiaExpiry::worker_current);
   });
@@ -149,6 +150,8 @@ size_t run_uia_native_tests() {
     refusal([&] { healthy.observe(); });
     FirstRootFixture worker; worker.expiry = WindowsUiaExpiry::worker_current;
     refusal([&] { worker.observe(); });
+    FirstRootFixture wrap_worker; wrap_worker.phase = WindowsUiaPhase::root_wrap; wrap_worker.expiry = WindowsUiaExpiry::worker_current;
+    refusal([&] { wrap_worker.observe(); });
     FirstRootFixture budget; budget.phase = WindowsUiaPhase::runtime_id; budget.expiry = WindowsUiaExpiry::worker_budget;
     refusal([&] { budget.observe(); });
     FirstRootFixture denied; denied.status = E_ACCESSDENIED;
@@ -156,7 +159,7 @@ size_t run_uia_native_tests() {
     FirstRootFixture changed; changed.code = L"changed";
     try { changed.observe(); throw std::runtime_error("uia-native.first-root-dropped-changed"); }
     catch (const Failure& failure) { require(failure.code == L"changed", "uia-native.first-root-keeps-changed"); }
-    require(healthy.opened == 0 && worker.opened == 0 && budget.opened == 0 && denied.opened == 0 && changed.opened == 0,
+    require(healthy.opened == 0 && worker.opened == 0 && wrap_worker.opened == 0 && budget.opened == 0 && denied.opened == 0 && changed.opened == 0,
       "uia-native.first-root-unknown-authority-never-retries");
   });
   test([] {

@@ -687,11 +687,14 @@ UiaElement observe_first_uia_root(WindowsUiaBackend& backend, std::shared_ptr<Wi
     try { retired = backend.available && !backend.available(); } catch (...) {}
     if (!retired || diagnostic->failure_status(false)) throw;
     const auto phase = diagnostic->failure_phase(false);
-    if (phase != WindowsUiaPhase::root_element && phase != WindowsUiaPhase::runtime_id && phase != WindowsUiaPhase::prepare_connection) throw;
     const auto expiry = diagnostic->failure_expiry(false);
+    // root_wrap follows a matched native handle and precedes the runtime ID read. The caller has no root yet.
+    const bool caller_expired = expiry == WindowsUiaExpiry::caller_wait &&
+      (phase == WindowsUiaPhase::root_element || phase == WindowsUiaPhase::root_wrap ||
+       phase == WindowsUiaPhase::runtime_id || phase == WindowsUiaPhase::prepare_connection);
     // At runtime_id the worker checks its ticket immediately before calling GetRuntimeId.
-    if (expiry != WindowsUiaExpiry::caller_wait &&
-        !(expiry == WindowsUiaExpiry::worker_current && phase == WindowsUiaPhase::runtime_id)) throw;
+    const bool worker_expired = expiry == WindowsUiaExpiry::worker_current && phase == WindowsUiaPhase::runtime_id;
+    if (!caller_expired && !worker_expired) throw;
     if (!still_current()) throw;
 
     // A retired actor may still return late. Its ticket and snapshot belong only to the first attempt.
