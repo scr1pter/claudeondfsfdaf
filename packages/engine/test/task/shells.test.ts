@@ -645,8 +645,8 @@ describe("background shell commands", () => {
       const { directory } = yield* TestInstance
       const root = yield* sessions.create()
       const pidfile = path.join(directory, "child.pid")
-      const child = `require('node:fs').writeFileSync(${JSON.stringify(pidfile)},String(process.pid));setInterval(()=>{},1000)`
-      const command = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'})`
+      const childScript = `require('node:fs').writeFileSync(${JSON.stringify(pidfile)},String(process.pid));setInterval(()=>{},1000)`
+      const command = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'})`
       const shell = yield* shells.start({
         sessionID: root.id,
         command: "keep a child process running",
