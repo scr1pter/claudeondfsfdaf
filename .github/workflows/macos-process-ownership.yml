@@ -1,0 +1,88 @@
+name: macOS process ownership
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/macos-process-ownership.yml
+      - .github/actions/setup-bun/**
+      - bun.lock
+      - package.json
+      - patches/**
+      - script/prepare-gitlab.ts
+      - packages/core/bunfig.toml
+      - packages/core/package.json
+      - packages/core/script/fix-node-pty.ts
+      - packages/core/src/child-environment.ts
+      - packages/core/src/cross-spawn-spawner.ts
+      - packages/core/src/owned-process.ts
+      - packages/core/src/process-isolation*.ts
+      - packages/core/src/pty.ts
+      - packages/core/src/pty/**
+      - packages/core/test/preload.ts
+      - packages/core/test/process/owned-process.test.ts
+      - packages/core/test/pty/pty-required-isolation.test.ts
+      - packages/engine/bunfig.toml
+      - packages/engine/package.json
+      - packages/engine/src/mcp/**
+      - packages/engine/src/task/**
+      - packages/engine/src/tool/shell.ts
+      - packages/engine/src/tool/shell/**
+      - packages/engine/src/tool/task-manage.ts
+      - packages/engine/src/tool/terminal.ts
+      - packages/engine/test/fixture/mcp-required-isolation.ts
+      - packages/engine/test/mcp/computer-policy-isolation.test.ts
+      - packages/engine/test/preload.ts
+      - packages/engine/test/task/isolation-terminal.test.ts
+      - packages/engine/test/task/shells.test.ts
+      - packages/engine/test/tool/task-manage.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-process-ownership-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  ownership:
+    name: Owned processes and task integration (macOS)
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Verify POSIX group ownership and output cleanup
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 test/process/owned-process.test.ts
+      - name: Verify durable background command ownership
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 test/task/shells.test.ts
+      - name: Verify isolated helper terminal cleanup
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 test/task/isolation-terminal.test.ts
+      - name: Verify background command list, stop, and wait
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 --test-name-pattern 'background commands|running commands' test/tool/task-manage.test.ts
+      - name: Verify the PTY recheck precedes isolation
+        working-directory: packages/core
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 test/pty/pty-required-isolation.test.ts
+      - name: Verify MCP policy precedes isolation
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 test/mcp/computer-policy-isolation.test.ts
