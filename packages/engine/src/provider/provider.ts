@@ -77,6 +77,7 @@ import { pathToFileURL } from "url"
 import { Effect, Layer, Context, Option, Schema, Stream, Types } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { ReviewRoutes } from "@/review/route"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectPromise } from "@/effect/promise"
 import { FSUtil } from "@vectordevai/core/fs-util"
@@ -174,6 +175,15 @@ function bodyModel(body: unknown) {
   if (typeof body !== "string") return undefined
   const sent = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(body))
   return isRecord(sent) && typeof sent.model === "string" ? sent.model : undefined
+}
+
+// The session a model call's `x-session-id` names: undefined without the header, and no `id` when it holds anything but
+// one session ID, such as two joined by a second spelling of the header.
+function sessionNamed(headers: RequestInit["headers"]): { readonly id?: SessionID } | undefined {
+  const header = new Headers(headers).get("x-session-id")
+  if (header === null) return undefined
+  const id = /^ses[\w-]*$/.test(header) ? Schema.decodeUnknownOption(SessionID)(header) : Option.none()
+  return { id: Option.getOrUndefined(id) }
 }
 
 // The notice for a model Vector Local keeps off, or undefined when its requests go to a model server on the list. It
@@ -1448,6 +1458,8 @@ export type Error = ModelNotFoundError | InitError | NoProvidersError | NoModels
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderV2.ID, Info>>
   readonly unavailable: () => Effect.Effect<ProviderUnavailable[]>
+  /** Already resolved model catalog; a sizing query must never refresh accounts, credentials or a server. */
+  readonly reviewProvider?: (id: ProviderV2.ID) => Effect.Effect<Info | undefined>
   readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
   readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
@@ -2415,15 +2427,13 @@ const layer = Layer.effect(
 
     // Every session request names its session (LLMRequestPrep), and so does every model call a guest can cause: prompts,
     // compaction, titles, summaries, subagents and retries all run inside one. A request with none, such as generating
-    // an agent from the terminal, is the owner's own. Anything but one session ID, such as two joined by a second
-    // spelling of the header, names no session that can be checked, so it is held to the guest rule.
+    // an agent from the terminal, is the owner's own. A header that names no session that can be checked
+    // (sessionNamed) is held to the guest rule.
     const guestRequest = (headers: RequestInit["headers"]) => {
-      const header = new Headers(headers).get("x-session-id")
-      const sessionID =
-        header !== null && /^ses[\w-]*$/.test(header) ? Schema.decodeUnknownOption(SessionID)(header) : Option.none()
-      return header !== null && Option.isNone(sessionID)
+      const session = sessionNamed(headers)
+      return session && session.id === undefined
         ? Promise.resolve(true)
-        : runtimeBridge.promise(guests.marked(Option.getOrUndefined(sessionID)))
+        : runtimeBridge.promise(guests.marked(session?.id))
     }
 
     async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>) {
@@ -2431,19 +2441,45 @@ const layer = Layer.effect(
         ProcessIsolation.assertExternalValueAllowed(s)
         if (!Object.hasOwn(BUNDLED_PROVIDERS, model.api.npm)) ProcessIsolation.assertExternalCodeAllowed()
         const provider = s.providers[model.providerID]
+        // VS-23c (SF-12a): a model call of a session a review registered under privacy "zdr" is decided again here, in
+        // each of the three fetches below, before anything is resolved, read or sent; every other call goes on as it is
+        // (ReviewRoutes.hold). Per call, not per SDK: the SDK and its model are cached across sessions, so only the call
+        // names its session. The session is read as the generic fetch reads headers, a `Request`'s included, and only
+        // while a review session is registered; the call's own URL, with `origins` (requestOrigins), is where the
+        // transport sees it sent, computed only for a "zdr" session's call.
+        const zdrHold = (
+          input: RequestInfo | URL,
+          init: RequestInit | undefined,
+          origins: () => readonly string[] = () => [],
+        ) =>
+          ReviewRoutes.hold({
+            session: () => sessionNamed(init?.headers ?? (input instanceof Request ? input.headers : undefined)),
+            model,
+            options: provider?.options ?? {},
+            destinations: () => [...origins(), input instanceof Request ? input.url : String(input)],
+          })
         if (model.providerID === planID) {
           const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible")
+          const plan = ModelPlans.createFetch({
+            modelID: model.id,
+            credential: () => runtimeBridge.promise(freeCredentials.get("vector")),
+            catalog: (token) => runtimeBridge.promise(modelPlans.catalog(token, { wait: true })),
+            request: modelPlans.request,
+          })
           return createOpenAICompatible({
             name: ModelPlans.PROVIDER_ID,
             baseURL: ModelPlans.API_URL,
             // The account token is added inside fetch, at the fixed vectordev.ai destination.
             apiKey: "vector-request-credential",
-            fetch: ModelPlans.createFetch({
-              modelID: model.id,
-              credential: () => runtimeBridge.promise(freeCredentials.get("vector")),
-              catalog: (token) => runtimeBridge.promise(modelPlans.catalog(token, { wait: true })),
-              request: modelPlans.request,
-            }),
+            fetch: Object.assign(
+              async (input: RequestInfo | URL, init?: RequestInit) => {
+                // Codium is never a zero data retention route until its acceptance exists (SF-35).
+                const held = zdrHold(input, init)
+                if (held) throw new ReviewRoutes.Refused("refusal" in held ? held.refusal : "codium-unaccepted")
+                return plan(input, init)
+              },
+              { preconnect: plan.preconnect },
+            ),
           })
         }
         if (
@@ -2457,7 +2493,10 @@ const layer = Layer.effect(
             baseURL: "https://vectordev.ai/api/free-models",
             apiKey: "vector-request-credential",
             fetch: Object.assign(
-              async (_input: RequestInfo | URL, init?: RequestInit) => {
+              async (input: RequestInfo | URL, init?: RequestInit) => {
+                // A free model is never a zero data retention route.
+                const held = zdrHold(input, init)
+                if (held) throw new ReviewRoutes.Refused("refusal" in held ? held.refusal : "free-model")
                 const route = await FreeModels.resolveRoute({
                   provider: model.providerID === "vector" ? "vector" : "openrouter",
                   modelID: model.id,
@@ -2584,6 +2623,8 @@ const layer = Layer.effect(
           apiKey: credential?.type === "api" || (!credential && typeof options["apiKey"] === "string"),
           url: baseURL,
         })
+        // Read before it is deleted below, for the transport backstop's origins, which only a held call computes.
+        const preconnect = options["preconnect"]
         delete options["promptCacheBreakpoints"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
@@ -2598,6 +2639,12 @@ const layer = Layer.effect(
           const fetchFn = customFetch ?? fetch
           const opts = { ...init }
           const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+          const target = input instanceof Request ? input.url : String(input)
+          // VS-23c: a "zdr" session's call is refused here, before its body is read, when its route is not allowed now.
+          const held = zdrHold(input, init, () =>
+            requestOrigins(model, { ...options, preconnect }, s.varsLoaders[model.providerID], envs),
+          )
+          if (held && "refusal" in held) throw new ReviewRoutes.Refused(held.refusal)
           const marker = headers.get(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
           headers.delete(ProviderTransform.PROMPT_CACHE_PREFIX_HEADER)
           if (marker !== null) opts.headers = headers
@@ -2639,6 +2686,24 @@ const layer = Layer.effect(
             )
               opts.body = JSON.stringify(denyDataCollection(sent))
           }
+          // VS-23c: a held call's final body, after every rewrite above and before plugin consent, Vector Local's server
+          // check and the fetch: a JSON string beside the URL, checked for its route and format, and on OpenRouter sent
+          // with the ZDR body (ReviewRoutes.sendBody).
+          if (held) {
+            const checked = ReviewRoutes.sendBody({
+              kind: held.kind,
+              npm: model.api.npm,
+              url: target,
+              body: opts.body,
+              request: input instanceof Request,
+              modelID: model.api.id,
+            })
+            if ("refusal" in checked) throw new ReviewRoutes.Refused(checked.refusal)
+            opts.body = checked.body
+            // Every origin the call reaches must be one hold allowed, and a redirect's target is not, so a held call
+            // follows none: with Vector Local off, Egress.fetch sends these options as they are.
+            opts.redirect = "error"
+          }
           if (consent) {
             requirePluginDestination(consent, input instanceof Request ? input.url : String(input))
             const current = await runtimeBridge.promise(auth.get(model.providerID).pipe(Effect.orDie))
@@ -2656,7 +2721,6 @@ const layer = Layer.effect(
           // pin, and no model call goes to a server whose identity changed since it was added until the user confirms
           // the server. The read also learns which of its models the server passes on, which the decision below
           // refuses by this model's name and by the one the request sends.
-          const target = input instanceof Request ? input.url : String(input)
           const policy = Egress.policy()
           const sent = policy.enabled && ModelSlots.server(target, policy) ? bodyModel(opts.body) : undefined
           const names = sent === undefined || sent === model.api.id ? [model.api.id] : [model.api.id, sent]
@@ -2765,6 +2829,19 @@ const layer = Layer.effect(
         throw new InitError({ providerID: model.providerID, cause: e })
       }
     }
+
+    const reviewProvider = Effect.fn("Provider.reviewProvider")(function* (id: ProviderV2.ID) {
+      const s = Option.getOrUndefined(yield* InstanceState.getSuccess(state))
+      if (!s) return
+      const policy = Config.local()
+      if (
+        (s.local.enabled || policy.enabled) &&
+        (JSON.stringify(policy) !== JSON.stringify(s.local) || s.revision !== holds.revision())
+      )
+        return
+      ProcessIsolation.assertExternalValueAllowed(s)
+      return s.providers[id]
+    })
 
     const getProvider = Effect.fn("Provider.getProvider")((providerID: ProviderV2.ID) =>
       Effect.map(providerState, (s) => s.providers[providerID]),
@@ -3210,6 +3287,7 @@ const layer = Layer.effect(
       list,
       unavailable,
       getProvider,
+      reviewProvider,
       getModel,
       getLanguage,
       line,

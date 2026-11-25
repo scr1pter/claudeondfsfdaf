@@ -34,6 +34,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
+import type { ReviewMcpSnapshot } from "@/review/mcp-snapshot"
+import { ReviewMcp } from "@/review/mcp"
 import { McpComputerPolicy } from "./computer-policy"
 import { McpEvent } from "@vectordevai/schema/mcp-event"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
@@ -254,6 +256,8 @@ export interface Interface {
   readonly status: () => Effect.Effect<Record<string, Status>>
   /** Optional nonstarting inventory capability; legacy services may expose only the active status operation. */
   readonly snapshot?: () => Effect.Effect<Record<string, SnapshotStatus>>
+  /** Nonstarting generation check for a fixed, already authorized resource snapshot. Carries no client or credentials. */
+  readonly reviewSnapshotGeneration?: (server: string) => Effect.Effect<ReviewMcpSnapshot.Generation | undefined>
   readonly clients: () => Effect.Effect<Record<string, MCPClient>>
   readonly instructions: () => Effect.Effect<ServerInstructions[]>
   readonly tools: () => Effect.Effect<Record<string, Tool>>
@@ -293,6 +297,27 @@ export interface Interface {
   readonly supportsOAuth: (mcpName: string) => Effect.Effect<boolean, NotFoundError>
   readonly hasStoredTokens: (mcpName: string) => Effect.Effect<boolean>
   readonly getAuthStatus: (mcpName: string) => Effect.Effect<AuthStatus>
+}
+
+// A model-facing view of the stock lifecycle. None of the restricted getters initializes MCP state:
+// initialization would start servers and perform dynamic discovery even if the caller discarded the results.
+export type ModelCatalog = Pick<
+  Interface,
+  "clients" | "instructions" | "tools" | "cloudTools" | "prompts" | "resources" | "resourceTemplates"
+>
+
+const noModelCatalog: ModelCatalog = {
+  clients: () => Effect.succeed({}),
+  tools: () => Effect.succeed({}),
+  cloudTools: () => Effect.succeed({}),
+  instructions: () => Effect.succeed([]),
+  prompts: () => Effect.succeed({}),
+  resources: () => Effect.succeed({}),
+  resourceTemplates: () => Effect.succeed({}),
+}
+
+export function modelCatalog(service: ModelCatalog, restricted: boolean): ModelCatalog {
+  return restricted ? noModelCatalog : service
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/MCP") {}
@@ -582,6 +607,14 @@ const layer = Layer.effect(
       Effect.catch(() => Effect.succeed([] as number[])),
     )
 
+    const generations = new WeakMap<
+      MCPClient,
+      {
+        defs: State["defs"][string] | undefined
+        config: ConfigMCPV1.Info | undefined
+        token: ReviewMcpSnapshot.Generation
+      }
+    >()
     function watch(
       sdk: typeof import("./sdk"),
       s: State,
@@ -608,8 +641,19 @@ const layer = Layer.effect(
         bridge.promise(serverLog(name, notification.params)),
       )
 
-      if (!client.getServerCapabilities()?.tools) return
+      const capabilities = client.getServerCapabilities()
+      // Drop owner-bound readers as soon as the inventory changes. No discovery is initiated by these handlers.
+      if (capabilities?.resources?.listChanged)
+        client.setNotificationHandler(sdk.ResourceListChangedNotificationSchema, async () => {
+          generations.delete(client)
+        })
+      if (capabilities?.prompts?.listChanged)
+        client.setNotificationHandler(sdk.PromptListChangedNotificationSchema, async () => {
+          generations.delete(client)
+        })
+      if (!capabilities?.tools) return
       client.setNotificationHandler(sdk.ToolListChangedNotificationSchema, async () => {
+        generations.delete(client)
         if (s.clients[name] !== client || s.status[name]?.status !== "connected") return
 
         const listed = await bridge.promise(McpCatalog.defs(client, timeout))
@@ -814,6 +858,20 @@ const layer = Layer.effect(
       return result
     })
 
+    const reviewSnapshotGeneration = Effect.fn("MCP.reviewSnapshotGeneration")(function* (server: string) {
+      if ((yield* ReviewMcp.blocked) || !(yield* InstanceState.has(state))) return
+      const cached = Option.getOrUndefined(yield* ScopedCache.getSuccess(state.cache, yield* InstanceState.directory))
+      if (!cached || cached.status[server]?.status !== "connected" || !Object.hasOwn(cached.clients, server)) return
+      const client = cached.clients[server]
+      const defs = cached.defs[server]
+      const config = cached.config[server]
+      const known = generations.get(client)
+      if (known && known.defs === defs && known.config === config) return known.token
+      const token = Object.freeze({ id: Symbol() })
+      generations.set(client, { defs, config, token })
+      return token
+    })
+
     const snapshot = Effect.fn("MCP.snapshot")(function* () {
       // Never use get here: an inventory read must neither start a cold lookup nor wait for one already starting.
       // getSuccess also closes the has/read invalidation race without creating a replacement connection.
@@ -834,11 +892,13 @@ const layer = Layer.effect(
     })
 
     const clients = Effect.fn("MCP.clients")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       const s = yield* InstanceState.get(state)
       return s.clients
     })
 
     const instructions = Effect.fn("MCP.instructions")(function* () {
+      if (yield* ReviewMcp.blocked) return []
       const s = yield* InstanceState.get(state)
       return Object.entries(s.instructions)
         .filter(([name]) => s.status[name]?.status === "connected")
@@ -985,6 +1045,7 @@ const layer = Layer.effect(
     })
 
     const connect = Effect.fn("MCP.connect")(function* (name: string) {
+      if (yield* ReviewMcp.blocked) return yield* Effect.die(new Error(ReviewMcp.unavailable))
       const mcp = yield* requireMcpConfig(name)
       const enabled = { ...mcp, enabled: true }
       const s = yield* InstanceState.get(state)
@@ -1012,6 +1073,7 @@ const layer = Layer.effect(
     }
 
     const tools = Effect.fn("MCP.tools")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       const result: Record<string, Tool> = {}
       const s = yield* InstanceState.get(state)
 
@@ -1040,6 +1102,7 @@ const layer = Layer.effect(
     })
 
     const cloudTools = Effect.fn("MCP.cloudTools")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       const s = yield* InstanceState.get(state)
       const result: Record<string, McpCloud.Request> = {}
       for (const clientName of Object.keys(s.clients)) {
@@ -1082,10 +1145,12 @@ const layer = Layer.effect(
     }
 
     const prompts = Effect.fn("MCP.prompts")(function* () {
+      if (yield* ReviewMcp.blocked) return {}
       return yield* collectFromConnected(yield* InstanceState.get(state), McpCatalog.prompts, "prompts")
     })
 
     const resources = Effect.fn("MCP.resources")(function* (clientName?: string) {
+      if (yield* ReviewMcp.blocked) return {}
       return yield* collectFromConnected(
         yield* InstanceState.get(state),
         McpCatalog.resources,
@@ -1096,6 +1161,7 @@ const layer = Layer.effect(
     })
 
     const resourceTemplates = Effect.fn("MCP.resourceTemplates")(function* (clientName?: string) {
+      if (yield* ReviewMcp.blocked) return {}
       return yield* collectFromConnected(
         yield* InstanceState.get(state),
         McpCatalog.resourceTemplates,
@@ -1111,6 +1177,7 @@ const layer = Layer.effect(
       label: string,
       meta?: Record<string, unknown>,
     ) {
+      if (yield* ReviewMcp.blocked) return undefined
       const s = yield* InstanceState.get(state)
       const client = s.clients[clientName]
       if (!client) {
@@ -1374,6 +1441,7 @@ const layer = Layer.effect(
     return Service.of({
       status,
       snapshot,
+      reviewSnapshotGeneration,
       clients,
       instructions,
       tools,

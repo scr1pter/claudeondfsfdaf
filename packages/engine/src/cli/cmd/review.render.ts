@@ -4,8 +4,17 @@
 
 import { Billing } from "@vectordevai/schema/billing"
 import { reviewCostHasCodium, reviewCostIsCodium } from "@vectordevai/core/review/state"
-import { costWording, formatDuration, formatTokens, formatUsd } from "@vectordevai/core/review/format"
+import {
+  costWording,
+  FIRST_REQUEST_STOP_NOTES,
+  firstRequestStopDetail,
+  formatDuration,
+  formatTokens,
+  formatUsd,
+  strictCountLine,
+} from "@vectordevai/core/review/format"
 import { checkedLine } from "@vectordevai/core/review/second-lab"
+import { unfinishedCauses } from "@vectordevai/core/review/verdict"
 import type {
   Finding,
   PlacedFinding,
@@ -53,6 +62,7 @@ const SKIP_REASON: Record<SkippedFile["reason"], string> = {
   binary: "binary",
   deleted: "deleted",
   "size-limit": "too large",
+  "held-back": "held back",
 }
 
 const ANSI = {
@@ -79,7 +89,7 @@ export function renderLocalReview(input: RenderInput): string {
       `Vectorscope review · ${plain(target.label)} vs ${plain(target.baseRef)} (${at}) · ${files} ${files === 1 ? "file" : "files"}, +${outcome.stats.additions} −${outcome.stats.deletions}`,
     ),
   )
-  lines.push(`Risk: ${capitalize(selection.risk)} · ${counts(outcome)}`)
+  lines.push(reviewHeadline(outcome))
   const partial = partialLine(input)
   if (partial) lines.push(partial)
 
@@ -136,6 +146,25 @@ export function renderLocalReview(input: RenderInput): string {
   return lines.join("\n") + "\n"
 }
 
+// A partial or skipped strict result cannot use the ordinary clean-review wording.
+function reviewHeadline(outcome: ReviewOutcome): string {
+  const { selection, strict } = outcome
+  if (outcome.partial === "privacy" || outcome.partial === "budget-estimate" || outcome.trivial) return "Not reviewed"
+  if (!outcome.specialists.length && outcome.held?.length)
+    return `Not reviewed: ${outcome.mode === "incremental" ? "everything new since the last review is in files" : "every changed file was"} held back from the model.`
+  if (strict) {
+    const complete = strict.complete && !selection.diffIncomplete && unfinishedCauses(outcome).length === 0
+    const summary = strictCountLine({ ...strict, complete, findingCount: strict.findings.length }, [], "").replaceAll(
+      "**",
+      "",
+    )
+    return !complete && strict.findings.length ? `Review incomplete · ${summary}` : summary
+  }
+  if (selection.diffIncomplete || firstRequestStopDetail(outcome))
+    return ["Partial review", counts(outcome)].filter(Boolean).join(" · ")
+  return `Risk: ${capitalize(selection.risk)} · ${counts(outcome) || "No issues found"}`
+}
+
 // The counts line: every new finding by severity, wherever it is listed.
 function counts(outcome: ReviewOutcome): string {
   const selection = outcome.selection
@@ -153,15 +182,32 @@ function counts(outcome: ReviewOutcome): string {
   if (blocking) parts.push(`${blocking} blocking`)
   if (concerns) parts.push(`${concerns} ${concerns === 1 ? "concern" : "concerns"}`)
   if (nits) parts.push(`${nits} ${nits === 1 ? "nit" : "nits"}`)
-  return parts.length ? parts.join(" · ") : "No issues found"
+  return parts.join(" · ")
 }
 
 function partialLine(input: RenderInput): string | undefined {
   const { outcome, limits } = input
-  if (!outcome.partial) return undefined
+  if (!outcome.partial || outcome.partial === "budget-estimate") return undefined
+  // VS-23b: the route rules' stop is no partial review; the note below says which model and why.
+  if (outcome.partial === "privacy") {
+    const files = outcome.unreviewed
+    const shown = files.slice(0, MAX_UNREVIEWED_SHOWN).map(plain).join(", ")
+    const more = files.length > MAX_UNREVIEWED_SHOWN ? ` and ${files.length - MAX_UNREVIEWED_SHOWN} more` : ""
+    const stop =
+      'Not reviewed: privacy is "zdr", and a model this review would use has no zero data retention route Vector may use.'
+    return files.length ? `${stop} Files not reviewed: ${shown}${more}.` : stop
+  }
   const failed = outcome.specialists.find(
     (entry) => entry.status === "failed" && entry.name !== "verify" && entry.name !== "judge",
   )
+  const unreviewed = outcome.unreviewed
+  const shown = unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(plain).join(", ")
+  const more = unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
+  const requestStop = firstRequestStopDetail(outcome)
+  if (requestStop) {
+    const note = FIRST_REQUEST_STOP_NOTES[requestStop]
+    return shown ? `${note} Checks remain for ${shown}${more}.` : note
+  }
   const stop =
     outcome.partial === "budget"
       ? `stopped at the ${formatUsd(limits.maxCostUsd)} budget`
@@ -170,10 +216,7 @@ function partialLine(input: RenderInput): string | undefined {
         : outcome.partial === "timeout"
           ? `stopped at the ${limits.timeoutMinutes}-minute time limit`
           : `${failed ? `the ${failed.name} reviewer` : "a reviewer"} could not finish${failed?.detail ? ` (${clipWords(plain(failed.detail), 160)})` : ""}`
-  const unreviewed = outcome.unreviewed
   if (!unreviewed.length) return `Partial review: ${stop}.`
-  const shown = unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(plain).join(", ")
-  const more = unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
   const next = input.resumable ? " Run `vector review` again to review them." : ""
   return `Partial review: ${stop}. Not reviewed: ${shown}${more}.${next}`
 }

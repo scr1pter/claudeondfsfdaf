@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { ChildProcess } from "effect/unstable/process"
-import { execFile, spawn } from "node:child_process"
+import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { WindowsHolder } from "../../src/tool/shell/windows-holder"
+import { carrierDelivery, prepareCarrier } from "../../src/tool/shell/windows-holder-carrier"
 import { WindowsProcess } from "../../src/tool/shell/windows-process"
 
 const command = (text: string, shell?: string | boolean) =>
@@ -139,6 +141,53 @@ describe("Windows background command preparation", () => {
     expect(() => truncated.finish()).toThrow("Truncated")
   })
 
+  test("the precompiled bytes stay on the private pipe and the bootstrap verifies the pinned asset", () => {
+    const bytes = Buffer.from("synthetic holder bytes")
+    const asset = {
+      arch: "x64",
+      base64: bytes.toString("base64"),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    } as const
+    const prepared = prepareCarrier(asset)
+    const encoded = prepared.args.at(-1)!
+    const script = Buffer.from(encoded, "base64").toString("utf16le")
+    expect(prepared.bytes).toEqual(bytes)
+    expect(encoded.length).toBeLessThanOrEqual(5_000)
+    expect(script).toContain(asset.sha256)
+    expect(script).not.toContain(asset.base64)
+    expect(script).not.toContain("Add-Type")
+    expect(() => prepareCarrier({ ...asset, base64: "dGFtcGVy" })).toThrow("failed verification")
+  })
+
+  test("configuration waits for a complete validated bootstrap and is sent at most once", () => {
+    const startup = (step: number) => message({ type: "startup", step })
+    const reader = new WindowsProcess.StatusReader()
+    const writes: string[] = []
+    const transport = carrierDelivery(
+      () => writes.push("prefix"),
+      () => writes.push("config"),
+    )
+    transport.begin()
+    const fourth = startup(4)
+    reader.push(Buffer.concat([startup(1), startup(2), startup(3), fourth.subarray(0, -1)]))
+    transport.afterStatus(reader.validatedStartupStep, true)
+    expect(writes).toEqual(["prefix"])
+    reader.push(fourth.subarray(-1))
+    transport.afterStatus(reader.validatedStartupStep, false)
+    expect(writes).toEqual(["prefix"])
+    transport.afterStatus(reader.validatedStartupStep, true)
+    transport.afterStatus(reader.validatedStartupStep, true)
+    expect(writes).toEqual(["prefix", "config"])
+
+    const advanced = carrierDelivery(
+      () => {},
+      () => writes.push("early"),
+    )
+    advanced.begin()
+    expect(() => advanced.afterStatus(5, true)).toThrow("before receiving its configuration")
+    expect(writes).not.toContain("early")
+  })
+
   test.skipIf(process.platform === "win32")(
     "a non-Windows host refuses rather than falling back to an uncontained process",
     async () => {
@@ -155,6 +204,10 @@ describe("Windows background command preparation", () => {
 const windows = test.skipIf(process.platform !== "win32")
 
 describe("native Windows job containment (hosted Windows only)", () => {
+  windows("the process observer recognizes a live fixture PID", () => {
+    expect(alive(process.pid)).toBe(true)
+  })
+
   windows(
     "real cmd, PowerShell and Git Bash preserve selected shell semantics in a spaced Unicode directory",
     async () => {
@@ -528,34 +581,39 @@ function counter(cwd: string) {
   return {
     pid,
     count,
-    script: `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${literal(pid)},[string]$PID); while($true){[IO.File]::AppendAllText(${literal(count)},'x'); Start-Sleep -Milliseconds 25}`,
+    script: `$ErrorActionPreference='Stop'; [IO.File]::WriteAllText(${literal(pid)},[string]$PID); while($true){[IO.File]::AppendAllText(${literal(count)},'x'); [Threading.Thread]::Sleep(25)}`,
   }
 }
 function tree(worker: ReturnType<typeof counter>, stay: boolean) {
   const encoded = Buffer.from(worker.script, "utf16le").toString("base64")
-  return `$ErrorActionPreference='Stop'; $p=Start-Process -FilePath ${literal(powershell())} -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand','${encoded}') -PassThru -NoNewWindow -RedirectStandardOutput ${literal(worker.count + ".stdout")} -RedirectStandardError ${literal(worker.count + ".stderr")}; $until=[DateTime]::UtcNow.AddSeconds(10); while(!(Test-Path ${literal(worker.count)}) -and [DateTime]::UtcNow -lt $until){Start-Sleep -Milliseconds 25}; if(!(Test-Path ${literal(worker.count)})){throw 'worker did not become ready'}; ${stay ? "while($true){Start-Sleep -Milliseconds 50}" : "exit 7"}`
+  // The descendant still has separate stdout/stderr. Static .NET APIs avoid PowerShell module discovery in this fixture.
+  return [
+    "$ErrorActionPreference='Stop'",
+    "$start=[Diagnostics.ProcessStartInfo]::new()",
+    `$start.FileName=${literal(powershell())}`,
+    `$start.Arguments='-NoLogo -NoProfile -NonInteractive -EncodedCommand ${encoded}'`,
+    "$start.UseShellExecute=$false",
+    "$start.CreateNoWindow=$true",
+    "$start.RedirectStandardOutput=$true",
+    "$start.RedirectStandardError=$true",
+    "$child=[Diagnostics.Process]::Start($start)",
+    "$until=[DateTime]::UtcNow.AddSeconds(10)",
+    `$count=${literal(worker.count)}`,
+    "while(![IO.File]::Exists($count) -and [DateTime]::UtcNow -lt $until){[Threading.Thread]::Sleep(25)}",
+    "if(![IO.File]::Exists($count)){throw 'worker did not become ready'}",
+    stay ? "while($true){[Threading.Thread]::Sleep(50)}" : "exit 7",
+  ].join("; ")
 }
 function alive(pid: number) {
   if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("Invalid observed test PID")
-  // Read-only process observation; tests never kill a PID recovered from a file.
-  return new Promise<boolean>((resolve, reject) =>
-    execFile(
-      powershell(),
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `if(Get-Process -Id ${pid} -ErrorAction SilentlyContinue){exit 1}; exit 0`,
-      ],
-      { timeout: 5000, windowsHide: true },
-      (error) => {
-        if (!error) return resolve(false)
-        if (error.code === 1) return resolve(true)
-        reject(error)
-      },
-    ),
-  )
+  // Signal 0 is a read-only OS query. Access errors must not falsely prove that the process is gone.
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false
+    throw error
+  }
 }
 function rawHolder(command: ChildProcess.StandardCommand, script = WindowsHolder.script) {
   const input = WindowsProcess.normalize(command)

@@ -18,6 +18,11 @@ import type { CostKind, Trigger } from "@vectordevai/core/review/types"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import type { ModelV2 } from "@vectordevai/core/model"
 import { VECTORSCOPE_AGENT } from "@vectordevai/core/review/prompt"
+import { ROUTE_REFUSALS, type RouteRefusal } from "@vectordevai/core/review/privacy"
+import { labName } from "@vectordevai/core/model-lab"
+import { labOfModel } from "@vectordevai/core/review/second-lab"
+import { ReviewAuthor } from "./author"
+import { ReviewRoutes } from "./route"
 
 export interface ResolvedModel {
   providerID: ProviderV2.ID
@@ -29,14 +34,25 @@ export interface ResolvedModel {
   // What model evidence (VS-07) reads: which setting chose the model, or the default Vector fell back to, and the
   // catalog's facts about it. Descriptive only; nothing changes which model runs. Absent on models built by hand.
   subject?: ModelSubject
+  /** The CLI also holds the actual dispatch to the stricter route when this switch takes place. */
+  inversion?: { note: string; privacy: "zdr" }
+  // VS-23b: where the model catalog ships the model's provider, for the route rules (ReviewRoutes.shippedOrigins): its
+  // base URL as shipped, or none for a provider defined in configuration. Set only under privacy "zdr", and absent when
+  // that is unknown (the catalog lists the provider without a URL, or is empty), so a standard resolution is unchanged.
+  catalogOrigins?: readonly string[]
 }
 
 export class ReviewModelError extends Schema.TaggedErrorClass<ReviewModelError>()("ReviewModelError", {
   message: Schema.String,
+  // VS-23b: set when privacy "zdr" refused the model (ReviewRoutes): the "provider/model" and the route rules' reason. A
+  // caller that reads them reviews nothing and says why (format.ts notePrivacyRefused), and never tries another model.
+  model: Schema.optional(Schema.String),
+  refusal: Schema.optional(Schema.Literals(ROUTE_REFUSALS)),
 }) {}
 
 export interface ResolveInput {
   trigger: Trigger
+  author?: ReviewAuthor.Proof
   flag?: string // `vector review --model`
   config?: string // `model` from .vector/review.json
   env?: Record<string, string | undefined> // MODEL and REVIEW_AUTO_MODEL; process.env by default
@@ -46,6 +62,10 @@ export interface ResolveInput {
   evidence?: boolean
   /** Internal service identity; absent preserves the generic review setting. */
   identity?: "vectorscope"
+  // VS-23b: the review's route settings (ReviewRoutes.policyOf). Under privacy "zdr" the chosen model must have a route
+  // the rules allow (core privacy.ts), or resolution fails with a ReviewModelError that carries the refusal, and CI
+  // never falls back to a free model. Absent, or "standard", changes nothing.
+  route?: ReviewRoutes.Policy
 }
 
 // CI (auto and command): REVIEW_AUTO_MODEL for automatic runs only, then review.json, then MODEL.
@@ -53,7 +73,8 @@ export interface ResolveInput {
 // agent.review.model.
 // Local (local and desktop): --model, review.json, agent.review.model from the user's config, the configured
 // default model. CI may use an available free model without a provider key.
-export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (input: ResolveInput) {
+const configured = Effect.fn("ReviewModel.configured")(function* (input: ResolveInput, ownerAlternate = false) {
+  const exactSetting = ownerAlternate ? "review.alternateModel in your global Vector settings" : TRIAGE_SETTING
   const env = input.env ?? process.env
   const provider = yield* Provider.Service
   const config = yield* Config.Service
@@ -61,6 +82,7 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   const catalog = yield* ModelCatalog.Service
 
   const ci = input.trigger === "auto" || input.trigger === "command"
+  const route = input.route?.privacy === "zdr" ? input.route : undefined
   const scope = input.identity === VECTORSCOPE_AGENT
   if (scope && ci)
     return yield* new ReviewModelError({ message: "The VectorScope service requires a local review model selection." })
@@ -72,13 +94,13 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   const picked = (
     ci
       ? [
-          { value: input.exact, setting: TRIAGE_SETTING },
+          { value: input.exact, setting: exactSetting },
           { value: input.trigger === "auto" ? env.REVIEW_AUTO_MODEL : undefined, setting: AUTO_SETTING },
           { value: input.config, setting: CONFIG_SETTING },
           { value: env.MODEL, setting: MODEL_SETTING },
         ]
       : [
-          { value: input.exact, setting: TRIAGE_SETTING },
+          { value: input.exact, setting: exactSetting },
           { value: input.flag, setting: "--model" },
           { value: input.config, setting: CONFIG_SETTING },
           { value: agent?.model, setting: scope ? "agent.vectorscope.model" : "agent.review.model" },
@@ -87,8 +109,9 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
     .map((source) => ({ ...source, value: source.value?.trim() }))
     .find((source) => !!source.value)
   const chosen = picked?.value
+  // Under "zdr" a free model is refused, so there is no free fallback to take.
   const free =
-    chosen || !ci
+    chosen || !ci || route
       ? undefined
       : // An unattended review never sends code to a free model whose provider may train on it.
         Object.values(yield* provider.list())
@@ -113,7 +136,7 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
   if (!name)
     return yield* new ReviewModelError({
       message: ci
-        ? "No review model is set. Set MODEL or REVIEW_AUTO_MODEL in the workflow, or model in .vector/review.json, and provide that provider's key."
+        ? `No review model is set. Set MODEL or REVIEW_AUTO_MODEL in the workflow, or model in .vector/review.json, and provide that provider's key.${route ? ' Under privacy "zdr" Vector never falls back to a free model.' : ""}`
         : scope
           ? "No VectorScope model is set. Choose agent.vectorscope.model in your Vector settings or provide an explicit or pinned review model."
           : "No review model is set. Pass --model, set model in .vector/review.json, or connect a provider in Vector.",
@@ -124,6 +147,16 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
     return yield* new ReviewModelError({
       message: `Invalid model ${name}. Model must be in the format "provider/model".`,
     })
+  const refused = (refusal: RouteRefusal) =>
+    new ReviewModelError({
+      model: name,
+      refusal,
+      message: `${name} has no zero data retention route Vector may use while privacy is "zdr" (${refusal}).`,
+    })
+  // The model's own refusals (Vector Codium, a free model, a router, a Covered Model) need no lookup, so a refused free
+  // or Codium model is never looked up, nor said to be unavailable.
+  const early = route ? ReviewRoutes.modelRefusal(ref, route) : undefined
+  if (early) return yield* refused(early)
   const model = yield* provider.getModel(ref.providerID, ref.modelID).pipe(
     Effect.catch((error) =>
       Effect.gen(function* () {
@@ -156,6 +189,23 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
       }),
     ),
   )
+  // Where the catalog ships the provider, which an attestation of the provider ID covers (privacy.ts defaultOrigins).
+  const catalogOrigins = route
+    ? ReviewRoutes.shippedOrigins({
+        catalog: yield* catalog.get(),
+        configured: Object.hasOwn((yield* config.get()).provider ?? {}, model.providerID),
+        providerID: model.providerID,
+        modelID: model.id,
+      })
+    : undefined
+  if (route) {
+    const decided = yield* ReviewRoutes.decide(
+      provider,
+      { providerID: model.providerID, modelID: model.id, found: model, ...(catalogOrigins ? { catalogOrigins } : {}) },
+      route,
+    )
+    if (!decided.decision.allowed) return yield* refused(decided.decision.refusal)
+  }
   const refusal = contextRefusal(name, model.limit.context)
   if (refusal) return yield* new ReviewModelError({ message: refusal })
 
@@ -177,7 +227,11 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
 
   // The agent's variant applies only when the agent's own model was chosen, as elsewhere in the engine.
   const variant =
-    chosen && chosen === agent?.model && agent.variant && (!scope || picked?.setting === "agent.vectorscope.model")
+    !ownerAlternate &&
+    chosen &&
+    chosen === agent?.model &&
+    agent.variant &&
+    (!scope || picked?.setting === "agent.vectorscope.model")
       ? agent.variant
       : undefined
   const subject: ModelSubject = {
@@ -206,6 +260,61 @@ export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (in
     ...(costKind === "priced" ? { price: SpendGuard.priceOf(model.cost) } : {}),
     costKind,
     subject,
+    ...(catalogOrigins ? { catalogOrigins } : {}),
+  } satisfies ResolvedModel
+})
+
+export const resolveReviewModel = Effect.fn("ReviewModel.resolve")(function* (input: ResolveInput) {
+  const lab = ReviewAuthor.trustedLab(input.author)
+  const env = input.env ?? process.env
+  if (lab && !ReviewAuthor.localEnvironment(input.trigger, env))
+    return yield* new ReviewModelError({ message: "Authorship inversion requires a trusted local review outside CI." })
+  const primary: ResolvedModel = yield* configured(input)
+  if (!lab || input.exact || labOfModel(primary) !== lab) return primary
+
+  const settings = yield* (yield* Config.Service).getGlobal()
+  const ownerAgent = settings.agent?.[input.identity === VECTORSCOPE_AGENT ? VECTORSCOPE_AGENT : "review"]
+  const ownerModel = ownerAgent?.model ?? settings.model
+  const ownerVariant = ownerAgent?.model ? ownerAgent.variant : undefined
+  const alternate = settings.review?.alternateModel
+  const primaryName = `${primary.providerID}/${primary.modelID}`
+  if (settings.review?.inversion !== "local" || ownerModel !== primaryName || ownerVariant !== primary.variant)
+    return primary
+  if (typeof alternate !== "string")
+    return yield* new ReviewModelError({
+      message: "Set an equal-tier review.alternateModel in your global Vector settings to invert a same-lab review.",
+    })
+  const alternateName = alternate.trim()
+  if (!/^[a-zA-Z0-9._:@+/-]{1,256}$/.test(alternateName))
+    return yield* new ReviewModelError({
+      message: "The equal-tier alternate in your global review settings must name a provider/model.",
+    })
+  const alternateLab = labOfModel(Provider.parseModel(alternateName))
+  if (!alternateLab || alternateLab === lab)
+    return yield* new ReviewModelError({
+      message: "The equal-tier alternate in your global review settings must have a known, different model lab.",
+    })
+  const route = { privacy: "zdr" as const, attested: input.route?.attested ?? [] }
+  // Validate the original model as well as its substitute. The pair may never run on a training route.
+  const checked = yield* configured({ ...input, route })
+  const replacement = yield* configured({ ...input, route, exact: alternateName }, true)
+  if (
+    freeModelMayTrain({ freeModel: checked.subject?.freeModel }) ||
+    freeModelMayTrain({ freeModel: replacement.subject?.freeModel })
+  )
+    return yield* new ReviewModelError({
+      message: "An authorship inversion model may train on prompts; no review ran.",
+    })
+  if (labOfModel(replacement) !== alternateLab)
+    return yield* new ReviewModelError({
+      message: "The equal-tier alternate resolved to an unexpected lab; no review ran.",
+    })
+  return {
+    ...replacement,
+    inversion: {
+      privacy: "zdr" as const,
+      note: `A local assistant snapshot attributes this change to ${labName(lab)}. VectorScope switched from ${primaryName} to your equal-tier alternate ${replacement.providerID}/${replacement.modelID}.`,
+    },
   } satisfies ResolvedModel
 })
 

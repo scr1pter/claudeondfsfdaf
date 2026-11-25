@@ -235,6 +235,13 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
                 ? "This view can no longer track its saved review request. Reopen the workspace to continue."
                 : "The review start is unconfirmed. Refresh to inspect existing reviews, or retry the same saved request. Starting a different review remains blocked."}
           </p>
+          <Show when={state.admissionAnswer?.code !== "consumed" && reservation()?.retryWarning()}>
+            {(warning) => (
+              <p role="status" data-component="directory-review-retry-warning">
+                {warning()}
+              </p>
+            )}
+          </Show>
           {/* A consumed key whose marker another view replaced can only fail a retry here. */}
           <Show when={state.admissionAnswer?.code !== "consumed"}>
             <button

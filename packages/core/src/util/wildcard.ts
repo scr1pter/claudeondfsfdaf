@@ -10,5 +10,7 @@ export function match(input: string, pattern: string) {
 
   if (escaped.endsWith(" .*")) escaped = escaped.slice(0, -3) + "( .*)?"
 
-  return new RegExp("^" + escaped + "$", process.platform === "win32" ? "si" : "s").test(normalized)
+  // The desktop renderer has no `process` (VS-23d's holdback runs there), so it matches with case, as on Linux.
+  const windows = typeof process !== "undefined" && process.platform === "win32"
+  return new RegExp("^" + escaped + "$", windows ? "si" : "s").test(normalized)
 }
