@@ -4,6 +4,7 @@
 #include <memory>
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -46,6 +47,8 @@ enum class WindowsUiaExpiry : uint8_t { none, worker_current, worker_budget, cal
 inline constexpr std::array<std::wstring_view, 4> windows_uia_expiries{L"none", L"worker-current", L"worker-budget", L"caller-wait"};
 struct WindowsUiaDiagnostic {
   std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none};
+  // Read only for a fresh actor. A root refused before enqueue leaves the prior diagnosis in place.
+  std::atomic_bool ticket_queued{false};
   // Zero means unobserved. Bits 0-15 hold the sampled phase plus one (every sampled phase, including none,
   // has a distinct nonzero encoding), bits 16-23 the expiry side and bits 32-63 the root lookup HRESULT
   // seen before the snapshot (zero when none was). One compare-exchange writes all three facts together.
@@ -88,6 +91,7 @@ struct WindowsUiaDiagnostic {
   }
 };
 static_assert(std::atomic<WindowsUiaPhase>::is_always_lock_free);
+static_assert(std::atomic_bool::is_always_lock_free);
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
 static_assert(std::atomic<int32_t>::is_always_lock_free);
 static_assert(windows_uia_phases.size() == static_cast<size_t>(WindowsUiaPhase::actor_com_expired) + 1);
@@ -149,6 +153,8 @@ struct UiaObservation {
   std::optional<UiaMenuShortcut> menu;
 };
 
+using WindowsUiaDeadline = std::chrono::steady_clock::time_point;
+
 struct WindowsUiaBackend {
   std::function<UiaElement(const WindowsWindow&)> root;
   std::function<UiaSecurity(const UiaElement&)> security;
@@ -174,8 +180,15 @@ struct WindowsUiaBackend {
   std::function<bool(const UiaObservation&, const UiaName&, std::wstring_view, const std::optional<std::wstring>&,
                      const std::function<bool()>& metadata_gate)> commit;
   std::function<std::optional<UiaMenuShortcut>(const UiaElement&, const UiaElement&)> menu_target;
-  static WindowsUiaBackend system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic = {});
+  static WindowsUiaBackend system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic = {},
+                                  WindowsUiaDeadline root_deadline = WindowsUiaDeadline::max());
 };
+
+// Only for the owner of a new observation, before it has any UIA element or root to preserve.
+// On a retry the owner adopts the new backend so subsequent work uses its own elements.
+UiaElement observe_first_uia_root(WindowsUiaBackend&, std::shared_ptr<WindowsUiaDiagnostic>&, const WindowsWindow&,
+  WindowsUiaDeadline deadline, const std::function<bool()>& current,
+  const std::function<WindowsUiaBackend(std::shared_ptr<WindowsUiaDiagnostic>, WindowsUiaDeadline)>& open = WindowsUiaBackend::system);
 
 std::wstring sanitize_uia(std::wstring_view text, size_t maximum = 500);
 // A documented negative default never authorizes focus. Query/type failures remain unavailable.
