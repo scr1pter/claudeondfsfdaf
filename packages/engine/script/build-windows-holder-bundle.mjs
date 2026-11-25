@@ -3,16 +3,49 @@ import { createHash } from "node:crypto"
 import { appendFile, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { compiledSource, maximumExecutableBytes, validateExecutable } from "./windows-holder-binary.ts"
+import { maximumExecutableBytes, validateNativeExecutable } from "./windows-holder-binary.ts"
+import {
+  canonicalWindowsHolderNativeSource,
+  maximumNativeSourceBytes,
+  windowsHolderNativeSources,
+  windowsHolderNativeSourceSha256,
+} from "./windows-holder-native-source.mjs"
 
 const repository = fileURLToPath(new URL("../../..", import.meta.url))
-const maintainedHolder = "packages/engine/src/tool/shell/windows-holder.ts"
 const binaryAbi = "packages/engine/script/windows-holder-binary.ts"
-const maximumSourceBytes = 65_536
+const sourceAbi = "packages/engine/script/windows-holder-native-source.mjs"
+const nativeDirectory = "packages/engine/native/windows-holder/"
 const revisionPattern = /^[0-9a-f]{40}$/
 const numberPattern = /^[1-9][0-9]{0,29}$/
-const compilerPlatforms = { x64: "x64", arm64: "anycpu" }
+const compilerPlatforms = { x64: "x64", arm64: "ARM64" }
 const outputName = "vector-windows-holder-bundle"
+const compilerVariables = new Set([
+  "SYSTEMROOT",
+  "SYSTEMDRIVE",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "PATH",
+  "COMSPEC",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "PROGRAMW6432",
+  "PROCESSOR_ARCHITECTURE",
+  "NUMBER_OF_PROCESSORS",
+  "INCLUDE",
+  "LIB",
+  "LIBPATH",
+  "VCINSTALLDIR",
+  "VCTOOLSINSTALLDIR",
+  "VCTOOLSVERSION",
+  "VSINSTALLDIR",
+  "VISUALSTUDIOVERSION",
+  "WINDOWSSDKDIR",
+  "WINDOWSSDKVERSION",
+  "UNIVERSALCRTSDKDIR",
+  "UCRTVERSION",
+])
 
 export function parseBuildInputs(argv) {
   const [declaredRevision, declaration] = argv
@@ -30,23 +63,24 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
 }
 
-export function holderManifest(revision, source, executables) {
+export function holderManifest(revision, sources, executables) {
   if (!revisionPattern.test(revision)) throw new Error("Invalid reviewed revision.")
   const keys = Object.keys(executables).sort().join(",")
   if (keys !== "x64" && keys !== "arm64,x64") throw new Error("Invalid Windows holder target set.")
+  const sourceSha256 = windowsHolderNativeSourceSha256(sources)
   const targets = {}
   for (const arch of ["x64", "arm64"]) {
     if (!Object.hasOwn(executables, arch)) continue
     const bytes = executables[arch]
     if (!Buffer.isBuffer(bytes)) throw new Error("Expected a Windows holder executable.")
-    validateExecutable(bytes, arch)
+    validateNativeExecutable(bytes, arch)
     targets[arch] = {
-      sourceSha256: sha256(compiledSource(source, arch)),
+      sourceSha256,
       executableSha256: sha256(bytes),
       size: bytes.length,
     }
   }
-  return Buffer.from(JSON.stringify({ version: 1, revision, targets }) + "\n")
+  return Buffer.from(JSON.stringify({ version: 2, revision, targets }) + "\n")
 }
 
 async function boundedFile(file, maximum) {
@@ -108,7 +142,7 @@ async function readCommittedSource(revision, runner) {
       env: gitEnv,
       windowsHide: true,
       timeout: 15_000,
-      maxBuffer: maximumSourceBytes,
+      maxBuffer: maximumNativeSourceBytes,
       stdio: ["ignore", "pipe", "ignore"],
     })
     if (result.error || result.status !== 0) throw new Error("Could not verify the exact checkout.")
@@ -118,59 +152,109 @@ async function readCommittedSource(revision, runner) {
     throw new Error("The reviewed revision does not match the checkout.")
   }
   const trackedBytes = async (name) => {
-    const bytes = await boundedFile(path.join(repository, name), maximumSourceBytes)
-    const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes).replaceAll("\r\n", "\n")
-    if (!Buffer.from(content).equals(read(["show", revision + ":" + name]))) {
+    const bytes = await boundedFile(path.join(repository, name), maximumNativeSourceBytes)
+    const content = canonicalWindowsHolderNativeSource(bytes)
+    if (!content.equals(canonicalWindowsHolderNativeSource(read(["show", revision + ":" + name])))) {
       throw new Error("An input differs from its committed source.")
     }
-    return bytes
+    return content
   }
-  await trackedBytes(binaryAbi)
-  return trackedBytes(maintainedHolder)
+  await Promise.all([binaryAbi, sourceAbi].map(trackedBytes))
+  return Object.fromEntries(
+    await Promise.all(windowsHolderNativeSources.map(async (file) => [file, await trackedBytes(file)])),
+  )
+}
+
+function windowsToolchain(runner) {
+  const toolset = runner.env.VCToolsVersion?.trim()
+  const sdk = runner.env.WindowsSDKVersion?.trim().replace(/[\\/]$/, "")
+  if (!/^\d+\.\d+\.\d+$/.test(toolset ?? "") || !/^10\.0\.\d+\.\d+$/.test(sdk ?? ""))
+    throw new Error("The pinned MSVC developer environment is unavailable.")
+  return {
+    cmake: path.win32.join(runner.env.ProgramFiles, "CMake", "bin", "cmake.exe"),
+    env: Object.fromEntries(Object.entries(runner.env).filter(([name]) => compilerVariables.has(name.toUpperCase()))),
+    sdk,
+    toolset,
+  }
+}
+
+function runCmake(toolchain, source, arch, step, args) {
+  const result = spawnSync(toolchain.cmake, args, {
+    cwd: source,
+    env: toolchain.env,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+    maxBuffer: 1_048_576,
+    timeout: 120_000,
+  })
+  if (!result.error && result.status === 0) return
+
+  const output = [result.stdout, result.stderr].join("\n")
+  console.error(
+    "Windows native holder build failure: " +
+      JSON.stringify({
+        arch,
+        step,
+        exitCode: result.status,
+        signal: result.signal,
+        cmakeErrors: Math.min(8, output.match(/^\s*CMake Error(?=[: \t])/gm)?.length ?? 0),
+        msvcCodes: [
+          ...new Set(
+            [...output.matchAll(/\berror\s+((?:C|D|RC|LNK|MSB)\d{4})\b/gi)].map((match) => match[1].toUpperCase()),
+          ),
+        ].slice(0, 8),
+        spawnError: ["ENOENT", "ETIMEDOUT", "ENOBUFS", "EACCES"].includes(result.error?.code)
+          ? result.error.code
+          : null,
+      }),
+  )
+  throw new Error("The pinned MSVC toolchain could not build the Windows holder.")
 }
 
 async function buildWindowsHolder(input, runner) {
-  const source = await readCommittedSource(input.revision, runner)
+  const sources = await readCommittedSource(input.revision, runner)
   const root = await realpath(runner.env.RUNNER_TEMP)
   if (root.toLowerCase() !== runner.env.RUNNER_TEMP.toLowerCase()) throw new Error("Noncanonical build scratch.")
-  const framework = path.win32.join(runner.env.SystemRoot, "Microsoft.NET", "Framework64", "v4.0.30319")
-  const compiler = path.win32.join(framework, "csc.exe")
-  const references = ["System.dll", "System.Core.dll", "System.Web.Extensions.dll"].map(
-    (name) => "/reference:" + path.win32.join(framework, name),
-  )
+  const toolchain = windowsToolchain(runner)
   const staging = await mkdtemp(path.join(root, "vector-holder-build-"))
   try {
     const artifact = path.join(staging, "artifact")
+    const source = path.join(staging, "source")
     await mkdir(artifact)
+    await mkdir(source)
+    for (const file of windowsHolderNativeSources.filter((file) => file.startsWith(nativeDirectory)))
+      await writeFile(path.join(source, path.basename(file)), sources[file], { flag: "wx" })
     const executables = {}
     for (const arch of input.architectures) {
-      const file = path.join(staging, "holder-" + arch + ".cs")
-      const output = path.join(artifact, "holder-" + arch + ".exe")
-      await writeFile(file, compiledSource(source, arch), { flag: "wx" })
-      const result = spawnSync(
-        compiler,
-        [
-          "/nologo",
-          "/noconfig",
-          "/target:exe",
-          "/platform:" + compilerPlatforms[arch],
-          "/main:VectorStandaloneEntryPoint",
-          ...references,
-          "/out:" + output,
-          file,
-        ],
-        {
-          cwd: path.win32.join(runner.env.SystemRoot, "System32"),
-          env: runner.cleanEnv,
-          windowsHide: true,
-          stdio: "ignore",
-          timeout: 30_000,
-        },
-      )
-      if (result.error || result.status !== 0) throw new Error("The fixed Windows compiler could not build the holder.")
-      executables[arch] = await boundedFile(output, maximumExecutableBytes)
+      const build = path.join(staging, arch)
+      runCmake(toolchain, source, arch, "configure", [
+        "-S",
+        source,
+        "-B",
+        build,
+        "-G",
+        "Visual Studio 17 2022",
+        "-A",
+        `${compilerPlatforms[arch]},version=${toolchain.sdk}`,
+        "-T",
+        `version=${toolchain.toolset}`,
+        "--fresh",
+      ])
+      runCmake(toolchain, source, arch, "compile", [
+        "--build",
+        build,
+        "--config",
+        "Release",
+        "--target",
+        "vector-holder-probe",
+      ])
+      const bytes = await boundedFile(path.join(build, "Release", "holder.exe"), maximumExecutableBytes)
+      validateNativeExecutable(bytes, arch)
+      await writeFile(path.join(artifact, "holder-" + arch + ".exe"), bytes, { flag: "wx" })
+      executables[arch] = bytes
     }
-    const manifest = holderManifest(input.revision, source, executables)
+    const manifest = holderManifest(input.revision, sources, executables)
     await writeFile(path.join(artifact, "manifest.json"), manifest, { flag: "wx" })
     const expectedFiles = ["manifest.json", ...input.architectures.map((arch) => "holder-" + arch + ".exe")].sort()
     if ((await readdir(artifact)).sort().join("|") !== expectedFiles.join("|")) {

@@ -6,6 +6,7 @@ on:
       - .github/workflows/windows-containment.yml
       - .github/workflows/windows-holder-bundle.yml
       - .github/actions/install-ripgrep-windows/**
+      - packages/engine/native/windows-holder/**
       - packages/engine/src/tool/shell/windows-*.ts
       - packages/engine/test/tool/shell-windows-process.test.ts
       - packages/engine/test/tool/windows-holder-diagnostic.test.ts

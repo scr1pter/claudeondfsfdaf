@@ -167,6 +167,7 @@ const windowsHolderAssets = await prepareWindowsHolderBundle({
   architectures: targets.filter((item) => item.os === "win32").map((item) => item.arch),
   manifestPath: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST,
   manifestDigest: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256,
+  expectedWire: "vsh1",
 })
 
 const embeddedFileMap = skipEmbedWebUi ? null : await createEmbeddedWebUIBundle()

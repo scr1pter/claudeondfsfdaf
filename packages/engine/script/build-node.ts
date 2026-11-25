@@ -33,6 +33,7 @@ const windowsHolderAssets = await prepareWindowsHolderBundle({
   architectures: windowsHolderArchitectures,
   manifestPath: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST,
   manifestDigest: manifestSha256,
+  expectedWire: "vsh1",
 })
 const windowsHolderCompanion =
   windowsHolderAssets && process.argv.includes("--windows-holder-electron")

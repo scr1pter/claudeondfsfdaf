@@ -10,7 +10,10 @@ export type WindowsHolderCompanion = Readonly<{
   sha256: string
 }>
 
+export type WindowsHolderWire = "json" | "vsh1"
+
 export type WindowsHolderCompanionBundle = Readonly<{
+  wire: WindowsHolderWire
   placement: "cli" | "electron"
   targets: Readonly<Partial<Record<WindowsHolderCompanion["arch"], WindowsHolderCompanion>>>
 }>

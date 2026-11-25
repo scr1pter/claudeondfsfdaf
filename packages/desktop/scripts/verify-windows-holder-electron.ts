@@ -55,6 +55,7 @@ const assets = await verifyWindowsHolderBundle({
   pin: manifestSha256,
   checkout: GITHUB_SHA,
   architectures: [arch],
+  expectedWire: "vsh1",
 })
 const asset = assets[arch]
 if (!asset) throw new Error("The paired Electron holder asset is missing.")

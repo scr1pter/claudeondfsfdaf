@@ -10,12 +10,13 @@ const maximumBytes = 1_048_576
 const verificationFailure = "The installed Windows containment helper failed verification"
 
 export function windowsHolderCompanion(systemRoot: string) {
-  const arch = compiledWindowsHolderArchitecture(systemRoot)
   const bundle = trustedWindowsHolderCompanion
-  if (!arch || !bundle) return
+  if (!bundle) return
+  const arch = bundle.wire === "vsh1" ? nativeArchitecture(systemRoot) : compiledWindowsHolderArchitecture(systemRoot)
+  if (!arch) return
   const image = bundle.targets[arch]
   if (!image || image.arch !== arch) throw new Error(verificationFailure)
-  return { image, placement: bundle.placement }
+  return { image, placement: bundle.placement, wire: bundle.wire }
 }
 
 function samePath(left: string, right: string) {
@@ -26,9 +27,14 @@ function localPath(value: string) {
   return /^[a-z]:\\/i.test(value) && path.win32.normalize(value) === value
 }
 
+function nativeArchitecture(systemRoot: string) {
+  if (process.platform === "win32" && localPath(systemRoot) && (process.arch === "x64" || process.arch === "arm64"))
+    return process.arch
+}
+
 async function installedDirectory(placement: WindowsHolderCompanionBundle["placement"]) {
   const executable = await realpath(process.execPath)
-  // Standalone installs allow UNC paths. Use the fixed system carrier for that installation type.
+  // Standalone installs allow UNC paths. Use the OS PowerShell holder for that installation type.
   const networkRoot = path.win32.parse(executable).root
   if (placement === "cli" && /^\\\\[^?.\\/][^\\/]*\\[^\\/]+\\$/i.test(networkRoot)) return
   if (!localPath(executable)) throw new Error(verificationFailure)

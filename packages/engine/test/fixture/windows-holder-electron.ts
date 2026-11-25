@@ -34,7 +34,7 @@ async function verify() {
     throw new Error("Invalid packaged Electron resources directory.")
   failureStage = 13
   const selected = windowsHolderCompanion(root)
-  if (selected?.placement !== "electron" || selected.image.arch !== architecture)
+  if (selected?.placement !== "electron" || selected.wire !== "vsh1" || selected.image.arch !== architecture)
     throw new Error("The packaged holder selection is missing.")
   const file = path.win32
     .join(resources, "engine", "windows-holder", windowsHolderCompanionName(selected.image.arch, selected.image.sha256))

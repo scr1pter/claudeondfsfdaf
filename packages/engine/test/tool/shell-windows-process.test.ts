@@ -7,6 +7,8 @@ import os from "node:os"
 import path from "node:path"
 import { WindowsHolder } from "../../src/tool/shell/windows-holder"
 import { carrierDelivery, prepareCarrier } from "../../src/tool/shell/windows-holder-carrier"
+import { prepareWindowsHolderCompanion, windowsHolderCompanion } from "../../src/tool/shell/windows-holder-direct"
+import { encodeNativeHolderLaunch } from "../../src/tool/shell/windows-holder-protocol"
 import { WindowsProcess } from "../../src/tool/shell/windows-process"
 
 const command = (text: string, shell?: string | boolean) =>
@@ -111,6 +113,33 @@ describe("Windows background command preparation", () => {
     expect(Buffer.from(args.at(-1)!, "base64").toString("utf16le")).toBe(WindowsHolder.script)
   })
 
+  test("native holder input preserves Windows Unicode code units and excludes control records", () => {
+    const file = "C:\\路径\\工具.exe"
+    const commandLine = `"${file}" "two 🎨 words"`
+    const cwd = "C:\\work"
+    const name = "USER_VALUE"
+    const value = 'line\n{"type":"resume"}\n\ud800'
+    const frame = encodeNativeHolderLaunch({ file, commandLine, cwd, env: { [name]: value } })
+    const count = (n: number) => {
+      const bytes = Buffer.alloc(4)
+      bytes.writeUInt32LE(n)
+      return bytes
+    }
+    const counted = (text: string) => Buffer.concat([count(text.length), Buffer.from(text, "utf16le")])
+    const body = Buffer.concat([
+      counted(file),
+      counted(commandLine),
+      counted(cwd),
+      count(1),
+      counted(name),
+      counted(value),
+    ])
+    expect(frame).toEqual(Buffer.concat([Buffer.from("VSH1"), count(body.length), body]))
+    expect(() => encodeNativeHolderLaunch({ file, commandLine, cwd, env: { [name]: "bad\0value" } })).toThrow(
+      "Invalid Windows holder environment",
+    )
+  })
+
   test("status parsing survives byte boundaries without reading payload stdout", () => {
     const reader = new WindowsProcess.StatusReader()
     const statuses = [
@@ -213,6 +242,9 @@ describe("Windows background command preparation", () => {
 })
 
 const windows = test.skipIf(process.platform !== "win32")
+const packagedNative = test.skipIf(
+  process.platform !== "win32" || windowsHolderCompanion(systemRoot())?.wire !== "vsh1",
+)
 
 describe("native Windows job containment (hosted Windows only)", () => {
   windows("the process observer recognizes a live fixture PID", () => {
@@ -362,7 +394,7 @@ describe("native Windows job containment (hosted Windows only)", () => {
   windows("killing the owned native holder closes its job and kills the payload", async () => {
     await using dir = await fixture()
     const worker = counter(dir.path)
-    const native = rawHolder(ps(worker.script, dir.path))
+    const native = await rawHolder(ps(worker.script, dir.path))
     try {
       const pid = await deadline(native.ready.promise)
       native.child.stdin.write('{"type":"resume"}\n')
@@ -387,7 +419,9 @@ describe("native Windows job containment (hosted Windows only)", () => {
       'Emit(new {type="ready",pid=child.pid}); Thread.Sleep(30000); assigned=true;',
     )
     expect(source).not.toBe(WindowsHolder.script)
-    const native = rawHolder(ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path), source)
+    const native = await rawHolder(ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path), {
+      script: source,
+    })
     try {
       const pid = await deadline(native.ready.promise)
       native.child.kill()
@@ -411,7 +445,9 @@ describe("native Windows job containment (hosted Windows only)", () => {
       "Marshal.WriteIntPtr(jobs,new IntPtr(-1));",
     )
     expect(source).not.toBe(WindowsHolder.script)
-    const native = rawHolder(ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path), source)
+    const native = await rawHolder(ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path), {
+      script: source,
+    })
     try {
       await deadline(native.closed)
       expect(native.status.some((status) => status.type === "ready")).toBe(false)
@@ -427,7 +463,7 @@ describe("native Windows job containment (hosted Windows only)", () => {
   windows("parent EOF before acknowledgement kills the suspended command without running it", async () => {
     await using dir = await fixture()
     const marker = path.join(dir.path, "must-not-start.txt")
-    const native = rawHolder(ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path))
+    const native = await rawHolder(ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path))
     try {
       const pid = await deadline(native.ready.promise)
       native.child.stdin.end()
@@ -442,18 +478,38 @@ describe("native Windows job containment (hosted Windows only)", () => {
     }
   })
 
+  for (const configPrefixBytes of [0, 9]) {
+    packagedNative(`parent EOF after ${configPrefixBytes} configuration bytes creates no payload`, async () => {
+      await using dir = await fixture()
+      const marker = path.join(dir.path, "must-not-start.txt")
+      const native = await rawHolder(ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path), {
+        configPrefixBytes,
+      })
+      try {
+        await deadline(native.closed)
+        expect(native.status).toEqual([
+          { type: "error", message: "Configuration timeout or EOF", terminationProven: true },
+        ])
+        expect(await exists(marker)).toBe(false)
+      } finally {
+        native.child.kill()
+        native.child.stdin.destroy()
+        await deadline(native.closed).catch(() => {})
+      }
+    })
+  }
+
   windows("the holder retains an acknowledgement pipelined after a large configuration", async () => {
     await using dir = await fixture()
     const marker = path.join(dir.path, "acknowledged.txt")
     const command = ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path)
-    const native = rawHolder(
+    const native = await rawHolder(
       ChildProcess.make(command.command, command.args, {
         ...command.options,
         extendEnv: true,
         env: { VECTOR_TEST_LARGE: "x".repeat(8192) },
       }),
-      WindowsHolder.script,
-      true,
+      { resumeWithConfig: true },
     )
     try {
       const pid = await deadline(native.ready.promise)
@@ -472,7 +528,7 @@ describe("native Windows job containment (hosted Windows only)", () => {
   windows("parent EOF after acknowledgement stops the leader and its descendant", async () => {
     await using dir = await fixture()
     const worker = counter(dir.path)
-    const native = rawHolder(ps(tree(worker, true), dir.path))
+    const native = await rawHolder(ps(tree(worker, true), dir.path))
     try {
       const pid = await deadline(native.ready.promise)
       native.child.stdin.write('{"type":"resume"}\n')
@@ -653,19 +709,59 @@ function alive(pid: number) {
     throw error
   }
 }
-function rawHolder(command: ChildProcess.StandardCommand, script = WindowsHolder.script, resumeWithConfig = false) {
+async function rawHolder(
+  command: ChildProcess.StandardCommand,
+  options: { script?: string; resumeWithConfig?: boolean; configPrefixBytes?: number } = {},
+) {
   const input = WindowsProcess.normalize(command)
-  const args = WindowsHolder.argumentsForHolder()
-  args[args.length - 1] = Buffer.from(script, "utf16le").toString("base64")
-  const child = spawn(powershell(), args, {
-    windowsHide: true,
-    cwd: path.join(systemRoot(), "System32"),
-    stdio: ["pipe", "pipe", "pipe"],
-  })
+  const root = systemRoot()
+  // An explicitly transformed source still runs through the legacy test harness.
+  const selection = options.script === undefined ? windowsHolderCompanion(root) : undefined
+  const native = selection?.wire === "vsh1" ? selection : undefined
+  const config = { file: input.file, commandLine: WindowsProcess.commandLine(input), cwd: input.cwd, env: input.env }
+  const frame = native ? encodeNativeHolderLaunch(config) : Buffer.from(JSON.stringify(config) + "\n")
+  if (options.resumeWithConfig) expect(frame.byteLength).toBeGreaterThan(8192)
+  const payload = options.resumeWithConfig ? Buffer.concat([frame, Buffer.from('{"type":"resume"}\n')]) : frame
+  const preparing =
+    native && prepareWindowsHolderCompanion(native, performance.now() + 15_000, AbortSignal.timeout(15_000))
+  const verified =
+    preparing &&
+    (await deadline(preparing).catch((error: unknown) => {
+      void preparing.then(
+        (holder) => holder?.release(),
+        () => {},
+      )
+      throw error
+    }))
+  if (native && !verified) throw new Error("The verified native holder fixture is unavailable")
+  const child = (() => {
+    try {
+      const args = verified ? [] : WindowsHolder.argumentsForHolder()
+      if (options.script !== undefined)
+        args[args.length - 1] = Buffer.from(options.script, "utf16le").toString("base64")
+      return spawn(verified?.executable ?? powershell(), args, {
+        windowsHide: true,
+        cwd: path.join(root, "System32"),
+        env: verified ? { SystemRoot: root, WINDIR: root, TEMP: os.tmpdir(), TMP: os.tmpdir() } : undefined,
+        stdio: ["pipe", "pipe", "pipe"],
+      })
+    } finally {
+      void verified?.release()
+    }
+  })()
   const ready = deferred<number>()
   void ready.promise.catch(() => {})
-  const reader = new WindowsProcess.StatusReader()
+  const reader = new WindowsProcess.StatusReader(undefined, native ? 4 : 1)
   const status: ReturnType<typeof reader.push> = []
+  let configurationSent = false
+  const sendConfig = () => {
+    if (options.configPrefixBytes !== undefined) {
+      child.stdin.end(frame.subarray(0, options.configPrefixBytes))
+      return
+    }
+    configurationSent = true
+    child.stdin.write(payload)
+  }
   child.stdout.resume()
   child.stdin.on("error", () => {})
   const closed = new Promise<void>((resolve, reject) => {
@@ -679,23 +775,22 @@ function rawHolder(command: ChildProcess.StandardCommand, script = WindowsHolder
     try {
       for (const value of reader.push(chunk)) {
         status.push(value)
-        if (value.type === "ready") ready.resolve(value.pid)
+        if (value.type !== "ready") continue
+        if (native && (!configurationSent || reader.startupPhase !== "payload-created"))
+          throw new Error("Native fixture reported premature readiness")
+        ready.resolve(value.pid)
+      }
+      const step = reader.validatedStartupStep
+      if (native && !configurationSent && status.length === 0 && step !== undefined) {
+        if (step > 4) throw new Error("Native fixture advanced before receiving its configuration")
+        if (step === 4) sendConfig()
       }
     } catch (error) {
       ready.reject(error)
       child.kill()
     }
   })
-  child.stdin.write(
-    JSON.stringify({
-      file: input.file,
-      commandLine: WindowsProcess.commandLine(input),
-      cwd: input.cwd,
-      env: input.env,
-    }) +
-      "\n" +
-      (resumeWithConfig ? '{"type":"resume"}\n' : ""),
-  )
+  if (!native) sendConfig()
   return { child, ready, closed, status }
 }
 function exists(file: string) {

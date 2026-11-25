@@ -7,6 +7,7 @@ import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { WindowsHolder } from "./windows-holder"
 import { carrierDelivery, carrierPhase, windowsHolderCarrier } from "./windows-holder-carrier"
 import { prepareWindowsHolderCompanion, windowsHolderCompanion } from "./windows-holder-direct"
+import { encodeNativeHolderLaunch } from "./windows-holder-protocol"
 
 export type Result = { exitCode: number; terminated: true }
 export type Handle = { pid: number; completion: Promise<Result>; stop(): Promise<Result> }
@@ -202,13 +203,13 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
   const direct = preflight(() => windowsHolderCompanion(root))
   const holder = path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
   const file = await executable(input.file, input.cwd, input.env)
-  const config =
-    JSON.stringify({
-      file,
-      commandLine: preflight(() => commandLine({ ...input, file })),
-      cwd: input.cwd,
-      env: input.env,
-    }) + "\n"
+  const configuration = {
+    file,
+    commandLine: preflight(() => commandLine({ ...input, file })),
+    cwd: input.cwd,
+    env: input.env,
+  }
+  const config = JSON.stringify(configuration) + "\n"
   if (Buffer.byteLength(config) > 262_144)
     throw new WindowsProcessError("Windows shell configuration is too large", true)
   // Project env/preloads never configure the trusted helper. Only its payload gets the prepared, filtered env.
@@ -239,7 +240,10 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
     try {
       return await bounded(pending, remaining(), () => startupTimeout("spawn"))
     } catch {
-      void pending.then((verified) => verified?.release(), () => {})
+      void pending.then(
+        (verified) => verified?.release(),
+        () => {},
+      )
       if (callbacks.signal?.aborted) throw new WindowsProcessError("Background shell stopped before startup", true)
       if (!remaining() || delivery.snapshot().watchdogMs !== undefined) throw prepareTimeout()
       throw new WindowsProcessError("The installed Windows containment helper failed verification", true)
@@ -255,12 +259,14 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
     }
   }
   const carrier = verified ? undefined : preflight(() => windowsHolderCarrier(root))
+  const native = verified !== undefined && direct?.wire === "vsh1"
   const args = verified ? [] : preflight(() => carrier?.args ?? WindowsHolder.argumentsForHolder())
-  const child = (() => {
+  const { child, wireConfig } = (() => {
     try {
+      const wireConfig = native ? preflight(() => encodeNativeHolderLaunch(configuration)) : config
       if (callbacks.signal?.aborted) throw new WindowsProcessError("Background shell stopped before startup", true)
       if (!remaining()) throw prepareTimeout()
-      return preflight(() =>
+      const child = preflight(() =>
         spawn(verified?.executable ?? holder, args, {
           cwd: path.win32.join(root, "System32"),
           env: helperEnv,
@@ -268,6 +274,7 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
           stdio: ["pipe", "pipe", "pipe"],
         }),
       )
+      return { child, wireConfig }
     } finally {
       void verified?.release()
     }
@@ -304,8 +311,16 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
     stopping: false,
     finished: false,
   }
-  const sendConfig = () =>
-    child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
+  let configurationSent = false
+  const sendConfig = () => {
+    child.stdin.write(wireConfig, (error) => {
+      delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs")
+      if (!error || state.terminal) return
+      configurationSent = false
+      void stop(new Error("Windows containment configuration could not be delivered")).catch(() => {})
+    })
+    configurationSent = true
+  }
   const transport =
     carrier &&
     carrierDelivery(() => {
@@ -344,8 +359,8 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
     state.stopping = true
     if (!state.running) fail(new Error("Background shell stopped before startup"))
     if (!child.stdin.destroyed && child.stdin.writable) {
-      // An unfinished bootstrap reads only the binary prefix. Ending the pipe cancels it without mixing formats.
-      if (transport && !transport.configurationSent) child.stdin.end()
+      // End the pipe before configuration so stop cannot be mistaken for a binary input frame.
+      if ((transport || native) && !configurationSent) child.stdin.end()
       else child.stdin.end('{"type":"stop"}\n')
     }
     timers.push(
@@ -395,8 +410,10 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
         if (state.terminal) throw new Error("Unexpected status after Windows holder termination")
         if (message.type === "ready") {
           if (state.pid !== undefined) throw new Error("Duplicate Windows holder readiness")
-          if (transport && !transport.configurationSent)
+          if ((transport || native) && !configurationSent)
             throw new Error("Windows containment holder reported readiness before its configuration")
+          if (native && reader.startupPhase !== "payload-created")
+            throw new Error("Windows containment holder reported readiness before payload creation")
           if (!remaining()) {
             // Refuse the late PID but keep processing the chunk for a valid native cleanup proof.
             void stop(new Error(startupTimeout(phase()))).catch(() => {})
@@ -421,16 +438,20 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
         if (message.type === "error") fail(new Error(message.message))
         else state.code = message.exitCode
       }
-      transport?.afterStatus(
-        reader.validatedStartupStep,
+      const active =
         !state.failure &&
-          !state.stopping &&
-          !state.terminal &&
-          !state.closed &&
-          !state.finished &&
-          !callbacks.signal?.aborted &&
-          remaining() > 0,
-      )
+        !state.stopping &&
+        !state.terminal &&
+        !state.closed &&
+        !state.finished &&
+        !callbacks.signal?.aborted &&
+        remaining() > 0
+      const step = reader.validatedStartupStep
+      transport?.afterStatus(step, active)
+      if (native && active && !configurationSent && step !== undefined) {
+        if (step > 4) throw new Error("Windows containment holder advanced before its configuration")
+        if (step === 4) sendConfig()
+      }
     } catch (cause) {
       void stop(cause).catch(() => {})
     }
@@ -473,14 +494,18 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
       finish()
     }
   })()
+  const ensureStartupActive = () => {
+    if (state.stopping || state.failure || state.terminal || state.closed || callbacks.signal?.aborted)
+      throw state.failure ?? new Error("Background shell stopped during startup")
+  }
   try {
     if (!remaining()) throw new Error(startupTimeout(phase()))
     if (transport) transport.begin()
-    else sendConfig()
+    else if (!native) sendConfig()
     const pid = await bounded(ready.promise, remaining(), () => startupTimeout(phase()))
+    ensureStartupActive()
     await bounded(callbacks.onReady(pid), PERSIST_MS, "Saving the background shell PID timed out")
-    if (state.stopping || state.failure || state.closed || callbacks.signal?.aborted)
-      throw state.failure ?? new Error("Background shell stopped during startup")
+    ensureStartupActive()
     state.acknowledged = true
     child.stdin.write('{"type":"resume"}\n')
     await bounded(running.promise, CLOSE_MS, "Windows holder did not acknowledge execution")

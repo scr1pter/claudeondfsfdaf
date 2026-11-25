@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
@@ -10,7 +10,6 @@ import { windowsHolderCompanionName } from "../src/tool/shell/windows-holder-com
 const temporary = process.env.RUNNER_TEMP!
 const directory = await mkdtemp(path.join(temporary, "vector-holder-build-check-"))
 const entry = fileURLToPath(new URL("../test/fixture/windows-holder-bundle.ts", import.meta.url))
-const plugins = [windowsHolderBundlePlugin(assets, ["x64"])]
 const node = Bun.which("node")
 if (!node) throw new Error("Node is required to verify the Windows Desktop engine bundle.")
 const run = promisify(execFile)
@@ -22,9 +21,15 @@ const env = {
   WINDIR: "C:\\Windows",
   TEMP: directory,
   TMP: directory,
-  VECTOR_WINDOWS_HOLDER_BUNDLE_CHECK: "1",
+  VECTOR_WINDOWS_HOLDER_BUNDLE_CHECK: "direct",
 }
 try {
+  const asset = assets.x64
+  if (!asset) throw new Error("The Windows bundle check is missing its x64 companion.")
+  const companion = await emitWindowsHolderCompanion(directory, asset)
+  const plugins = [windowsHolderBundlePlugin(assets, ["x64"], { placement: "cli", targets: { x64: companion } })]
+  const nodeExecutable = path.join(directory, "holder-node.exe")
+  await copyFile(node, nodeExecutable)
   const nodeBundle = await Bun.build({
     entrypoints: [entry],
     target: "node",
@@ -34,21 +39,17 @@ try {
     plugins,
   })
   if (!nodeBundle.success || nodeBundle.outputs.length !== 1) throw new Error("Could not build the Node holder check.")
-  await run(node, [nodeBundle.outputs[0]!.path], { env, windowsHide: true, timeout: 30_000, maxBuffer: 4096 })
-
-  const asset = assets.x64
-  if (!asset) throw new Error("The Windows bundle check is missing its x64 companion.")
-  const companion = await emitWindowsHolderCompanion(directory, asset)
+  await run(nodeExecutable, [nodeBundle.outputs[0]!.path], { env, windowsHide: true, timeout: 30_000, maxBuffer: 4096 })
   const outfile = path.join(directory, "holder-bun.exe")
   const bunBundle = await Bun.build({
     entrypoints: [entry],
-    plugins: [windowsHolderBundlePlugin(assets, ["x64"], { placement: "cli", targets: { x64: companion } })],
+    plugins,
     compile: { target: "bun-windows-x64", outfile, autoloadDotenv: false, autoloadBunfig: false },
   })
   if (!bunBundle.success) throw new Error("Could not build the standalone holder check.")
   const runStandalone = () =>
     run(outfile, [], {
-      env: { ...env, VECTOR_WINDOWS_HOLDER_BUNDLE_CHECK: "direct" },
+      env,
       windowsHide: true,
       timeout: 30_000,
       maxBuffer: 4096,
@@ -59,7 +60,7 @@ try {
   await requireRejection(runStandalone())
   await writeFile(companionFile, Buffer.alloc(companion.size), { flag: "wx" })
   await requireRejection(runStandalone())
-  console.log("The verified Windows holder ran through the Node carrier and the standalone Bun companion.")
+  console.log("The verified native Windows companion ran through both the Node and standalone Bun bundles.")
 } finally {
   await rm(directory, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 })
 }

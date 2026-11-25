@@ -6,7 +6,7 @@ import { BlobReader, BlobWriter, ZipWriter } from "@zip.js/zip.js"
 import { CliRelease } from "@vectordevai/schema/cli-release"
 import { releaseCatalogText } from "./upload-model-catalog"
 import { assertCleanArtifacts } from "../../../script/artifact-audit"
-import { maximumExecutableBytes, validateExecutable } from "../../engine/script/windows-holder-binary"
+import { maximumExecutableBytes, validatePackagedWindowsHolder } from "../../engine/script/windows-holder-binary"
 import { windowsHolderCompanionName } from "../../engine/src/tool/shell/windows-holder-companion-name"
 
 export const cliNotices = ["LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"] as const
@@ -68,7 +68,7 @@ export async function packageCliRelease(input: {
   if ((await hashCliFile(catalogFile)).sha256 !== input.catalogSha256)
     throw new Error("The prepared CLI catalog does not match the pinned digest.")
   const notices = new Map<string, string>()
-  const holders = new Map<CliRelease.Target, { name: string; bytes: Buffer }>()
+  const holders = new Map<CliRelease.Target, Awaited<ReturnType<typeof readWindowsHolder>>>()
   for (const target of CliRelease.targets) {
     const root = path.join(input.source, `vector-${target}`)
     await directory(root)
@@ -108,6 +108,8 @@ export async function packageCliRelease(input: {
   const windowsTargets = CliRelease.targets.filter((target) => target.startsWith("windows-"))
   if (holders.size && holders.size !== windowsTargets.length)
     throw new Error("A CLI release must include a Windows holder for every Windows target or for none.")
+  if (new Set(Array.from(holders.values(), (holder) => holder.wire)).size > 1)
+    throw new Error("A CLI release must use one Windows holder format across every Windows target.")
 
   await mkdir(input.output, { recursive: true })
   const temporary = await mkdtemp(path.join(os.tmpdir(), "vector-cli-package-"))
@@ -204,11 +206,15 @@ async function readWindowsHolder(root: string, target: CliRelease.Target, value:
   const name = windowsHolderCompanionName(arch, value.sha256)
   const file = path.join(root, "bin", name)
   await regularFile(file)
-  const bytes = Buffer.from(await Bun.file(file).slice(0, maximumExecutableBytes + 1).arrayBuffer())
+  const bytes = Buffer.from(
+    await Bun.file(file)
+      .slice(0, maximumExecutableBytes + 1)
+      .arrayBuffer(),
+  )
   if (bytes.length !== value.size || new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== value.sha256)
     throw new Error("The Windows holder does not match the prepared CLI build descriptor.")
-  validateExecutable(bytes, arch)
-  return { name, bytes }
+  const wire = validatePackagedWindowsHolder(bytes, arch)
+  return { name, bytes, wire }
 }
 
 async function regularFile(file: string) {
