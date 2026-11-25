@@ -24,12 +24,17 @@ on:
         description: Exercise the x64 background-command integration with the direct holder
         type: boolean
         default: false
+      direct_holder_backend:
+        description: x64 integration launch mode
+        type: choice
+        options: [staged, carrier]
+        default: staged
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && format('-direct-{0}-{1}', inputs.direct_holder_arch, inputs.direct_holder_integration) || '' }}
+  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && format('-direct-{0}-{1}-{2}', inputs.direct_holder_arch, inputs.direct_holder_integration, inputs.direct_holder_backend) || '' }}
   cancel-in-progress: true
 
 env:
@@ -99,8 +104,8 @@ jobs:
     outputs:
       payload_digest: ${{ steps.compile.outputs.payload_digest }}
     steps:
-      - name: Require x64 for the integration fixture
-        if: inputs.direct_holder_integration && inputs.direct_holder_arch != 'x64'
+      - name: Check the hosted integration selection
+        if: (inputs.direct_holder_integration && inputs.direct_holder_arch != 'x64') || (inputs.direct_holder_backend == 'carrier' && !inputs.direct_holder_integration)
         shell: cmd
         run: exit /b 1
       - name: Checkout the exact comparison revision
@@ -164,6 +169,7 @@ jobs:
     timeout-minutes: 25
     env:
       VECTOR_DIRECT_HOLDER_FIXTURE: "1"
+      VECTOR_DIRECT_HOLDER_BACKEND: ${{ inputs.direct_holder_backend }}
       VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
     steps:
       - name: Check out the exact comparison revision
@@ -194,7 +200,11 @@ jobs:
           set -euo pipefail
           fixture=packages/engine/test/fixture/windows-holder-integration
           source=packages/engine/src/tool/shell/windows-process.ts
-          patch="$fixture/windows-process.integration.patch"
+          case "$VECTOR_DIRECT_HOLDER_BACKEND" in
+            staged) patch="$fixture/windows-process.integration.patch" ;;
+            carrier) patch="$fixture/windows-process.carrier.patch" ;;
+            *) exit 1 ;;
+          esac
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git diff --quiet "$GITHUB_SHA" -- "$source" packages/engine/src/tool/shell/windows-holder.ts "$fixture"
           bun --no-env-file "$fixture/embed.mjs"

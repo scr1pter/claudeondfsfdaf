@@ -1,0 +1,94 @@
+diff --git a/packages/engine/src/tool/shell/windows-process.ts b/packages/engine/src/tool/shell/windows-process.ts
+--- a/packages/engine/src/tool/shell/windows-process.ts
++++ b/packages/engine/src/tool/shell/windows-process.ts
+@@ -2 +2 @@
+-import { access, stat } from "node:fs/promises"
++import { stat } from "node:fs/promises"
+@@ -7,0 +8,6 @@
++import {
++  carrierBootstrapPhase,
++  carrierDelivery,
++  preparePowerShellCarrier,
++  recordCarrierReady,
++} from "../../../test/fixture/windows-holder-integration/carrier"
+@@ -114,0 +121,4 @@
++  }
++
++  get validatedStartupStep() {
++    return this.pending.byteLength ? undefined : this.startupStep
+@@ -189 +199 @@
+-  if (!root || !path.win32.isAbsolute(root))
++  if (!root || root.toLowerCase() !== "c:\\windows")
+@@ -192,3 +201,0 @@
+-  await access(holder).catch((cause) => {
+-    throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true, { cause })
+-  })
+@@ -212,0 +220,2 @@
++  const startupDeadline = launchStarted + STARTUP_MS
++  const remaining = () => Math.max(0, Math.ceil(startupDeadline - performance.now()))
+@@ -213,0 +223,17 @@
++  const startupTimeout = (phase: string) => {
++    delivery.mark("watchdogMs")
++    return `Windows containment helper startup timed out (last phase: ${phase})`
++  }
++  const preparationTimeout = () => {
++    const message = startupTimeout("spawn")
++    return new WindowsProcessStartupTimeout(
++      `${message} (holder startup transport: ${JSON.stringify(delivery.snapshot())})`,
++      true,
++    )
++  }
++  const carrier = await bounded(preparePowerShellCarrier(), remaining(), () => startupTimeout("spawn")).catch(() => {
++    if (delivery.snapshot().watchdogMs !== undefined) throw preparationTimeout()
++    throw new WindowsProcessError("The verified Windows carrier is unavailable", true)
++  })
++  if (callbacks.signal?.aborted) throw new WindowsProcessError("Background shell stopped before startup", true)
++  if (!remaining()) throw preparationTimeout()
+@@ -215 +241 @@
+-    spawn(holder, WindowsHolder.argumentsForHolder(), {
++    spawn(holder, carrier.args, {
+@@ -254,0 +281,8 @@
++  const writes = carrierDelivery(
++    () => {
++      child.stdin.write(carrier.bytes, (error) => {
++        if (error) void stop(new Error("Windows carrier prefix delivery failed")).catch(() => {})
++      })
++    },
++    () => child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs")),
++  )
+@@ -283 +317,5 @@
+-    if (!child.stdin.destroyed && child.stdin.writable) child.stdin.end('{"type":"stop"}\n')
++    if (!child.stdin.destroyed && child.stdin.writable) {
++      // Before bootstrap has released configuration, EOF is the only valid cancellation input.
++      if (writes.configurationSent) child.stdin.end('{"type":"stop"}\n')
++      else child.stdin.end()
++    }
+@@ -320,0 +359,2 @@
++  const phase = () =>
++    carrierBootstrapPhase(WindowsHolder.startupPhases.indexOf(reader.startupPhase)) ?? reader.startupPhase
+@@ -326,0 +367,2 @@
++          if (!writes.configurationSent) throw new Error("Windows carrier reported readiness before its configuration")
++          if (!remaining()) throw new Error(startupTimeout(phase()))
+@@ -346,0 +389,10 @@
++      writes.afterStatus(
++        reader.validatedStartupStep,
++        !state.failure &&
++          !state.stopping &&
++          !state.terminal &&
++          !state.closed &&
++          !state.finished &&
++          !callbacks.signal?.aborted &&
++          remaining() > 0,
++      )
+@@ -389 +440,0 @@
+-  child.stdin.write(config, (error) => delivery.mark(error ? "configWriteFailedMs" : "configWrittenMs"))
+@@ -391,4 +442,3 @@
+-    const pid = await bounded(ready.promise, STARTUP_MS, () => {
+-      delivery.mark("watchdogMs")
+-      return `Windows containment helper startup timed out (last phase: ${reader.startupPhase})`
+-    })
++    if (!remaining()) throw new Error(startupTimeout(phase()))
++    writes.begin()
++    const pid = await bounded(ready.promise, remaining(), () => startupTimeout(phase()))
+@@ -400,0 +451 @@
++    recordCarrierReady(delivery.snapshot())
