@@ -30,6 +30,7 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     owner,
     default_branch: "main",
     private: false,
+    visibility: undefined as string | undefined,
     archived: false,
     disabled: false,
   }

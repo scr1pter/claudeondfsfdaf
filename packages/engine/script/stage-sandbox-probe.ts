@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url"
 import { sandboxProbeTarget } from "./sandbox-probe-target"
 import { sandboxBunUndici } from "./sandbox-bun-undici"
 import { sandboxBunEsprima } from "./sandbox-bun-esprima"
+import { stageSandboxPtyAssets } from "./sandbox-pty-assets"
 
-// CI-only packaging: include the actual ShellTool and its runtime assets in the immutable disposable probe.
+// CI-only packaging for the actual ShellTool and PTY in the immutable disposable probe.
 const engine = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 process.chdir(engine)
 const output = path.join(process.env.RUNNER_TEMP!, "vector-probe-tools")
@@ -47,6 +48,7 @@ const result = await Bun.build({
 })
 if (!result.success) throw new AggregateError(result.logs, `The actual ${runtime} tool probe did not build`)
 const artifacts = result.outputs.map((item) => path.relative(output, item.path))
+artifacts.push(...(await stageSandboxPtyAssets(path.join(engine, "..", "core"), output, runtime)))
 if (undici) {
   await Bun.write(path.join(output, undici.asset), undici.contents)
   artifacts.push(undici.asset)
@@ -65,4 +67,4 @@ await fs.writeFile(
   path.join(output, runtime === "bun" ? "tool-probe-outputs-bun.json" : "tool-probe-outputs.json"),
   JSON.stringify([...new Set(artifacts)].sort()),
 )
-console.log(`Built actual ${runtime} ShellTool probe with ${new Set(artifacts).size} runtime files`)
+console.log(`Built the ${runtime} ShellTool and PTY probe with ${new Set(artifacts).size} runtime files`)
