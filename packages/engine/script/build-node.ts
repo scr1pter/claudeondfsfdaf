@@ -6,6 +6,7 @@ import { linuxIsolationBuildPlugin, linuxIsolationCIMode } from "../../../script
 import { unguardedBunReferences } from "./node-bundle-guard"
 import { brainWorkerModule } from "./brain-worker-module"
 import { bundleBrainWorker } from "./brain-worker"
+import { prepareWindowsHolderBundle, windowsHolderBundlePlugin } from "./windows-holder-bundle"
 import desktop from "../../desktop/package.json"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -15,6 +16,15 @@ const __dirname = path.dirname(__filename)
 const dir = path.resolve(__dirname, "..")
 
 process.chdir(dir)
+
+const windowsHolderAssets = await prepareWindowsHolderBundle({
+  argv: process.argv,
+  githubActions: process.env.GITHUB_ACTIONS,
+  declaredRevision: process.env.VECTOR_SOURCE_REVISION,
+  architectures: ["x64", "arm64"],
+  manifestPath: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST,
+  manifestDigest: process.env.VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256,
+})
 
 const generated = await import("./generate.ts")
 
@@ -31,7 +41,10 @@ const result = await Bun.build({
   format: "esm",
   sourcemap: "linked",
   external: ["jsonc-parser", "@lydell/node-pty"],
-  plugins: [isolation],
+  plugins: [
+    isolation,
+    ...(windowsHolderAssets ? [windowsHolderBundlePlugin(windowsHolderAssets, ["x64", "arm64"])] : []),
+  ],
   define: {
     VECTOR_MODEL_CATALOG: generated.modelsData,
     VECTOR_CHANNEL: `'${Script.channel}'`,

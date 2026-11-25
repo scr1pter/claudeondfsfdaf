@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { ChildProcess } from "effect/unstable/process"
 import { execFile, spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { WindowsHolder } from "../../src/tool/shell/windows-holder"
+import { carrierDelivery, prepareCarrier } from "../../src/tool/shell/windows-holder-carrier"
 import { WindowsProcess } from "../../src/tool/shell/windows-process"
 
 const command = (text: string, shell?: string | boolean) =>
@@ -137,6 +139,53 @@ describe("Windows background command preparation", () => {
     const truncated = new WindowsProcess.StatusReader()
     truncated.push(message({ type: "ready", pid: 12 }).subarray(0, -1))
     expect(() => truncated.finish()).toThrow("Truncated")
+  })
+
+  test("the precompiled bytes stay on the private pipe and the bootstrap verifies the pinned asset", () => {
+    const bytes = Buffer.from("synthetic holder bytes")
+    const asset = {
+      arch: "x64",
+      base64: bytes.toString("base64"),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    } as const
+    const prepared = prepareCarrier(asset)
+    const encoded = prepared.args.at(-1)!
+    const script = Buffer.from(encoded, "base64").toString("utf16le")
+    expect(prepared.bytes).toEqual(bytes)
+    expect(encoded.length).toBeLessThanOrEqual(5_000)
+    expect(script).toContain(asset.sha256)
+    expect(script).not.toContain(asset.base64)
+    expect(script).not.toContain("Add-Type")
+    expect(() => prepareCarrier({ ...asset, base64: "dGFtcGVy" })).toThrow("failed verification")
+  })
+
+  test("configuration waits for a complete validated bootstrap and is sent at most once", () => {
+    const startup = (step: number) => message({ type: "startup", step })
+    const reader = new WindowsProcess.StatusReader()
+    const writes: string[] = []
+    const transport = carrierDelivery(
+      () => writes.push("prefix"),
+      () => writes.push("config"),
+    )
+    transport.begin()
+    const fourth = startup(4)
+    reader.push(Buffer.concat([startup(1), startup(2), startup(3), fourth.subarray(0, -1)]))
+    transport.afterStatus(reader.validatedStartupStep, true)
+    expect(writes).toEqual(["prefix"])
+    reader.push(fourth.subarray(-1))
+    transport.afterStatus(reader.validatedStartupStep, false)
+    expect(writes).toEqual(["prefix"])
+    transport.afterStatus(reader.validatedStartupStep, true)
+    transport.afterStatus(reader.validatedStartupStep, true)
+    expect(writes).toEqual(["prefix", "config"])
+
+    const advanced = carrierDelivery(
+      () => {},
+      () => writes.push("early"),
+    )
+    advanced.begin()
+    expect(() => advanced.afterStatus(5, true)).toThrow("before receiving its configuration")
+    expect(writes).not.toContain("early")
   })
 
   test.skipIf(process.platform === "win32")(

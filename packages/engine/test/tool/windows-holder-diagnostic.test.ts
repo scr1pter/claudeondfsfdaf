@@ -5,12 +5,12 @@ import { WindowsHolder } from "../../src/tool/shell/windows-holder"
 
 const workflow = Bun.YAML.parse(
   readFileSync(new URL("../../../../.github/workflows/windows-containment.yml", import.meta.url), "utf8"),
-) as { jobs: Record<string, { "runs-on": string; steps: { run?: string }[] }> }
+) as { jobs: Record<string, { "runs-on"?: string; steps?: { run?: string }[] }> }
 
 test("the first containment probe has its own Windows host and never warms the native integration runner", () => {
   const jobs = Object.values(workflow.jobs)
-  const diagnostic = jobs.find((job) => job.steps.some((step) => step.run?.includes("diagnose-windows-holder")))
-  const integration = jobs.find((job) => job.steps.some((step) => step.run?.includes("shell-windows-process.test")))
+  const diagnostic = jobs.find((job) => job.steps?.some((step) => step.run?.includes("diagnose-windows-holder")))
+  const integration = jobs.find((job) => job.steps?.some((step) => step.run?.includes("shell-windows-process.test")))
   expect(diagnostic).toBeDefined()
   expect(integration).toBeDefined()
   expect(diagnostic).not.toBe(integration)
