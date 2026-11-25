@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url"
 const holderSource = new URL("../src/tool/shell/windows-holder.ts", import.meta.url)
 const processSource = new URL("../src/tool/shell/windows-process.ts", import.meta.url)
 // Pin the actual maintained source, independent of the revision that adds this diagnostic.
-const sourceSHA = "976849e4d5f6ebeeb3f11073618c36d62341334e4be1f8b53044b7a830e0a475"
+const sourceSHA = "01c7efbb2abdf21c6806485b7e3383d12d67df3ea9891bb2e3ea1b416273fd4e"
 const processSHA = "30c42a270453d34d1ec5230a5b2b65c428206cef13f0fa20233943c38353d706"
 const executableLimit = 1_048_576
 export const startupMs = 15_000

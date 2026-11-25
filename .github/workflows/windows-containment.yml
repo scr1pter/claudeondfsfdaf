@@ -110,7 +110,6 @@ jobs:
     steps:
       - name: Check the hosted integration selection
         if: >-
-          (inputs.direct_holder_integration && inputs.direct_holder_arch != 'x64' && inputs.direct_holder_backend == 'staged') ||
           (inputs.direct_holder_backend != 'staged' && !inputs.direct_holder_integration) ||
           (inputs.direct_holder_shard8 && (!inputs.direct_holder_comparison || !inputs.direct_holder_integration ||
             inputs.direct_holder_arch != 'x64' || inputs.direct_holder_backend == 'legacy'))
@@ -173,7 +172,6 @@ jobs:
   direct-holder-integration:
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && inputs.direct_holder_integration &&
-      (inputs.direct_holder_arch == 'x64' || inputs.direct_holder_backend != 'staged') &&
       (!inputs.direct_holder_shard8 || (inputs.direct_holder_arch == 'x64' && inputs.direct_holder_backend != 'legacy'))
     needs: direct-holder-build
     runs-on: ${{ inputs.direct_holder_arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}

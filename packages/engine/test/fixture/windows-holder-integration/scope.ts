@@ -8,7 +8,7 @@ export function integrationRunner() {
   const shard8 = env.VECTOR_DIRECT_HOLDER_SHARD8 === "1"
   if (
     (arch !== "x64" && arch !== "arm64") ||
-    (arch === "arm64" && backend !== "carrier") ||
+    (backend !== "staged" && backend !== "carrier") ||
     (shard8 && (arch !== "x64" || (backend !== "staged" && backend !== "carrier"))) ||
     process.platform !== "win32" ||
     process.arch !== arch ||
