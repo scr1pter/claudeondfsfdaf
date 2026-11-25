@@ -86,8 +86,14 @@ const works =
 // Where this engine advertises the offline sandbox: Linux, a bubblewrap only root can change, and a start that works.
 const offline = works && Sandbox.unattendedBinary() !== undefined
 const liveIf = (run: boolean) => (run ? it.live : it.live.skip)
+let foregroundProgress: { phase: string } | undefined
 
 afterEach(async () => {
+  const progress = foregroundProgress
+  foregroundProgress = undefined
+  if (progress) {
+    console.info(`[offline-shell foreground] last phase=${progress.phase} (Bun deadline starts at test entry)`)
+  }
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -458,8 +464,12 @@ describe("an offline-only session's commands (R-M2)", () => {
     "reach no server on this computer, no host socket and no secret variable, and write only in the checkout",
     () =>
       Effect.gen(function* () {
+        // Snapshot before the existing teardown can obscure a Bun timeout. Updates stay local to this invocation.
+        const progress = { phase: "starting HTTP harness" }
+        foregroundProgress = progress
         const llm = yield* TestLLMServer
         const h = yield* harness(llm.url)
+        progress.phase = "preparing local fixtures"
         const fixtures = scratch()
         const tcp = yield* Effect.acquireRelease(
           Effect.sync(() => Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reached-tcp") })),
@@ -517,22 +527,32 @@ describe("an offline-only session's commands (R-M2)", () => {
           ),
         )
 
+        progress.phase = "creating marked session"
         const marked = yield* created(h, { title: "Unattended", metadata: MARKS })
+        progress.phase = "creating plain session"
         const plain = yield* created(h, { title: "Plain" })
         // A session below an offline-only one is offline-only too, with no mark of its own.
+        progress.phase = "creating child session"
         const child = yield* created(h, { title: "Below", parentID: marked.id })
         expect(child.metadata?.[UNATTENDED_SHELL_KEY]).toBeUndefined()
 
+        progress.phase = "preparing marked prompt"
         yield* llm.tool("bash", { command: "sh ./probe.sh marked", description: "Probe" })
         yield* llm.text("done")
+        progress.phase = "awaiting marked prompt and history"
         const inside = completed(yield* prompt(h, marked.id), "bash")
+        progress.phase = "preparing plain prompt"
         yield* llm.tool("bash", { command: "sh ./probe.sh plain", description: "Probe" })
         yield* llm.text("done")
+        progress.phase = "awaiting plain prompt and history"
         const outside = completed(yield* prompt(h, plain.id), "bash")
+        progress.phase = "preparing child prompt"
         yield* llm.tool("bash", { command: "sh ./probe.sh child", description: "Probe" })
         yield* llm.text("done")
+        progress.phase = "awaiting child prompt and history"
         const below = completed(yield* prompt(h, child.id), "bash")
 
+        progress.phase = "asserting probe results"
         for (const state of [inside, below]) {
           expect(state?.output).toStartWith(`${Sandbox.UNATTENDED_NOTICE}\n\n`)
           expect(state?.metadata.sandbox).toBe(Sandbox.UNATTENDED_NOTICE)
@@ -557,6 +577,7 @@ describe("an offline-only session's commands (R-M2)", () => {
         expect(outside?.output).toContain(`token=token-${secret} pat=pat-${secret}`)
         expect(outside?.output).toContain("hook=written")
         expect(existsSync(path.join(h.directory, "made-plain.txt"))).toBe(true)
+        progress.phase = "assertions complete"
       }),
   )
 
