@@ -16,18 +16,23 @@ const electron = process as NodeJS.Process & {
   }
 }
 const root = "C:\\Windows"
+let failureStage = 10
 
 async function verify() {
-  const resources = path.win32.join(path.win32.dirname(await realpath(process.execPath)), "resources")
+  failureStage = 11
   if (
     process.platform !== "win32" ||
     process.arch !== architecture ||
     process.versions.electron !== version ||
     electron.type !== "utility" ||
-    electron.resourcesPath?.toLowerCase() !== resources.toLowerCase() ||
     (mode !== "present" && mode !== "missing" && mode !== "changed")
   )
     throw new Error("Invalid packaged Electron utility.")
+  failureStage = 12
+  const resources = path.win32.join(path.win32.dirname(await realpath(process.execPath)), "resources")
+  if (electron.resourcesPath?.toLowerCase() !== resources.toLowerCase())
+    throw new Error("Invalid packaged Electron resources directory.")
+  failureStage = 13
   const selected = windowsHolderCompanion(root)
   if (selected?.placement !== "electron" || selected.image.arch !== architecture)
     throw new Error("The packaged holder selection is missing.")
@@ -51,6 +56,7 @@ async function verify() {
   }
   traffic.subscribe(observe)
   try {
+    failureStage = 14
     const handle = await WindowsProcess.start(command, {
       async onReady(pid) {
         acknowledged = pid
@@ -59,7 +65,9 @@ async function verify() {
         throw new Error("The synthetic command cannot write output.")
       },
     })
+    failureStage = 15
     const result = await handle.completion
+    failureStage = 16
     if (
       mode !== "present" ||
       launches !== 1 ||
@@ -94,5 +102,5 @@ try {
   })
   electron.parentPort.postMessage(`vector-holder-electron ${mode}\n`)
 } catch {
-  process.exit(1)
+  process.exit(failureStage)
 }

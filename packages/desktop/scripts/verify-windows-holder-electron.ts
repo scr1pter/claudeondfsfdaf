@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { promisify } from "node:util"
@@ -72,6 +72,9 @@ try {
   const app = path.join(directory, "application")
   const resources = path.join(app, "resources")
   await cp(distribution, app, { recursive: true, force: false, errorOnExist: true })
+  // Electron's Windows app.isPackaged checks the executable basename.
+  const executable = path.join(app, "VectorHolderSmoke.exe")
+  await rename(path.join(app, "electron.exe"), executable)
   await copyWindowsHolderResource(path.join(directory, "desktop"), resources, arch, {
     GITHUB_ACTIONS,
     VECTOR_WINDOWS_HOLDER_MANIFEST: manifest,
@@ -105,22 +108,24 @@ const report = "vector-holder-electron " + mode + "\\n"
 app.disableHardwareAcceleration()
 const timer = setTimeout(() => app.exit(4), 25_000)
 app.whenReady().then(() => {
-  if (!app.isPackaged || process.defaultApp ||
-      app.getAppPath().toLowerCase() !== join(process.resourcesPath, "app.asar").toLowerCase()) return app.exit(2)
+  if (!app.isPackaged || process.defaultApp) return app.exit(2)
+  if (app.getAppPath().toLowerCase() !== join(process.resourcesPath, "app.asar").toLowerCase()) return app.exit(3)
   const utility = utilityProcess.fork(join(app.getAppPath(), "utility.mjs"),
     [mode, ${JSON.stringify(arch)}, ${JSON.stringify(executableVersion)}],
     { stdio: "pipe", serviceName: "vector-holder-smoke" })
   let received = false
+  utility.once("error", () => app.exit(5))
   utility.on("message", (message) => {
-    if (received || message !== report) return app.exit(3)
+    if (received || message !== report) return app.exit(6)
     received = true
     process.stdout.write(message, () => utility.postMessage("acknowledge"))
   })
   utility.on("exit", (code) => {
     clearTimeout(timer)
-    app.exit(received && code === 0 ? 0 : 3)
+    if (received && code === 0) return app.exit(0)
+    app.exit(Number.isInteger(code) && code >= 10 && code <= 16 ? code : 7)
   })
-}).catch(() => app.exit(2))
+}).catch(() => app.exit(8))
 `,
   )
   const builder = createRequire(require.resolve("electron-builder/package.json"))
@@ -129,11 +134,27 @@ app.whenReady().then(() => {
   await asar.createPackage(archiveSource, archiveFile)
 
   const run = promisify(execFile)
+  const stages = new Map([
+    [2, "packaged-identity"],
+    [3, "asar-path"],
+    [4, "electron-watchdog"],
+    [5, "utility-fork"],
+    [6, "utility-receipt"],
+    [7, "utility-exit"],
+    [8, "electron-ready"],
+    [10, "utility-channel"],
+    [11, "utility-identity"],
+    [12, "utility-resources"],
+    [13, "holder-selection"],
+    [14, "holder-start"],
+    [15, "holder-completion"],
+    [16, "holder-assertions"],
+  ])
   const probe = async (mode: "present" | "missing" | "changed") => {
     const profile = path.join(directory, mode)
     await mkdir(profile)
     const result = await run(
-      path.join(app, "electron.exe"),
+      executable,
       [`--user-data-dir=${profile}`, "--disable-background-networking", "--disable-component-update", "--no-first-run"],
       {
         env: {
@@ -149,8 +170,10 @@ app.whenReady().then(() => {
         timeout: 30_000,
         maxBuffer: 4096,
       },
-    ).catch(() => {
-      throw new Error(`The packaged Electron holder check failed during the ${mode} case.`)
+    ).catch((error: unknown) => {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined
+      const stage = (typeof code === "number" ? stages.get(code) : undefined) ?? "electron-launch"
+      throw new Error(`The packaged Electron holder check failed during the ${mode} case (${stage}).`)
     })
     if (result.stdout.trim() !== `vector-holder-electron ${mode}`)
       throw new Error("The Electron holder receipt is invalid.")
