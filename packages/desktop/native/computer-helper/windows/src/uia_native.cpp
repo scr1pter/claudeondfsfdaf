@@ -685,9 +685,13 @@ UiaElement observe_first_uia_root(WindowsUiaBackend& backend, std::shared_ptr<Wi
     if (failure.code != L"no_ui_tree" || !diagnostic) throw;
     bool retired = false;
     try { retired = backend.available && !backend.available(); } catch (...) {}
-    if (!retired || diagnostic->failure_expiry(false) != WindowsUiaExpiry::caller_wait || diagnostic->failure_status(false)) throw;
+    if (!retired || diagnostic->failure_status(false)) throw;
     const auto phase = diagnostic->failure_phase(false);
     if (phase != WindowsUiaPhase::root_element && phase != WindowsUiaPhase::runtime_id && phase != WindowsUiaPhase::prepare_connection) throw;
+    const auto expiry = diagnostic->failure_expiry(false);
+    // At runtime_id the worker checks its ticket immediately before calling GetRuntimeId.
+    if (expiry != WindowsUiaExpiry::caller_wait &&
+        !(expiry == WindowsUiaExpiry::worker_current && phase == WindowsUiaPhase::runtime_id)) throw;
     if (!still_current()) throw;
 
     // A retired actor may still return late. Its ticket and snapshot belong only to the first attempt.

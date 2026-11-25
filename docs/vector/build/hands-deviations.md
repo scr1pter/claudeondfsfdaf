@@ -1766,3 +1766,9 @@ The owned first-root path in the Windows UIA backend can now open a fresh actor 
 Both the caller ticket and COM cancellation use at most their existing 50 ms and are capped by the original 15-second Stop watchdog. The refresh and posting checks retain their original budgets. The production banner routes Stop through trusted Electron IPC. Physical input routes Stop directly to the dispatcher. The isolated driver is the caller that exercises this recovery in the shared native UIA code.
 
 The Windows source digest changes and `helperVersion` stays **1.0.15** under the existing Windows-only identity practice. Hands remains flag-off. Qualification requires the x64 and ARM64 Windows native builds and units, a passing required isolated Stop, and a complete 50-sample repeat at the new source digest. Linux fake-backed checks cover the recovery decision. Windows CI supplies the native integration evidence.
+
+## HF-7 worker-observed runtime ID expiry (25 November 2026)
+
+The required Stop on landed `327fbc11` failed at `uia-runtime-id` with `core_failure:no_ui_tree`, a first-root retired actor, `worker-current`, and no observed HRESULT. The worker records this snapshot when the ticket expires just before `GetRuntimeId`. The same first-root recovery now covers this observed phase and expiry. The fresh actor still needs current source, parent and window evidence and time within the original Stop deadline. [Landed Windows test](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/45675088518/job/139420656987)
+
+The same run gave 47 passes out of 50 usable Stop samples. The three refusals occurred at the final pre-input check and reported `post` with `core_failure:changed`. Those samples report no narrower authority or deadline predicate. The worker-expiry recovery applies only to the first root observation. [Measured run](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/45675088518)
