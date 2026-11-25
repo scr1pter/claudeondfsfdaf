@@ -10,12 +10,17 @@ on:
       - packages/engine/test/tool/windows-holder-diagnostic.test.ts
       - packages/engine/script/diagnose-windows-holder.ts
   workflow_dispatch:
+    inputs:
+      direct_holder_comparison:
+        description: Compare the direct Windows x64 containment holder
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-containment-${{ github.event.pull_request.number || github.ref }}
+  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && '-direct-x64' || '' }}
   cancel-in-progress: true
 
 env:
@@ -23,6 +28,7 @@ env:
 
 jobs:
   cold-start:
+    if: github.event_name != 'workflow_dispatch' || !inputs.direct_holder_comparison
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -40,6 +46,7 @@ jobs:
         run: bun script/diagnose-windows-holder.ts
 
   native:
+    if: github.event_name != 'workflow_dispatch' || !inputs.direct_holder_comparison
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -72,3 +79,65 @@ jobs:
         timeout-minutes: 5
         working-directory: packages/engine
         run: GITHUB_ACTIONS=false bun test test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
+
+  direct-holder-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      VECTOR_DIRECT_HOLDER_FIXTURE: "1"
+    outputs:
+      payload_digest: ${{ steps.compile.outputs.payload_digest }}
+    steps:
+      - name: Checkout the exact comparison revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Compile the pinned x64 holder source
+        id: compile
+        shell: cmd
+        run: node packages/engine/script/diagnose-direct-windows-holder.mjs build
+      - name: Upload the exact executable and receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: direct-holder-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vector-direct-holder
+          if-no-files-found: error
+          retention-days: 1
+
+  direct-holder-measure:
+    if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison
+    needs: direct-holder-build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      VECTOR_DIRECT_HOLDER_FIXTURE: "1"
+    steps:
+      - name: Checkout the exact comparison revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: package.json
+      - name: Install Engine dependencies from the lockfile
+        shell: cmd
+        run: bun install --no-env-file --frozen-lockfile --ignore-scripts
+      - name: Download the paired same-run artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: direct-holder-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vector-direct-holder
+      - name: Verify and measure first launch without acknowledging the dummy
+        shell: cmd
+        working-directory: packages/engine
+        env:
+          VECTOR_DIRECT_HOLDER_PAYLOAD_DIGEST: ${{ needs.direct-holder-build.outputs.payload_digest }}
+        run: bun --no-env-file script/diagnose-direct-windows-holder.mjs measure
