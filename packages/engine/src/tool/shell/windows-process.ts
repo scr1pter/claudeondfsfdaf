@@ -6,6 +6,7 @@ import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
 import { WindowsHolder } from "./windows-holder"
 import { carrierDelivery, carrierPhase, windowsHolderCarrier } from "./windows-holder-carrier"
+import { prepareWindowsHolderCompanion, windowsHolderCompanion } from "./windows-holder-direct"
 
 export type Result = { exitCode: number; terminated: true }
 export type Handle = { pid: number; completion: Promise<Result>; stop(): Promise<Result> }
@@ -106,13 +107,18 @@ type Status =
 export class StatusReader {
   private pending = Buffer.alloc(0)
   private total = 0
-  private startupStep = 0
+  private startupStep: number
   private startupComplete = false
 
-  constructor(private readonly onStartupPhase?: (phase: WindowsHolder.StartupPhase) => void) {}
+  constructor(
+    private readonly onStartupPhase?: (phase: WindowsHolder.StartupPhase) => void,
+    private readonly firstStartupStep: 1 | 4 = 1,
+  ) {
+    this.startupStep = firstStartupStep - 1
+  }
 
   get startupPhase() {
-    return WindowsHolder.startupPhases[this.startupStep]!
+    return this.startupStep < this.firstStartupStep ? "spawn" : WindowsHolder.startupPhases[this.startupStep]!
   }
 
   get validatedStartupStep() {
@@ -183,7 +189,7 @@ export class StatusReader {
 
 /** Only this live registration owns the native holder. No operation accepts a recovered numeric PID. */
 export async function start(command: ChildProcess.StandardCommand, callbacks: Callbacks): Promise<Handle> {
-  // Defense in depth: the holder spawns PowerShell directly, never through ProcessIsolation.launch, so it refuses here
+  // Defense in depth: the holder starts directly, never through ProcessIsolation.launch, so it refuses here
   // too when isolation is required. ShellJobs refuses earlier with the user-facing message, before any job row.
   if (ProcessIsolation.required()) throw new WindowsProcessError(ProcessIsolation.REFUSAL, true)
   if (process.platform !== "win32")
@@ -192,11 +198,9 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
   const input = preflight(() => normalize(command))
   const root = variable(process.env, "SystemRoot")
   if (!root || !path.win32.isAbsolute(root))
-    throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true)
+    throw new WindowsProcessError("Windows containment helper is unavailable", true)
+  const direct = preflight(() => windowsHolderCompanion(root))
   const holder = path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-  await access(holder).catch((cause) => {
-    throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true, { cause })
-  })
   const file = await executable(input.file, input.cwd, input.env)
   const config =
     JSON.stringify({
@@ -222,24 +226,52 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
     delivery.mark("watchdogMs")
     return `Windows containment helper startup timed out (last phase: ${phase})`
   }
-  const carrier = preflight(() => windowsHolderCarrier(root))
-  const args = preflight(() => carrier?.args ?? WindowsHolder.argumentsForHolder())
-  if (callbacks.signal?.aborted) throw new WindowsProcessError("Background shell stopped before startup", true)
-  if (!remaining()) {
+  const prepareTimeout = () => {
     const message = startupTimeout("spawn")
-    throw new WindowsProcessStartupTimeout(
+    return new WindowsProcessStartupTimeout(
       `${message} (holder startup transport: ${JSON.stringify(delivery.snapshot())})`,
       true,
     )
   }
-  const child = preflight(() =>
-    spawn(holder, args, {
-      cwd: path.win32.join(root, "System32"),
-      env: helperEnv,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    }),
-  )
+  const prepareDirect = async () => {
+    if (!direct) return
+    const pending = prepareWindowsHolderCompanion(direct, deadline, callbacks.signal)
+    try {
+      return await bounded(pending, remaining(), () => startupTimeout("spawn"))
+    } catch {
+      void pending.then((verified) => verified?.release(), () => {})
+      if (callbacks.signal?.aborted) throw new WindowsProcessError("Background shell stopped before startup", true)
+      if (!remaining() || delivery.snapshot().watchdogMs !== undefined) throw prepareTimeout()
+      throw new WindowsProcessError("The installed Windows containment helper failed verification", true)
+    }
+  }
+  const verified = direct ? await prepareDirect() : undefined
+  if (!verified) {
+    try {
+      await bounded(access(holder), remaining(), () => startupTimeout("spawn"))
+    } catch (cause) {
+      if (!remaining() || delivery.snapshot().watchdogMs !== undefined) throw prepareTimeout()
+      throw new WindowsProcessError("Windows PowerShell containment helper is unavailable", true, { cause })
+    }
+  }
+  const carrier = verified ? undefined : preflight(() => windowsHolderCarrier(root))
+  const args = verified ? [] : preflight(() => carrier?.args ?? WindowsHolder.argumentsForHolder())
+  const child = (() => {
+    try {
+      if (callbacks.signal?.aborted) throw new WindowsProcessError("Background shell stopped before startup", true)
+      if (!remaining()) throw prepareTimeout()
+      return preflight(() =>
+        spawn(verified?.executable ?? holder, args, {
+          cwd: path.win32.join(root, "System32"),
+          env: helperEnv,
+          windowsHide: true,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+      )
+    } finally {
+      void verified?.release()
+    }
+  })()
   delivery.mark("launchReturnedMs")
   child.once("spawn", () => delivery.mark("spawnEventMs"))
   const ready = deferred<number>()
@@ -354,7 +386,7 @@ export async function start(command: ChildProcess.StandardCommand, callbacks: Ca
     delivery.mark("exitMs")
     timers.push(setTimeout(() => overdue("Windows shell output did not close after holder exit"), CLOSE_MS))
   })
-  const reader = new StatusReader(delivery.markStartupPhase)
+  const reader = new StatusReader(delivery.markStartupPhase, verified ? 4 : 1)
   const phase = () => (carrier ? carrierPhase(reader.startupPhase) : reader.startupPhase)
   child.stderr.on("data", (chunk: Buffer) => {
     if (chunk.length) delivery.mark("firstStderrMs")

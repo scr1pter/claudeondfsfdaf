@@ -141,6 +141,17 @@ describe("Windows background command preparation", () => {
     expect(() => truncated.finish()).toThrow("Truncated")
   })
 
+  test("the direct holder starts its status sequence at the native read phase", () => {
+    const phases: string[] = []
+    const reader = new WindowsProcess.StatusReader((phase) => phases.push(phase), 4)
+    expect(reader.startupPhase).toBe("spawn")
+    expect(() => reader.push(message({ type: "startup", step: 1 }))).toThrow("Invalid")
+    expect(() => reader.push(message({ type: "startup", step: 5 }))).toThrow("Invalid")
+    for (const step of [4, 5, 6, 7]) expect(reader.push(message({ type: "startup", step }))).toEqual([])
+    expect(phases).toEqual(["reading-config", "config-decoded", "creating-payload", "payload-created"])
+    expect(reader.push(message({ type: "ready", pid: 12 }))).toEqual([{ type: "ready", pid: 12 }])
+  })
+
   test("the precompiled bytes stay on the private pipe and the bootstrap verifies the pinned asset", () => {
     const bytes = Buffer.from("synthetic holder bytes")
     const asset = {
@@ -431,6 +442,33 @@ describe("native Windows job containment (hosted Windows only)", () => {
     }
   })
 
+  windows("the holder retains an acknowledgement pipelined after a large configuration", async () => {
+    await using dir = await fixture()
+    const marker = path.join(dir.path, "acknowledged.txt")
+    const command = ps(`[IO.File]::WriteAllText(${literal(marker)},'ran')`, dir.path)
+    const native = rawHolder(
+      ChildProcess.make(command.command, command.args, {
+        ...command.options,
+        extendEnv: true,
+        env: { VECTOR_TEST_LARGE: "x".repeat(8192) },
+      }),
+      WindowsHolder.script,
+      true,
+    )
+    try {
+      const pid = await deadline(native.ready.promise)
+      await deadline(native.closed)
+      expect(native.status.some((status) => status.type === "running" && status.pid === pid)).toBe(true)
+      expect(native.status.at(-1)).toEqual({ type: "exit", exitCode: 0, terminationProven: true })
+      expect(await readFile(marker, "utf8")).toBe("ran")
+      expect(alive(pid)).toBe(false)
+    } finally {
+      native.child.kill()
+      native.child.stdin.destroy()
+      await deadline(native.closed).catch(() => {})
+    }
+  })
+
   windows("parent EOF after acknowledgement stops the leader and its descendant", async () => {
     await using dir = await fixture()
     const worker = counter(dir.path)
@@ -615,7 +653,7 @@ function alive(pid: number) {
     throw error
   }
 }
-function rawHolder(command: ChildProcess.StandardCommand, script = WindowsHolder.script) {
+function rawHolder(command: ChildProcess.StandardCommand, script = WindowsHolder.script, resumeWithConfig = false) {
   const input = WindowsProcess.normalize(command)
   const args = WindowsHolder.argumentsForHolder()
   args[args.length - 1] = Buffer.from(script, "utf16le").toString("base64")
@@ -654,7 +692,9 @@ function rawHolder(command: ChildProcess.StandardCommand, script = WindowsHolder
       commandLine: WindowsProcess.commandLine(input),
       cwd: input.cwd,
       env: input.env,
-    }) + "\n",
+    }) +
+      "\n" +
+      (resumeWithConfig ? '{"type":"resume"}\n' : ""),
   )
   return { child, ready, closed, status }
 }

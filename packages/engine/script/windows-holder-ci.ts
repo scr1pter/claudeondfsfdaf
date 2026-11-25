@@ -1,5 +1,6 @@
+import { realpath } from "node:fs/promises"
 import path from "node:path"
-import { verifyWindowsHolderBundle, windowsHolderBundlePlugin } from "./windows-holder-bundle"
+import { emitWindowsHolderCompanion, verifyWindowsHolderBundle, windowsHolderBundlePlugin } from "./windows-holder-bundle"
 
 const { CI, GITHUB_JOB, GITHUB_RUN_ID, GITHUB_SHA, RUNNER_ARCH, RUNNER_ENVIRONMENT, RUNNER_TEMP } = process.env
 const { VECTOR_WINDOWS_HOLDER_BUILD_RUN, VECTOR_WINDOWS_HOLDER_REVISION, VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256 } =
@@ -34,7 +35,14 @@ export const assets = await verifyWindowsHolderBundle({
   checkout: GITHUB_SHA,
   architectures,
 })
-Bun.plugin(windowsHolderBundlePlugin(assets, architectures))
+const asset = assets[arch]
+if (!asset) throw new Error("The hosted Windows holder asset is missing.")
+const image = await emitWindowsHolderCompanion(path.dirname(await realpath(process.execPath)), asset).catch((error) => {
+  // The dedicated job runs three separate Bun processes on the same disposable runner.
+  if (error?.code !== "EEXIST") throw error
+  return { arch, size: Buffer.byteLength(asset.base64, "base64"), sha256: asset.sha256 }
+})
+Bun.plugin(windowsHolderBundlePlugin(assets, architectures, { placement: "cli", targets: { [arch]: image } }))
 const { trustedWindowsX64Holder, trustedWindowsArm64Holder } = await import("../src/tool/shell/windows-holder.asset")
 const [selected, other] =
   arch === "x64"
@@ -42,3 +50,5 @@ const [selected, other] =
     : [trustedWindowsArm64Holder, trustedWindowsX64Holder]
 if (selected?.arch !== arch || selected.sha256 !== assets[arch]?.sha256 || other !== undefined)
   throw new Error("Windows Engine CI could not activate the verified holder bundle for its architecture.")
+const { windowsHolderCompanion } = await import("../src/tool/shell/windows-holder-direct")
+if (!windowsHolderCompanion("C:\\Windows")) throw new Error("Windows Engine CI requires the native direct holder path.")

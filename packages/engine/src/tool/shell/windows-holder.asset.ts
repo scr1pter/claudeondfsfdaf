@@ -4,6 +4,18 @@ export type TrustedWindowsHolderAsset = Readonly<{
   base64: string
 }>
 
-// Only the explicitly verified build replaces this module. Source-tree and ordinary builds have no direct holder.
+export type WindowsHolderCompanion = Readonly<{
+  arch: TrustedWindowsHolderAsset["arch"]
+  size: number
+  sha256: string
+}>
+
+export type WindowsHolderCompanionBundle = Readonly<{
+  placement: "cli" | "electron"
+  targets: Readonly<Partial<Record<WindowsHolderCompanion["arch"], WindowsHolderCompanion>>>
+}>
+
+// Only the explicitly verified build replaces this module.
 export const trustedWindowsX64Holder: TrustedWindowsHolderAsset | undefined = undefined
 export const trustedWindowsArm64Holder: TrustedWindowsHolderAsset | undefined = undefined
+export const trustedWindowsHolderCompanion: WindowsHolderCompanionBundle | undefined = undefined

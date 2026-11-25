@@ -1,10 +1,15 @@
 import { $ } from "bun"
 import type { BunPlugin } from "bun"
 import { createHash } from "node:crypto"
-import { lstat, readFile, realpath } from "node:fs/promises"
+import { lstat, readFile, realpath, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import type { TrustedWindowsHolderAsset } from "../src/tool/shell/windows-holder.asset"
+import { windowsHolderCompanionName } from "../src/tool/shell/windows-holder-companion-name"
+import type {
+  TrustedWindowsHolderAsset,
+  WindowsHolderCompanion,
+  WindowsHolderCompanionBundle,
+} from "../src/tool/shell/windows-holder.asset"
 import { compiledSource, maximumExecutableBytes, validateExecutable } from "./windows-holder-binary"
 
 type Architecture = TrustedWindowsHolderAsset["arch"]
@@ -100,7 +105,43 @@ export async function verifyWindowsHolderBundle(input: {
   return Object.freeze(assets)
 }
 
-export function windowsHolderBundlePlugin(assets: Assets, architectures: readonly Architecture[]): BunPlugin {
+export async function emitWindowsHolderCompanion(
+  directory: string,
+  asset: TrustedWindowsHolderAsset,
+): Promise<WindowsHolderCompanion> {
+  const name = windowsHolderCompanionName(asset.arch, asset.sha256)
+  if (asset.base64.length > Math.ceil(maximumExecutableBytes / 3) * 4)
+    throw new Error("The Windows holder companion is too large.")
+  const bytes = Buffer.from(asset.base64, "base64")
+  validateExecutable(bytes, asset.arch)
+  if (sha256(bytes) !== asset.sha256) throw new Error("The Windows holder companion digest does not match.")
+  const destination = path.resolve(directory)
+  if (!(await lstat(destination)).isDirectory() || !samePath(await realpath(destination), destination))
+    throw new Error("The Windows holder companion directory is not canonical.")
+  await writeFile(path.join(destination, name), bytes, { flag: "wx", mode: 0o644 })
+  return Object.freeze({ arch: asset.arch, size: bytes.length, sha256: asset.sha256 })
+}
+
+export function windowsHolderBundlePlugin(
+  assets: Assets,
+  architectures: readonly Architecture[],
+  companion?: WindowsHolderCompanionBundle,
+): BunPlugin {
+  if (companion && Object.keys(companion.targets).length !== new Set(architectures).size)
+    throw new Error("Windows holder companion targets do not match the selected build architectures.")
+  const companionLiteral = (arch: Architecture) => {
+    if (!companion || !architectures.includes(arch)) return "undefined"
+    const asset = assets[arch]
+    const metadata = companion.targets[arch]
+    if (
+      !asset ||
+      metadata?.arch !== arch ||
+      metadata.sha256 !== asset.sha256 ||
+      metadata.size !== Buffer.byteLength(asset.base64, "base64")
+    )
+      throw new Error("Bundled Windows holder metadata does not match the staged companion.")
+    return `Object.freeze(${JSON.stringify(metadata)})`
+  }
   const literal = (arch: Architecture) => {
     const asset = assets[arch]
     if (!architectures.includes(arch)) return "undefined"
@@ -110,6 +151,9 @@ export function windowsHolderBundlePlugin(assets: Assets, architectures: readonl
   const contents = [
     `export const trustedWindowsX64Holder = ${literal("x64")}`,
     `export const trustedWindowsArm64Holder = ${literal("arm64")}`,
+    companion
+      ? `export const trustedWindowsHolderCompanion = Object.freeze({ placement: ${JSON.stringify(companion.placement)}, targets: Object.freeze({ x64: ${companionLiteral("x64")}, arm64: ${companionLiteral("arm64")} }) })`
+      : "export const trustedWindowsHolderCompanion = undefined",
   ].join("\n")
   return {
     name: "vector-windows-holder-asset",

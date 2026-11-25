@@ -9,7 +9,11 @@ import { fileURLToPath } from "url"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { compileRuntime } from "../../../script/compile-runtime"
 import { bundleBrainWorker } from "./brain-worker"
-import { prepareWindowsHolderBundle, windowsHolderBundlePlugin } from "./windows-holder-bundle"
+import {
+  emitWindowsHolderCompanion,
+  prepareWindowsHolderBundle,
+  windowsHolderBundlePlugin,
+} from "./windows-holder-bundle"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -202,6 +206,8 @@ for (const item of targets) {
     .join("-")
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
+  const windowsHolder = item.os === "win32" ? windowsHolderAssets?.[item.arch] : undefined
+  const companion = windowsHolder ? await emitWindowsHolderCompanion(`dist/${name}/bin`, windowsHolder) : undefined
 
   const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
   const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
@@ -221,8 +227,13 @@ for (const item of targets) {
     plugins: [
       plugin,
       isolation,
-      ...(windowsHolderAssets && item.os === "win32"
-        ? [windowsHolderBundlePlugin(windowsHolderAssets, [item.arch])]
+      ...(windowsHolderAssets && companion
+        ? [
+            windowsHolderBundlePlugin(windowsHolderAssets, [item.arch], {
+              placement: "cli",
+              targets: { [item.arch]: companion },
+            }),
+          ]
         : []),
     ],
     external: ["node-gyp"],
@@ -295,6 +306,7 @@ for (const item of targets) {
         vectorCatalogSha256: generated.modelsSha256,
         vectorStandalone: true,
         vectorSourceRevision: sourceRevision,
+        ...(companion ? { vectorWindowsHolder: companion } : {}),
         preferUnplugged: true,
         license: "SEE LICENSE IN LICENSE",
         files: ["bin", "LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"],

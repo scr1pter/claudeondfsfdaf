@@ -14,14 +14,19 @@ export function carrierPhase(phase: string) {
   return phase === "utility-loaded" || phase === "compiler-returned" ? phaseNames[phase] : phase
 }
 
-// Use the pinned System32 carrier on the standard Windows installation. An unbundled build can still use the legacy holder.
-export function windowsHolderCarrier(systemRoot: string) {
+export function compiledWindowsHolderArchitecture(systemRoot: string): TrustedWindowsHolderAsset["arch"] | undefined {
   if (systemRoot.toLowerCase() !== "c:\\windows") return
   // Windows 11 22H2 ships native ARM64 .NET Framework 4.8.1.
-  const nativeARM64 = process.arch === "arm64" && Number(release().split(".")[2]) >= 22_621
-  const asset = process.arch === "x64" ? trustedWindowsX64Holder : nativeARM64 ? trustedWindowsArm64Holder : undefined
+  if (process.arch === "x64" || (process.arch === "arm64" && Number(release().split(".")[2]) >= 22_621))
+    return process.arch
+}
+
+// Use the pinned System32 carrier on the standard Windows installation. An unbundled build can still use the legacy holder.
+export function windowsHolderCarrier(systemRoot: string) {
+  const arch = compiledWindowsHolderArchitecture(systemRoot)
+  const asset = arch === "x64" ? trustedWindowsX64Holder : arch === "arm64" ? trustedWindowsArm64Holder : undefined
   if (!asset) return
-  if (asset.arch !== process.arch) throw new Error("The Windows containment holder asset has the wrong architecture")
+  if (asset.arch !== arch) throw new Error("The Windows containment holder asset has the wrong architecture")
   return prepareCarrier(asset)
 }
 
