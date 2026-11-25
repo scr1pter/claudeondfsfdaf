@@ -16,6 +16,21 @@ const stopMs = 2_000
 const closeMs = 3_000
 const stopLine = '{"type":"stop"}\n'
 const entryPoint = '\ninternal static class VectorStandaloneEntryPoint { public static int Main() { return VectorShellHolder.Run(); } }\n'
+const armEntryPoint = String.raw`
+internal static class VectorStandaloneEntryPoint {
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool IsWow64Process2(IntPtr process,out ushort machine,out ushort native);
+  public static int Main() {
+    ushort machine,native;
+    if(!IsWow64Process2(new IntPtr(-1),out machine,out native) || machine!=0 || native!=0xaa64) return 63;
+    return VectorShellHolder.Run();
+  }
+}
+`
+
+const architectures = {
+  x64: { runner: "X64", platform: "x64", machine: 0x8664, magic: 0x20b, directories: 112, entryPoint },
+  arm64: { runner: "ARM64", platform: "anycpu", machine: 0x14c, magic: 0x10b, directories: 96, entryPoint: armEntryPoint },
+}
 
 function sha(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
@@ -27,21 +42,24 @@ function pinnedSource(bytes, expected) {
   return original
 }
 
-export function compiledSource(bytes) {
+export function compiledSource(bytes, arch = "x64") {
   const original = pinnedSource(bytes, sourceSHA)
   const source = /^const source = String\.raw`([\s\S]*?)^`$/m.exec(original)
   if (!source || !source[1]) throw new Error("Holder source unavailable")
-  return source[1] + entryPoint
+  return source[1] + architectures[arch].entryPoint
 }
 
 function windowsRunner(mode) {
   const env = process.env
   const job = { build: "direct-holder-build", measure: "direct-holder-measure" }[mode]
+  const arch = env.VECTOR_DIRECT_HOLDER_ARCH
+  const host = mode === "build" ? "x64" : arch
   if (
     !job ||
+    (arch !== "x64" && arch !== "arm64") ||
     process.platform !== "win32" ||
-    process.arch !== "x64" ||
-    env.RUNNER_ARCH !== "X64" ||
+    process.arch !== host ||
+    env.RUNNER_ARCH !== architectures[host].runner ||
     env.CI !== "true" ||
     env.GITHUB_ACTIONS !== "true" ||
     env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
@@ -49,7 +67,7 @@ function windowsRunner(mode) {
     env.VECTOR_DIRECT_HOLDER_FIXTURE !== "1" ||
     env.GITHUB_JOB !== job
   ) {
-    throw new Error("An explicitly authorized hosted Windows x64 diagnostic job is required")
+    throw new Error("An explicitly authorized hosted Windows diagnostic job is required")
   }
   if (!/^\d{1,30}$/.test(env.GITHUB_RUN_ID ?? "") || !/^\d{1,9}$/.test(env.GITHUB_RUN_ATTEMPT ?? "") ||
       !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA ?? "")) {
@@ -61,6 +79,7 @@ function windowsRunner(mode) {
     }
   }
   return {
+    arch,
     env,
     systemRoot: env.SystemRoot,
     run: env.GITHUB_RUN_ID,
@@ -93,38 +112,55 @@ async function regularBytes(filename, maximum) {
   return bytes
 }
 
-export function validateExecutable(bytes) {
-  const invalid = () => new Error("Expected a managed Windows x64 console executable")
+export function validateExecutable(bytes, arch = "x64") {
+  const expected = architectures[arch]
+  const invalid = () => new Error("Expected the selected managed Windows console executable")
   if (bytes.byteLength < 272 || bytes.byteLength > executableLimit || bytes.readUInt16LE(0) !== 0x5a4d) {
     throw invalid()
   }
   const pe = bytes.readUInt32LE(0x3c)
   const optional = pe + 24
-  // PE32+ optional header through the managed-runtime data directory.
-  const clr = optional + 112 + 14 * 8
+  const clr = optional + expected.directories + 14 * 8
   if (pe < 64 || clr + 8 > bytes.byteLength || bytes.readUInt32LE(pe) !== 0x4550) throw invalid()
   const optionalSize = bytes.readUInt16LE(pe + 20)
   const flags = bytes.readUInt16LE(pe + 22)
   if (
-    bytes.readUInt16LE(pe + 4) !== 0x8664 ||
-    optionalSize < 232 ||
+    bytes.readUInt16LE(pe + 4) !== expected.machine ||
+    optionalSize < expected.directories + 15 * 8 ||
     optional + optionalSize > bytes.byteLength ||
     !(flags & 2) ||
     flags & 0x2000 ||
-    bytes.readUInt16LE(optional) !== 0x20b ||
+    bytes.readUInt16LE(optional) !== expected.magic ||
     bytes.readUInt16LE(optional + 68) !== 3 ||
-    bytes.readUInt32LE(optional + 108) < 15 ||
+    bytes.readUInt32LE(optional + expected.directories - 4) < 15 ||
     !bytes.readUInt32LE(clr) ||
     bytes.readUInt32LE(clr + 4) < 72
   ) {
     throw invalid()
   }
+  if (arch === "arm64") verifyArchitectureNeutralIL(bytes, pe, optional + optionalSize, bytes.readUInt32LE(clr))
+}
+
+function verifyArchitectureNeutralIL(bytes, pe, section, clrRva) {
+  const count = bytes.readUInt16LE(pe + 6)
+  if (count < 1 || count > 96 || section + count * 40 > bytes.byteLength) throw new Error("Invalid PE section table")
+  for (let i = 0; i < count; i++, section += 40) {
+    const sectionRva = bytes.readUInt32LE(section + 12)
+    const rawSize = bytes.readUInt32LE(section + 16)
+    const rawOffset = bytes.readUInt32LE(section + 20)
+    const delta = clrRva - sectionRva
+    if (delta < 0 || delta + 72 > rawSize || rawOffset + delta + 72 > bytes.byteLength) continue
+    const flags = bytes.readUInt32LE(rawOffset + delta + 16)
+    if ((flags & 1) && !(flags & 0x20002)) return
+    break
+  }
+  throw new Error("Expected architecture-neutral IL without x86 preference")
 }
 
 export function artifactReceipt(runner, binary) {
   return Buffer.from(JSON.stringify({
     version: 1,
-    arch: "x64",
+    arch: runner.arch ?? "x64",
     run: runner.run,
     attempt: runner.attempt,
     revision: runner.revision,
@@ -146,11 +182,11 @@ export function validateArtifact(runner, receipt, binary, expectedDigest) {
   ) {
     throw new Error("The direct-holder artifact does not match its build job")
   }
-  validateExecutable(binary)
+  validateExecutable(binary, runner.arch)
 }
 
 async function build(runner) {
-  const source = compiledSource(await regularBytes(holderSource, 65_536))
+  const source = compiledSource(await regularBytes(holderSource, 65_536), runner.arch)
   pinnedSource(await regularBytes(processSource, 65_536), processSHA)
   const framework = path.win32.join(runner.systemRoot, "Microsoft.NET", "Framework64", "v4.0.30319")
   const compiler = path.win32.join(framework, "csc.exe")
@@ -168,7 +204,7 @@ async function build(runner) {
         "/nologo",
         "/noconfig",
         "/target:exe",
-        "/platform:x64",
+        "/platform:" + architectures[runner.arch].platform,
         "/main:VectorStandaloneEntryPoint",
         ...references,
         "/out:" + output,
@@ -178,7 +214,7 @@ async function build(runner) {
     )
     if (result.error || result.status !== 0) throw new Error("The stock Windows compiler could not build the fixture")
     const bytes = await regularBytes(output, executableLimit)
-    validateExecutable(bytes)
+    validateExecutable(bytes, runner.arch)
     const receipt = artifactReceipt(runner, bytes)
     await mkdir(runner.artifact)
     await writeFile(path.join(runner.artifact, "holder.exe"), bytes, { flag: "wx" })
@@ -313,7 +349,8 @@ export function observe(launch, config, reader, deliveryTimeline, clock = realCl
       } catch {
         failure ??= "invalid-status"
       }
-      finish(failure ?? (ready && proven && code === 1 && signal === null ? "proven" : "cleanup-unproven"))
+      const outcome = ready && proven && code === 1 && signal === null ? "proven" : "cleanup-unproven"
+      finish(failure ?? (code === 63 && signal === null ? "native-architecture-mismatch" : outcome))
     })
     child.stdin.write(config, (error) => {
       timings.mark(error ? "configWriteFailedMs" : "configWrittenMs")
@@ -323,7 +360,7 @@ export function observe(launch, config, reader, deliveryTimeline, clock = realCl
 }
 
 async function measure(runner) {
-  compiledSource(await regularBytes(holderSource, 65_536))
+  compiledSource(await regularBytes(holderSource, 65_536), runner.arch)
   pinnedSource(await regularBytes(processSource, 65_536), processSHA)
   const { StatusReader } = await import(processSource.href)
   const { deliveryTimeline } = await import(holderSource.href)

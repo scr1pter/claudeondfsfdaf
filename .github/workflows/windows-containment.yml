@@ -12,15 +12,20 @@ on:
   workflow_dispatch:
     inputs:
       direct_holder_comparison:
-        description: Compare the direct Windows x64 containment holder
+        description: Compare the direct Windows containment holder
         type: boolean
         default: false
+      direct_holder_arch:
+        description: Architecture of the separate cold execution runner
+        type: choice
+        options: [x64, arm64]
+        default: x64
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && '-direct-x64' || '' }}
+  group: windows-containment-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison && format('-direct-{0}', inputs.direct_holder_arch) || '' }}
   cancel-in-progress: true
 
 env:
@@ -86,6 +91,7 @@ jobs:
     timeout-minutes: 10
     env:
       VECTOR_DIRECT_HOLDER_FIXTURE: "1"
+      VECTOR_DIRECT_HOLDER_ARCH: ${{ inputs.direct_holder_arch }}
     outputs:
       payload_digest: ${{ steps.compile.outputs.payload_digest }}
     steps:
@@ -98,14 +104,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
-      - name: Compile the pinned x64 holder source
+      - name: Compile the pinned holder source
         id: compile
         shell: cmd
         run: node packages/engine/script/diagnose-direct-windows-holder.mjs build
       - name: Upload the exact executable and receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: direct-holder-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          name: direct-holder-${{ inputs.direct_holder_arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/vector-direct-holder
           if-no-files-found: error
           retention-days: 1
@@ -113,10 +119,11 @@ jobs:
   direct-holder-measure:
     if: github.event_name == 'workflow_dispatch' && inputs.direct_holder_comparison
     needs: direct-holder-build
-    runs-on: windows-latest
+    runs-on: ${{ inputs.direct_holder_arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
     timeout-minutes: 15
     env:
       VECTOR_DIRECT_HOLDER_FIXTURE: "1"
+      VECTOR_DIRECT_HOLDER_ARCH: ${{ inputs.direct_holder_arch }}
     steps:
       - name: Checkout the exact comparison revision
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -133,7 +140,7 @@ jobs:
       - name: Download the paired same-run artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: direct-holder-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          name: direct-holder-${{ inputs.direct_holder_arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/vector-direct-holder
       - name: Verify and measure first launch without acknowledging the dummy
         shell: cmd
