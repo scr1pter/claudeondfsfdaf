@@ -92,6 +92,8 @@ describe("which Vector the switch is for", () => {
   test("the desktop app says its switch is its own, and how to turn it on in a terminal", () => {
     expect(surfaceNote({ desktop: true, remote: false })).toBe(SURFACE)
     expect(SURFACE).toContain("vector local on")
+    // The app's built-in terminal reads the app's own setting, so only a terminal outside the app keeps its own.
+    expect(SURFACE).toContain("Vector in a terminal outside the app keeps its own setting")
   })
 
   test("a browser, or a desktop app reading another computer's engine, says nothing about it", () => {

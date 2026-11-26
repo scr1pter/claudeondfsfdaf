@@ -2,6 +2,7 @@ import type { Argv } from "yargs"
 import { EOL } from "os"
 import { confirm, select } from "@clack/prompts"
 import { Effect } from "effect"
+import { Flag } from "@vectordevai/core/flag/flag"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import type { LocalSettings } from "@/config/local-settings"
 import { cmd } from "./cmd"
@@ -28,6 +29,14 @@ const ELSEWHERE =
  */
 export const SURFACE =
   "This is Vector Local for Vector in a terminal. The desktop app keeps its own setting, in its Settings → Vector Local. Your company's policy applies to both."
+
+/**
+ * The SURFACE line for this process, or none in a Vector the desktop app started (VECTOR_CLIENT=desktop: its built-in
+ * terminal and its agents' commands). Those inherit the app's config folders, so they show the app's own setting.
+ */
+export function surface(client = Flag.VECTOR_CLIENT) {
+  return client === "desktop" ? undefined : SURFACE
+}
 
 export const LocalCommand = cmd({
   command: "local",
@@ -366,7 +375,8 @@ function describe(status: {
   UI.println(
     `${UI.Style.TEXT_DIM}Network log: kept for ${status.log.retain_days} days in ${status.log.directory} while Vector Local is on.${UI.Style.TEXT_NORMAL}`,
   )
-  UI.println(`${UI.Style.TEXT_DIM}${SURFACE}${UI.Style.TEXT_NORMAL}`)
+  const note = surface()
+  if (note) UI.println(`${UI.Style.TEXT_DIM}${note}${UI.Style.TEXT_NORMAL}`)
 }
 
 function serverLine(server: {

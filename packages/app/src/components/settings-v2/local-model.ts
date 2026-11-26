@@ -32,11 +32,12 @@ export const SECTIONS = [
 ] as const
 
 /**
- * Which Vector the switch is for. The desktop app and Vector in a terminal read different config folders and keep
- * separate confirmed copies, so neither switch reaches the other; only the company's policy reaches both.
+ * Which Vector the switch is for. The desktop app and Vector in a terminal outside it read different config folders
+ * and keep separate confirmed copies, so neither switch reaches the other; only the company's policy reaches both. The
+ * app's built-in terminal inherits the app's config folders, so a vector there reads this switch.
  */
 export const SURFACE =
-  "This switch is for the desktop app. Vector in a terminal keeps its own setting: vector local on turns it on there. Your company's policy applies to both."
+  "This switch is for the desktop app. Vector in a terminal outside the app keeps its own setting: vector local on turns it on there. Your company's policy applies to both."
 
 /**
  * The switch's note on which Vector it is for: only in the desktop app, reading this computer's engine. A remote

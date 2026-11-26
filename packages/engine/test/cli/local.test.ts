@@ -6,7 +6,7 @@ import { parse } from "jsonc-parser"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
 import { LocalProbe } from "@vectordevai/core/local-mode/probe"
-import { SURFACE, sinceOf } from "../../src/cli/cmd/local"
+import { SURFACE, sinceOf, surface } from "../../src/cli/cmd/local"
 import { cliIt } from "../lib/cli-process"
 import { LocalServers } from "../../../core/test/fixture/local-servers/serve"
 
@@ -145,6 +145,13 @@ describe("vector local", () => {
       }),
     60_000,
   )
+
+  // A Vector the desktop app starts (its built-in terminal, its agents' commands) inherits VECTOR_CLIENT=desktop and
+  // the app's config folders, so its status is the app's own: the terminal note would be wrong there.
+  test("says the settings are the terminal's own only outside the desktop app", () => {
+    expect(surface("cli")).toBe(SURFACE)
+    expect(surface("desktop")).toBeUndefined()
+  })
 
   cliIt.live(
     "vector local check exits 2 when off, 0 when every layer passes, and 1 once a listed server stops answering",
