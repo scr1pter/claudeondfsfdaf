@@ -30,6 +30,7 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
     owner,
     default_branch: "main",
     private: false,
+    visibility: undefined as string | undefined,
     archived: false,
     disabled: false,
   }
@@ -228,11 +229,12 @@ export async function githubAppFixture(input: { store?: typeof persistentStore }
         return new Response(null, { status: state.dispatchStatus })
       }
       expect(["validation", "attachment"]).toContain(token.purpose)
+      const repositoryRoute = `/repos/${state.repository.full_name}`
       if (token.purpose === "attachment")
         expect(
-          route === "/repos/fixture-owner/project" || route.startsWith("/user/") || route.includes("/collaborators/"),
+          route === repositoryRoute || route.startsWith("/user/") || route.includes("/collaborators/"),
         ).toBe(true)
-      if (route === "/repos/fixture-owner/project") return Response.json(state.repository)
+      if (route === repositoryRoute) return Response.json(state.repository)
       if (route === "/repos/fixture-owner/project/actions/runs/1000") return Response.json(state.run)
       if (route === "/repos/fixture-owner/project/actions/artifacts/55")
         return state.artifact ? Response.json(state.artifact) : new Response(null, { status: 404 })

@@ -6,6 +6,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option } from "effect"
 import { NamedError } from "@vectordevai/core/util/error"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "@/config/config"
+import { ReviewRoutes } from "@/review/route"
 import { ConfigManaged } from "@vectordevai/core/config/managed"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { Flag } from "@vectordevai/core/flag/flag"
@@ -1393,6 +1394,13 @@ it.instance("a trusted repository's run limits alone leave no budget", () =>
 // Research's settings are the user's (sections 5.7 and 7.2): a repository, trusted or not, may only add domains to
 // avoid and turn the build agent's research tool down. Its preferred domains, caps and robots.txt switch never apply,
 // so a cloned repository cannot choose what research reads.
+const ownerReviewSettings = {
+  privacy: "zdr",
+  holdback: "secrets",
+  zdrAttested: ["acme"],
+  inversion: "local",
+  alternateModel: "openai/gpt",
+}
 for (const trusted of [true, false])
   it.instance(`${trusted ? "a trusted" : "an untrusted"} repository's research block only adds avoided domains`, () =>
     withGlobalConfig(
@@ -1455,6 +1463,101 @@ it.instance("a repository cannot turn the build agent's research tool back on", 
       const test = yield* TestInstance
       yield* writeTrustedConfigEffect(test.directory, { research: { tool: "work" } })
       expect((yield* Config.use.get()).research).toEqual({ tool: "off" })
+    }),
+  ),
+)
+
+// VS-23d (SF-15): the review block is the user's own. getGlobal returns it as written, a repository's, trusted or not,
+// never reaches the merged config, and a value the decoder would refuse does not drop the user config (which would
+// lower review privacy).
+for (const trusted of [true, false])
+  it.instance(`${trusted ? "a trusted" : "an untrusted"} repository's review block never applies (SF-15)`, () =>
+    withGlobalConfig({ config: { review: ownerReviewSettings } }, () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const write = trusted ? writeTrustedConfigEffect : writeConfigEffect
+        yield* write(test.directory, {
+          review: {
+            privacy: "standard",
+            holdback: "off",
+            zdrAttested: ["attacker.example"],
+            inversion: "off",
+            alternateModel: "forged/alternate",
+          },
+          share: "disabled",
+        })
+        const user = ownerReviewSettings
+        expect((yield* Config.use.getGlobal()).review).toEqual(user)
+        const merged = yield* Config.use.get()
+        expect(merged.review).toEqual(user)
+        // The repository's other keys still apply as before.
+        expect(merged.share).toBe("disabled")
+      }),
+    ),
+  )
+
+it.instance("a repository's review block alone leaves none (SF-15)", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeTrustedConfigEffect(test.directory, { review: { privacy: "zdr", zdrAttested: ["acme"] } })
+    expect((yield* Config.use.get()).review).toBeUndefined()
+    expect((yield* Config.use.getGlobal()).review).toBeUndefined()
+  }),
+)
+
+it.instance("a review value that is not a level keeps the rest of the user config (SF-15)", () =>
+  withGlobalConfig(
+    { config: { model: "test/kept", review: { privacy: 1, holdback: ["secrets"], zdrAttested: "x" } } },
+    () =>
+      Effect.gen(function* () {
+        const global = yield* Config.use.getGlobal()
+        expect(global.model).toBe("test/kept")
+        expect(global.review).toEqual({ privacy: 1, holdback: ["secrets"], zdrAttested: "x" })
+      }),
+  ),
+)
+
+// VS-23d (SF-15): a user config that does not load is never read as one without its review block. The load has no
+// typed failure, so a file the decoder or the JSONC parser refuses (an unknown or wrongly typed top-level key, text
+// that is not JSON, a block that is not an object) makes every read of the user config fail until it is fixed and read
+// again: the CLI, the server's adoption, prompt.ts's fallback and GET /global/config (which the desktop reads, and
+// rejects the review on a failed read) all stop before anything is sent, rather than run under a lowered privacy.
+it.instance("a user config that does not load fails every read of it, never one without its review block (SF-15)", () =>
+  withGlobalConfig({}, ({ dir }) =>
+    Effect.gen(function* () {
+      const config = yield* Config.Service
+      const write = (files: Record<string, string>) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all(
+              ["config.json", "vector.json", "vector.jsonc"].map((name) =>
+                fs.rm(path.join(dir, name), { force: true }),
+              ),
+            ),
+          )
+          for (const [name, text] of Object.entries(files))
+            yield* Effect.promise(() => fs.writeFile(path.join(dir, name), text))
+          yield* config.invalidate()
+          return yield* config.getGlobal().pipe(Effect.exit)
+        })
+      const zdr = { privacy: "zdr", holdback: "secrets", zdrAttested: ["acme"] }
+      const broken: Record<string, string>[] = [
+        { "vector.json": JSON.stringify({ not_a_key: true, review: zdr }) },
+        { "config.json": JSON.stringify({ review: zdr }), "vector.jsonc": `{ "share": 5 }` },
+        { "vector.json": `{ "review": { "privacy": "zdr", } oops` },
+        { "vector.json": JSON.stringify({ review: "zdr" }) },
+      ]
+      for (const files of broken) {
+        const exit = yield* write(files)
+        expect({ files, failed: Exit.isFailure(exit) }).toEqual({ files, failed: true })
+      }
+      // Fixed, the next read has the block again, and the server holds the desktop's reviews to it.
+      const exit = yield* write({ "vector.json": JSON.stringify({ review: zdr }) })
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (!Exit.isSuccess(exit)) return
+      expect(exit.value.review).toEqual(zdr)
+      const policy = ReviewRoutes.serverPolicy(exit.value.review)
+      expect({ privacy: policy.privacy, attested: policy.attested }).toEqual({ privacy: "zdr", attested: ["acme"] })
     }),
   ),
 )

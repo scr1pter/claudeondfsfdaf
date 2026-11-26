@@ -30,11 +30,30 @@ import type {
   Selection,
   Severity,
   SkippedFile,
+  StrictDrop,
+  StrictFinding,
   StrictResult,
+  StrictSummary,
   Trust,
 } from "./types"
 
 export const MAX_BODY_CHARS = 60_000
+const STRICT_DROP_LABELS: Record<StrictDrop, string> = {
+  "pre-existing": "pre-existing",
+  "not-blocking": "non-blocking",
+  unverified: "unverified",
+  "verdict-unreadable": "without a readable verdict",
+  "verdict-unsure": "with an unsure verdict",
+  "certificate-mismatch": "without matching verification evidence",
+  "severity-unreadable": "without a readable severity",
+  "out-of-scope": "outside the five failure classes",
+  anchor: "without a changed-line anchor",
+  "quote-mismatch": "without matching evidence",
+  "no-impact": "without a demonstrated impact",
+  "no-fix": "without a fix",
+  duplicate: "duplicates",
+  cap: "over the comment limit",
+}
 const MAX_FINDING_BODY = 20_000
 const MAX_SUMMARY_TEXT = 1_500
 const MAX_EXCERPT = 300
@@ -73,6 +92,7 @@ const SKIP_REASON: Record<SkippedFile["reason"], string> = {
   binary: "binary",
   deleted: "deleted",
   "size-limit": "too large",
+  "held-back": "held back",
 }
 
 const COMMANDS =
@@ -310,6 +330,14 @@ export function fenceFor(text: string): string {
   return "`".repeat(Math.max(3, longest + 1))
 }
 
+// The body of the selected strict finding; a committable suggestion travels in its own field.
+export function strictFindingBody(finding: StrictFinding): string {
+  const body = `${finding.trigger}\n\n${finding.impact}`
+  if (finding.fix.kind === "suggestion") return body
+  const fence = fenceFor(finding.fix.text)
+  return `${body}\n\n${finding.fix.kind === "patch" ? "Checked patch" : "Unchecked fix"}\n\n${fence}diff\n${finding.fix.text}\n${fence}`
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Inline comments and the review body
 
@@ -340,7 +368,12 @@ export function buildInlineBody(finding: Finding | PlacedFinding, options: Inlin
   if (finding.rule) {
     // Clipped before it is sanitized, so a cut can never leave a code span open around raw HTML.
     const rule = inlineText(clip(oneLine(finding.rule), MAX_RULE), options.repo).replace(/"/g, "'")
-    meta.push(`rule from .vector/review.md: "${rule}"`)
+    const source = finding.citation?.source
+    const provenance =
+      source && finding.rulesSource
+        ? `${source.kind === "paths" ? `paths[${source.index}]` : source.kind} (${finding.rulesSource})`
+        : ".vector/review.md"
+    meta.push(`rule from ${provenance}: "${rule}"`)
   }
   if (options.trust === "trusted" && options.commands !== false)
     meta.push("reply `/vector fix` to have Vector apply this")
@@ -438,6 +471,22 @@ function diffBlock(code: string): string {
 // ---------------------------------------------------------------------------------------------------------------
 // Notes (section 1.1 and the variants in 1.2)
 
+export function noteTrivialSkip(): string {
+  return "Not reviewed. The change met the configured policy for skipping trivial changes."
+}
+
+export const BUDGET_ESTIMATE_UNAVAILABLE =
+  "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+export const BUDGET_REQUEST_CHANGED =
+  "Not reviewed. The prepared model request could no longer be confirmed to fit the configured budget."
+
+// Only the runner's known reason can replace the default in a retained or posted budget stop.
+export function noteBudgetEstimate(notes: readonly string[] = []): string {
+  return notes[0] === BUDGET_ESTIMATE_UNAVAILABLE || notes[0] === BUDGET_REQUEST_CHANGED
+    ? notes[0]
+    : "Not reviewed. The estimated review exceeded the configured budget before any model request."
+}
+
 export function noteNothingToReview(): string {
   return "Nothing to review: every changed file is a lockfile, generated, or ignored."
 }
@@ -497,6 +546,18 @@ export function noteAlreadyReviewed(head: string): string {
   return `\`${short(head)}\` was already reviewed. Comment \`/vector review full\` to review it again.`
 }
 
+export const FIRST_REQUEST_STOP_NOTES = {
+  "first-request-budget": "A follow-up check could not confirm that its first request fit the configured budget.",
+  "first-request-changed": "A prepared model request could no longer be confirmed to fit the configured budget.",
+} as const
+
+export function firstRequestStopDetail(outcome: Pick<ReviewOutcome, "partial" | "specialists">) {
+  if (outcome.partial !== "budget") return
+  for (const { detail, status } of outcome.specialists) {
+    if (status === "skipped" && (detail === "first-request-budget" || detail === "first-request-changed")) return detail
+  }
+}
+
 export function notePartial(input: {
   reason: NonNullable<ReviewOutcome["partial"]>
   reviewed?: number
@@ -507,9 +568,20 @@ export function notePartial(input: {
   timeoutMinutes?: number
   detail?: string
 }): string {
+  if (input.reason === "budget-estimate") return noteBudgetEstimate()
   if (input.reason === "model-error") {
     const detail = input.detail ? `: ${sanitizeProse(clip(oneLine(input.detail), MAX_ERROR), undefined)}` : ""
     return `**Partial review.** One reviewer could not finish${detail}. Comment \`/vector review\` to try again.`
+  }
+  const shown = input.unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(codeSpan).join(", ")
+  const more =
+    input.unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${input.unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
+  if (
+    input.reason === "budget" &&
+    (input.detail === "first-request-budget" || input.detail === "first-request-changed")
+  ) {
+    const note = `**Partial review.** ${FIRST_REQUEST_STOP_NOTES[input.detail]}`
+    return shown ? `${note} Checks remain for ${shown}${more}.` : note
   }
   const stop =
     input.reason === "budget"
@@ -520,9 +592,6 @@ export function notePartial(input: {
   const after = input.total ? ` after ${input.reviewed ?? 0} of ${input.total} files` : ""
   if (!input.unreviewed.length)
     return `**Partial review.** ${stop}${after}. Comment \`/vector review\` to continue now.`
-  const shown = input.unreviewed.slice(0, MAX_UNREVIEWED_SHOWN).map(codeSpan).join(", ")
-  const more =
-    input.unreviewed.length > MAX_UNREVIEWED_SHOWN ? ` and ${input.unreviewed.length - MAX_UNREVIEWED_SHOWN} more` : ""
   return `**Partial review.** ${stop}${after}. Not reviewed: ${shown}${more}. The next run reviews them, or comment \`/vector review\` to continue now.`
 }
 
@@ -530,7 +599,7 @@ export function notePartial(input: {
 const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
   "free-model": "it is a free model, and free endpoints may keep or train on what they are sent.",
   "router-or-preset": "it is a router or preset, which may answer with another model.",
-  "fallback-models": "the request names fallback models, which may answer from other endpoints.",
+  "fallback-models": "the request could use a different model or endpoint from the one approved for this review.",
   plugins: "the request turns on a plugin, such as web search, which sends the query to another service.",
   "unattested-provider": "its provider, or the host its requests go to, is not listed in `zdrAttested`.",
   "unattested-openrouter": "the OpenRouter account it uses is not listed in `zdrAttested`.",
@@ -538,7 +607,7 @@ const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
   "retention-required-model": "its provider requires 30-day data retention for this model.",
   "codium-unaccepted":
     "Vector does not yet accept Vector Codium or the free models Vector provides as zero data retention routes.",
-  batch: "Vector does not send batch requests on zero data retention routes.",
+  batch: "Vector does not send batch requests or use provider-stored files on zero data retention routes.",
   "unreadable-body": "Vector could not read the request it would send.",
   "unattributed-request": "Vector could not tell which review the request belongs to.",
   "unknown-destination": "Vector cannot tell where its requests go.",
@@ -549,14 +618,17 @@ const PRIVACY_REFUSAL: Record<RouteRefusal, string> = {
     "OpenAI keeps this model's prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`).",
   "grounding-tool":
     "the request turns on a Google tool other than function calling, such as Search grounding, which may keep what it is sent.",
-  "durable-cache": "its Google Cloud project may keep cached prompts in durable storage.",
+  "durable-cache": "the route uses or may retain a durable prompt cache.",
   "anthropic-non-zdr-feature":
     "the request uses an Anthropic feature that zero data retention does not cover, or one Vector cannot tell is covered, such as the MCP connector, code execution, the Files API or message threads.",
+  "attestation-unverified":
+    'its `zdrAttested` entry asks Vector to check the account itself (`verify: "api"`), and Vector cannot check accounts yet.',
 }
 
 // A review stopped by the route rules (privacy.ts) before it sent code to `model`. `attempts` counts the requests the
 // review had already sent on allowed routes, so the note says what left the machine. A refusal is never retried on
-// another model (I-3), and the review is never shown as clean (I-7). Nothing shows it before VS-23b.
+// another model (I-3), and the review is never shown as clean (I-7). Review.run gives it for a model or attempt its
+// admission refuses, and `vector review` for a model its resolution refuses (VS-23b).
 export function notePrivacyRefused(input: { model: string; refusal: RouteRefusal; attempts: number }): string {
   const reason = PRIVACY_REFUSAL[input.refusal]
   const sent =
@@ -593,6 +665,49 @@ export function noteGeneratedHeaders(paths: readonly string[]): string | undefin
   const rest = paths.length - shown.length
   const names = rest ? `${shown.join(", ")} and ${formatCount(rest)} more` : joinWords(shown)
   return `${names} gained a generated-file header in this pull request, so Vectorscope reviewed them anyway.`
+}
+
+// VS-34 (`holdback: "secrets"`): the files Review.run held back whole, the files it sent with values redacted, and the
+// changed files the repository's ignore rules exclude although they are committed (design items 4 and 6). Each is one
+// line for any number of files, and none says a file "is committed" with a secret. The held note says the value was
+// not sent (design item 6) since SF-14 denies the held paths to the reviewer's read and grep tools, but only where
+// nothing else the reviewer may run or read could show it: `promptOnly` is the caller's word that something could.
+// Review.run sets it under the local `--checks` (a check command the change controls can print any file, unredacted),
+// in a trusted review, whose reviewer may read back the saved long outputs of every session the user ran
+// (Truncate.GLOB), where an earlier `cat` of the file is redacted by shape alone, and with `allowDirs`, outside the
+// worktree the held paths are denied in. The note then says only what left the review prompt.
+export function noteHeldBack(paths: readonly string[], options: { promptOnly?: boolean } = {}): string | undefined {
+  if (!paths.length) return undefined
+  if (options.promptOnly)
+    return paths.length === 1
+      ? `${codeSpan(paths[0])} may hold credentials, so Vector left it out of the review prompt.`
+      : `${listPaths(paths)} may hold credentials, so Vector left them out of the review prompt.`
+  return paths.length === 1
+    ? `${codeSpan(paths[0])} may hold credentials, so Vector held it back from the model (its value was not sent).`
+    : `${listPaths(paths)} may hold credentials, so Vector held them back from the model (their values were not sent).`
+}
+
+export function noteRedacted(paths: readonly string[]): string | undefined {
+  if (!paths.length) return undefined
+  return `Vector redacted secret-shaped values in ${listPaths(paths)} from the review prompt.`
+}
+
+export function noteIgnoredCommitted(paths: readonly string[]): string | undefined {
+  if (!paths.length) return undefined
+  return paths.length === 1
+    ? `${codeSpan(paths[0])} is committed although the repository's ignore rules exclude it.`
+    : `${listPaths(paths)} are committed although the repository's ignore rules exclude them.`
+}
+
+export function noteIgnoreUnchecked(): string {
+  return "Vector could not check which changed files the repository's ignore rules exclude, so none is listed as committed although ignored."
+}
+
+// At most three names, then how many more.
+function listPaths(paths: readonly string[]) {
+  const shown = paths.slice(0, 3).map(codeSpan)
+  const rest = paths.length - shown.length
+  return rest ? `${shown.join(", ")} and ${formatCount(rest)} more` : joinWords(shown)
 }
 
 export function noteMoved(count: number): string {
@@ -663,6 +778,9 @@ export interface SummaryInput {
   mode: ReviewOutcome["mode"]
   report?: Pick<ModelReport, "summary" | "files">
   selection?: Selection
+  trivial?: true
+  // Findings from completed stages remain useful when a later check did not run.
+  incomplete?: boolean
   // The strict guardrail's result (VS-27b's wording), set only under `guardrail: "strict"`; nothing sets it before
   // VS-27c. With it, an empty result never reads as "No issues found".
   strict?: Pick<StrictResult, "complete" | "findings" | "dropped">
@@ -726,12 +844,37 @@ export function capBody(input: SummaryInput, max = MAX_BODY_CHARS): string {
 
 function render(input: SummaryInput, limits: Limits): string {
   const selection = input.selection
-  const lines = [selection ? `## Vectorscope review · Risk: ${capital(selection.risk)}` : "## Vectorscope review", ""]
+  if (input.trivial) {
+    const lines = ["## Vectorscope review", "", noteTrivialSkip(), ""]
+    if (selection) lines.push(...detailSections(input, selection, limits))
+    if (input.form !== "desktop") lines.push(SUMMARY_MARKER)
+    return lines.join("\n")
+  }
+  const strict = input.strict
+    ? { complete: input.strict.complete, findingCount: input.strict.findings.length, dropped: input.strict.dropped }
+    : selection?.strict
+  const heading = input.incomplete
+    ? "## Vectorscope review · Incomplete"
+    : selection?.diffIncomplete || strict?.complete === false
+      ? "## Vectorscope review · Partial review"
+      : selection
+        ? `## Vectorscope review · Risk: ${capital(selection.risk)}`
+        : "## Vectorscope review"
+  const lines = [heading, ""]
   if (input.banners?.length) lines.push(quote(input.banners), "")
   const summary = input.report?.summary.trim()
-  if (summary) lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
+  if (summary && !input.incomplete && !selection?.diffIncomplete && !strict)
+    lines.push(sanitizeModelMarkdown(clip(summary, MAX_SUMMARY_TEXT), input.repo).replace(/^>/, "\\>"), "")
   if (selection) {
-    lines.push(countLine(selection, input.strict), "")
+    lines.push(countLine(selection, strict, input.incomplete), "")
+    if (strict?.dropped.length) {
+      const omitted = strict.dropped.reduce((sum, entry) => sum + entry.count, 0)
+      const reasons = strict.dropped.map(({ count, reason }) => `${formatCount(count)} ${STRICT_DROP_LABELS[reason]}`)
+      lines.push(
+        `Strict review omitted ${formatCount(omitted)} ${omitted === 1 ? "finding" : "findings"} (${joinWords(reasons)}).`,
+        "",
+      )
+    }
     const since = sinceLine(input, selection)
     if (since) lines.push(since, "")
   }
@@ -756,7 +899,7 @@ function render(input: SummaryInput, limits: Limits): string {
   return lines.join("\n")
 }
 
-function countLine(selection: Selection, strict?: SummaryInput["strict"]): string {
+function countLine(selection: Selection, strict?: StrictSummary, incomplete?: boolean): string {
   const onLines = [
     ...selection.inline,
     ...selection.overflow,
@@ -769,7 +912,15 @@ function countLine(selection: Selection, strict?: SummaryInput["strict"]): strin
   const parts: string[] = []
   if (blocking) parts.push(`${blocking} blocking`)
   if (concerns) parts.push(`${concerns} ${concerns === 1 ? "concern" : "concerns"}`)
-  if (strict) return strictCountLine(strict, parts, below)
+  if (strict)
+    return strictCountLine(
+      incomplete || selection.diffIncomplete ? { ...strict, complete: false } : strict,
+      parts,
+      below,
+    )
+  if (incomplete && !parts.length)
+    return `**0 blocking findings or concerns recorded** on the changed lines${below || "."}`
+  if (selection.diffIncomplete && !parts.length) return `No findings on the reviewed lines${below || "."}`
   if (!parts.length) return `**No issues found** on the changed lines${below || "."}`
   return `**${parts.join(" · ")}** on the changed lines${below}`
 }
@@ -779,9 +930,9 @@ function countLine(selection: Selection, strict?: SummaryInput["strict"]): strin
 // is all that emptied it, and "Review incomplete" otherwise, never a clean result. It reads the strict result alone, so
 // a selection the runner has not composed with it yet cannot make an empty strict result read otherwise. A non-empty
 // one is counted as the selection counts it, or, when the selection has nothing on lines, as its blocking findings.
-function strictCountLine(strict: NonNullable<SummaryInput["strict"]>, parts: string[], below: string): string {
-  if (strict.findings.length)
-    return `**${parts.length ? parts.join(" · ") : `${strict.findings.length} blocking`}** on the changed lines${below}`
+export function strictCountLine(strict: StrictSummary, parts: string[], below: string): string {
+  if (strict.findingCount)
+    return `**${parts.length ? parts.join(" · ") : `${strict.findingCount} blocking`}** on the changed lines${below}`
   if (!strict.complete)
     return `**Review incomplete**: a stage did not finish, coverage is partial or a verdict could not be read${below || "."}`
   const capped = strict.dropped.find((entry) => entry.reason === "cap")?.count ?? 0
@@ -932,7 +1083,7 @@ function section(title: string, total: number, items: string[]): string[] {
   return [`<details><summary>${title} (${total})</summary>`, "", ...items, ...more, "</details>", ""]
 }
 
-function findingItem(finding: Finding, repo: RepoRef | undefined, tail = ""): string {
+export function findingItem(finding: Finding, repo: RepoRef | undefined, tail = ""): string {
   const title = inlineText(finding.title, repo)
   const body = excerpt(finding.body, repo)
   const text = body ? `${sentence(title)} ${body}` : tail ? sentence(title) : title
@@ -973,10 +1124,12 @@ function skippedSection(skipped: readonly SkippedFile[], limit: number): string[
 }
 
 function footer(input: SummaryInput): string[] {
-  const parts = [`Reviewed \`${short(input.head)}\` against ${codeSpan(input.baseRef)}`]
+  const parts = [
+    `${input.incomplete ? "Partial review of" : "Reviewed"} \`${short(input.head)}\` against ${codeSpan(input.baseRef)}`,
+  ]
   if (input.mode === "incremental" && input.since) parts.push(`incremental from \`${short(input.since)}\``)
   else if (input.mode === "carry" && input.since) parts.push(`carried over from \`${short(input.since)}\``)
-  else parts.push("full review")
+  else if (!input.incomplete) parts.push("full review")
   if (input.cost) parts.push(costWording(input.cost))
   // WP A35: a first pass checked by another lab's model, or the panel's three labs. Own keys included.
   const checked = checkedLine(input.cost?.labs)

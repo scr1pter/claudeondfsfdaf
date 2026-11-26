@@ -17538,6 +17538,455 @@
         ]
       }
     },
+    "/experimental/session/{sessionID}/review/fix": {
+      "get": {
+        "tags": ["review"],
+        "operationId": "review.fix.list",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewFixControl.List",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewFixControlList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only and experimental. The fixes this engine holds for the conversation, for reconnection.",
+        "summary": "List the conversation's open fixes",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.fix.list({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.fix.prepare",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewFixControl.Preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewFixControlPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only and experimental. Places a fix checkout detached at the conversation branch's exact head and re-verifies every file of the client's patch. The engine does not verify the findings the fix names. Nothing is applied, committed or pushed and no command runs.",
+        "summary": "Prepare a local fix",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewFixControlPrepare"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.fix.prepare({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review/fix/{fixID}/preview": {
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.fix.preview",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "fixID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/ReviewFixControlFixID"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewFixControl.Offer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewFixControlOffer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only and experimental. Builds the exact apply, checks, commit or push operation and a single-use approval offer bound to the owner, the head, the patch digest and the operation, expiring after five minutes. Nothing runs.",
+        "summary": "Offer one fix step",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewFixControlRequest"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.fix.preview({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review/fix/{fixID}/execute": {
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.fix.execute",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "fixID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/ReviewFixControlFixID"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewFixControl.Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewFixControlResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only and experimental. Approves exactly the offered step, spending its offer, and runs it once after the executor re-verifies the head and files.",
+        "summary": "Approve and run one offered fix step",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewFixControlExecute"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.fix.execute({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/session/{sessionID}/review/fix/{fixID}/cancel": {
+      "post": {
+        "tags": ["review"],
+        "operationId": "review.fix.cancel",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "fixID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/ReviewFixControlFixID"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ReviewFixControl.Cleanup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewFixControlCleanup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ReviewApiError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReviewApiError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-only. Stops a running check or push and removes the fix checkout; a commit on its new branch is kept.",
+        "summary": "Cancel a local fix",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createVectorClient } from \"@vectordevai/sdk\"\n\nconst client = createVectorClient()\nawait client.review.fix.cancel({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/experimental/review-memory": {
       "get": {
         "tags": ["review-memory"],
@@ -25579,6 +26028,9 @@
                   },
                   "budget": {
                     "$ref": "#/components/schemas/RunBudget"
+                  },
+                  "tightenBudget": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["prompt"],
@@ -38355,6 +38807,19 @@
         },
         "additionalProperties": false
       },
+      "GlobalReviewConfig": {
+        "type": "object",
+        "properties": {
+          "inversion": {},
+          "alternateModel": {},
+          "privacy": {},
+          "holdback": {},
+          "diagnostics": {},
+          "ruleCheck": {},
+          "zdrAttested": {}
+        },
+        "additionalProperties": false
+      },
       "ConfigWithLocks": {
         "type": "object",
         "properties": {
@@ -38947,6 +39412,9 @@
           },
           "connect": {
             "$ref": "#/components/schemas/ConnectConfig"
+          },
+          "review": {
+            "$ref": "#/components/schemas/GlobalReviewConfig"
           },
           "experimental": {
             "type": "object",
@@ -39589,6 +40057,9 @@
           "connect": {
             "$ref": "#/components/schemas/ConnectConfig"
           },
+          "review": {
+            "$ref": "#/components/schemas/GlobalReviewConfig"
+          },
           "experimental": {
             "type": "object",
             "properties": {
@@ -40198,6 +40669,9 @@
             "type": "boolean"
           },
           "vectorscopeReviewMemoryControls": {
+            "type": "boolean"
+          },
+          "vectorscopeLocalFixes": {
             "type": "boolean"
           },
           "codeReviewAfterTask": {
@@ -55917,6 +56391,790 @@
         },
         "required": ["runs"],
         "additionalProperties": false
+      },
+      "ReviewFixControlFixID": {
+        "type": "string",
+        "pattern": "^fix_[A-Za-z0-9-]{1,64}$"
+      },
+      "ReviewFixControlState": {
+        "type": "string",
+        "enum": ["proposal", "preview", "applied", "committed", "pushed", "cancelled", "failed"]
+      },
+      "ReviewFixControlSummary": {
+        "type": "object",
+        "properties": {
+          "fixID": {
+            "$ref": "#/components/schemas/ReviewFixControlFixID"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReviewFixControlState"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "sourceBranch": {
+            "type": "string"
+          },
+          "destinationBranch": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "patchDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          }
+        },
+        "required": ["fixID", "state", "head", "sourceBranch", "destinationBranch", "digest", "patchDigest"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlList": {
+        "type": "object",
+        "properties": {
+          "fixes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFixControlSummary"
+            },
+            "maxItems": 8
+          }
+        },
+        "required": ["fixes"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["client"]
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "preimage": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "postimage": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": ["path", "preimage", "postimage"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlPrepare": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ReviewFixControlSource"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "base": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "baseBranch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "minItems": 1,
+            "maxItems": 128
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFixControlFile"
+            },
+            "minItems": 1,
+            "maxItems": 64
+          },
+          "patch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 262144
+          }
+        },
+        "required": ["source", "head", "base", "baseBranch", "findings", "files", "patch"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlChange": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["added", "modified", "deleted"]
+          },
+          "additions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deletions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["path", "status", "additions", "deletions"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlPreview": {
+        "type": "object",
+        "properties": {
+          "fixID": {
+            "$ref": "#/components/schemas/ReviewFixControlFixID"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "base": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "sourceBranch": {
+            "type": "string"
+          },
+          "baseBranch": {
+            "type": "string"
+          },
+          "destinationBranch": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ReviewFixControlSource"
+          },
+          "findingsVerified": {
+            "type": "boolean",
+            "enum": [false]
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "patchDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "patch": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFixControlChange"
+            },
+            "maxItems": 64
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "fixID",
+          "repository",
+          "worktree",
+          "head",
+          "base",
+          "sourceBranch",
+          "baseBranch",
+          "destinationBranch",
+          "source",
+          "findingsVerified",
+          "findings",
+          "digest",
+          "patchDigest",
+          "patch",
+          "files",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewFixControlApplyRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["apply"]
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlCommand": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "minItems": 1,
+            "maxItems": 64
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": ["argv", "cwd"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlChecksRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["checks"]
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFixControlCommand"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          }
+        },
+        "required": ["kind", "commands"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlCommitRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["commit"]
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlPushRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["push"]
+          },
+          "remote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["branch", "draft-pr"]
+          }
+        },
+        "required": ["kind", "remote", "mode"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewFixControlApplyRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlChecksRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlCommitRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlPushRequest"
+          }
+        ]
+      },
+      "ReviewFixControlOfferID": {
+        "type": "string",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+        "format": "uuid"
+      },
+      "ReviewFixControlApplyOperation": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["apply"]
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlChecksOperation": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["checks"]
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFixControlCommand"
+            },
+            "maxItems": 16
+          },
+          "network": {
+            "type": "string",
+            "enum": ["off"]
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outputBytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["kind", "commands", "network", "timeoutMs", "outputBytes"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlCommitOperation": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["commit"]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": ["kind", "message"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlPushOperation": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["push"]
+          },
+          "remote": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["branch", "draft-pr"]
+          }
+        },
+        "required": ["kind", "remote", "commit", "mode"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlOperation": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewFixControlApplyOperation"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlChecksOperation"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlCommitOperation"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlPushOperation"
+          }
+        ]
+      },
+      "ReviewFixControlIdentity": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "email"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlOffer": {
+        "type": "object",
+        "properties": {
+          "offerID": {
+            "$ref": "#/components/schemas/ReviewFixControlOfferID"
+          },
+          "fixID": {
+            "$ref": "#/components/schemas/ReviewFixControlFixID"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/ReviewFixControlOperation"
+          },
+          "operationDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "patchDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "identity": {
+            "$ref": "#/components/schemas/ReviewFixControlIdentity"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "offerID",
+          "fixID",
+          "operation",
+          "operationDigest",
+          "head",
+          "digest",
+          "patchDigest",
+          "expiresAt",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "ReviewFixControlExecute": {
+        "type": "object",
+        "properties": {
+          "offerID": {
+            "$ref": "#/components/schemas/ReviewFixControlOfferID"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "patchDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "operationDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": ["offerID", "head", "patchDigest", "operationDigest"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlApplied": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["apply"]
+          },
+          "fixID": {
+            "$ref": "#/components/schemas/ReviewFixControlFixID"
+          },
+          "worktree": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "patchDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "consumedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFixControlChange"
+            }
+          }
+        },
+        "required": ["kind", "fixID", "worktree", "head", "digest", "patchDigest", "consumedAt", "files"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlCheckResult": {
+        "type": "object",
+        "properties": {
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": "integer"
+          },
+          "timedOut": {
+            "type": "boolean"
+          },
+          "output": {
+            "type": "string",
+            "maxLength": 81920
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "durationMs": {
+            "type": "integer"
+          }
+        },
+        "required": ["argv", "cwd", "exitCode", "timedOut", "output", "truncated", "durationMs"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlChecked": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["checks"]
+          },
+          "fixID": {
+            "$ref": "#/components/schemas/ReviewFixControlFixID"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "operation": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "consumedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFixControlCheckResult"
+            },
+            "maxItems": 16
+          },
+          "aborted": {
+            "type": "string",
+            "enum": ["head", "worktree"]
+          },
+          "leftovers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32
+          },
+          "passed": {
+            "type": "boolean"
+          }
+        },
+        "required": ["kind", "fixID", "head", "digest", "operation", "consumedAt", "results", "passed"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlCommitted": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["commit"]
+          },
+          "fixID": {
+            "$ref": "#/components/schemas/ReviewFixControlFixID"
+          },
+          "head": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "tree": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "author": {
+            "$ref": "#/components/schemas/ReviewFixControlIdentity"
+          },
+          "consumedAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["kind", "fixID", "head", "digest", "commit", "tree", "branch", "author", "consumedAt"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlPushed": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["push"]
+          },
+          "fixID": {
+            "$ref": "#/components/schemas/ReviewFixControlFixID"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "remote": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["branch", "draft-pr"]
+          },
+          "consumedAt": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["kind", "fixID", "commit", "remote", "ref", "mode", "consumedAt"],
+        "additionalProperties": false
+      },
+      "ReviewFixControlResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReviewFixControlApplied"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlChecked"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlCommitted"
+          },
+          {
+            "$ref": "#/components/schemas/ReviewFixControlPushed"
+          }
+        ]
+      },
+      "ReviewFixControlCleanup": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "fixID": {
+                "$ref": "#/components/schemas/ReviewFixControlFixID"
+              },
+              "removed": {
+                "type": "boolean",
+                "enum": [true]
+              }
+            },
+            "required": ["fixID", "removed"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "fixID": {
+                "$ref": "#/components/schemas/ReviewFixControlFixID"
+              },
+              "removed": {
+                "type": "boolean",
+                "enum": [false]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": ["fixID", "removed", "reason"],
+            "additionalProperties": false
+          }
+        ]
       },
       "ReviewMemoryControlID": {
         "type": "string",

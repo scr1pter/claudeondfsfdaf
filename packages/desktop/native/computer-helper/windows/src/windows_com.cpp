@@ -18,8 +18,10 @@ struct WindowsComCall::State {
   WindowsComObservation unavailable = WindowsComObservation::cancellation_unavailable;
   std::atomic_bool expired{false};
 };
-WindowsComCall::WindowsComCall(uint32_t milliseconds) : state_(std::make_unique<State>()) {
-  state_->deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::clamp<uint32_t>(milliseconds, 1, 50));
+WindowsComCall::WindowsComCall(uint32_t milliseconds, std::chrono::steady_clock::time_point outer_deadline)
+    : state_(std::make_unique<State>()) {
+  state_->deadline = std::min(outer_deadline,
+    std::chrono::steady_clock::now() + std::chrono::milliseconds(std::clamp<uint32_t>(milliseconds, 1, 50)));
   state_->thread = GetCurrentThreadId(); const auto enabled = CoEnableCallCancellation(nullptr); state_->enabled = SUCCEEDED(enabled);
   if (enabled == CO_E_NOTINITIALIZED) state_->unavailable = WindowsComObservation::uninitialized;
   if (!state_->enabled) return;

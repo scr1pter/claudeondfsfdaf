@@ -317,10 +317,12 @@ const layer = Layer.effect(
       let observe: SessionAdmission.Lease["observe"]
 
       const parse = (e: unknown) =>
-        MessageV2.fromError(e, {
-          providerID: input.model.providerID,
-          aborted,
-        })
+        e instanceof SessionAdmission.ReviewFirstRequestBudget
+          ? new SessionV1.APIError({ message: e.message, isRetryable: false, metadata: { code: e.name } }).toObject()
+          : MessageV2.fromError(e, {
+              providerID: input.model.providerID,
+              aborted,
+            })
 
       // The hash of the step's opening snapshot, taking one if this step has none yet.
       const opened = Effect.fnUntraced(function* () {
@@ -1252,6 +1254,7 @@ const layer = Layer.effect(
                       model,
                       // Hidden SDK retries would bypass the per-attempt admission boundary.
                       ...(admission ? { retries: 0 } : {}),
+                      ...(lease?.reviewFirstRequest ? { reviewFirstRequest: lease.reviewFirstRequest } : {}),
                       tools: lease?.tools
                         ? Object.fromEntries(Object.entries(tools).filter(([name]) => lease.tools?.includes(name)))
                         : tools,

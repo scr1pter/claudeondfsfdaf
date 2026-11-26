@@ -25,8 +25,10 @@ import {
   buildReviewBody,
   buildRunningBody,
   buildSummaryBody,
+  firstRequestStopDetail,
   inlineLeads,
   noteAlreadyReviewed,
+  noteBudgetEstimate,
   noteCannotStart,
   noteCommitGone,
   noteFailed,
@@ -194,6 +196,7 @@ export interface ReviewJobDeps {
 
 export interface ReviewJobResult {
   exitCode: 0 | 1
+  notReviewed?: "budget-estimate"
   posted: { reviewIds: number[]; summaryId?: number }
   error?: string
 }
@@ -302,6 +305,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
     config.model = ctx.env.MODEL || "vector-plan"
     config.triageModel = undefined
   }
+  const budgetOptIn = (config.maxInputTokens ?? 0) > 0
   for (const warning of warnings) log(`warning: ${warning}`)
   const rules = parseReviewRules(rulesText ?? "")
   if (rules.truncated) log("warning: .vector/review.md is over 16 KB; the rest of it is ignored.")
@@ -330,6 +334,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
   let stickyBody = sticky?.body
   if (sticky) seen.sticky = { id: sticky.id, body: sticky.body }
   const state = foldInflight(sticky ? readState(sticky.body) : undefined)
+  if (state?.retryFullAfterBudget) full = true
   const threads = await gh.reviewThreads(ctx.pr)
   const humans = humanComments(comments, threads, ctx.botLogin)
   const team = await gh.listRepoReviewComments(TEAM_PAGES).then(
@@ -347,7 +352,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
   const scan: { error?: string } = {}
   const month =
     config.maxCostUsdPerMonth > 0
-      ? await monthSpend(gh, ctx, state, deps.now()).catch((error: unknown) => {
+      ? await monthSpend(gh, ctx, state, deps.now(), budgetOptIn).catch((error: unknown) => {
           scan.error = messageOf(error)
           log(`The month's review spend could not be read: ${scan.error}`)
           return undefined
@@ -495,6 +500,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
   const before = stickyBody
   const running = (costUsd: number): ReviewState => ({
     ...(state ?? emptyState()),
+    ...(budgetOptIn ? { retryFullAfterBudget: true } : {}),
     inflight: { run, head, at: startedAt, costUsd },
   })
   await upsertSticky(buildRunningBody({ previous: before, head, startedAt, state: running(0) }))
@@ -706,6 +712,9 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       ),
       config,
       model,
+      ...(budgetOptIn && !deps.cloud
+        ? { spent: { prUsd: state?.costUsd ?? 0, ...(month ? { monthUsd: month.costUsd } : {}) } }
+        : {}),
       ...(deps.cloud ? { checks: false, stopSignal: deps.cloud.signal } : {}),
       ...(triage ? { triage } : {}),
       knownPath: known,
@@ -731,6 +740,19 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
     }
     const outcome = await deps.runReview(input)
     deps.cloud?.reviewFinished(outcome)
+    if (outcome.partial === "budget-estimate") {
+      const stopped = deps.cloud?.stopped()
+      const reason = stopped
+        ? ["Not reviewed.", stoppedLine(stopped), stopped.advice].filter(Boolean).join(" ")
+        : noteBudgetEstimate(outcome.notes)
+      const note = `Commit \`${short(head)}\`: ${reason}`
+      log(note)
+      await upsertSticky(
+        buildNoteBody({ previous: before, note, state: { ...(state ?? emptyState()), retryFullAfterBudget: true } }),
+      ).catch((error: unknown) => log(`Could not post the budget stop: ${messageOf(error)}`))
+      await clearEyes()
+      return { ...finish(0), notReviewed: "budget-estimate" }
+    }
     if (outcome.cost) spent = outcome.cost
 
     // No specialist produced output: the head stays where it was, so a re-run retries.
@@ -950,10 +972,11 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
       posted: postedCount,
     })
     const banners: string[] = []
+    const firstRequestStop = firstRequestStopDetail(outcome)
     const stopped = deps.cloud?.stopped()
     if (stopped) banners.push(stoppedLine(stopped), ...(stopped.advice ? [stopped.advice] : []))
     else if (outcome.partial) {
-      const detail = outcome.specialists.find((entry) => entry.status === "failed")?.detail
+      const detail = firstRequestStop ?? outcome.specialists.find((entry) => entry.status === "failed")?.detail
       banners.push(
         notePartial({
           reason: outcome.partial,
@@ -983,6 +1006,7 @@ async function reviewJob(ctx: ReviewJobContext, deps: ReviewJobDeps, seen: Seen)
         ...(summarySince ? { since: summarySince } : {}),
         mode,
         report: outcome.report,
+        ...(firstRequestStop ? { incomplete: true } : {}),
         selection,
         files: files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
         skipped,
@@ -1274,7 +1298,8 @@ const githubReviewJob = Effect.fn("Cli.github.reviewJob")(function* (
               ...(args.dryRun ? { dryRun: true } : {}),
             }),
           )
-          cloud?.outcome(cloud.stopped() ? "draft" : result.exitCode === 0 ? "no-changes" : "failed")
+          const completed = result.exitCode === 0 ? "no-changes" : "failed"
+          cloud?.outcome(cloud.stopped() ? "draft" : result.notReviewed ? "refused" : completed)
           if (result.exitCode !== 0) return yield* fail(result.error ?? "The review job failed.")
         }),
       ),
@@ -1348,7 +1373,13 @@ function foldInflight(state: ReviewState | undefined): ReviewState | undefined {
 
 // The repository's review spend this month: the state of every bot sticky updated this month, the oldest per pull
 // request, plus this pull request's own. Best-effort: very busy repositories have more comments than it reads.
-async function monthSpend(gh: ReviewGitHub, ctx: ReviewJobContext, state: ReviewState | undefined, now: number) {
+async function monthSpend(
+  gh: ReviewGitHub,
+  ctx: ReviewJobContext,
+  state: ReviewState | undefined,
+  now: number,
+  includeInflight: boolean,
+) {
   const key = monthKey(now)
   const oldest = new Map<number, IssueComment>()
   for (const comment of await gh.listRepoIssueCommentsSince(`${key}-01T00:00:00Z`, MONTH_PAGES)) {
@@ -1361,8 +1392,11 @@ async function monthSpend(gh: ReviewGitHub, ctx: ReviewJobContext, state: Review
   let pulls = 0
   const states = [...[...oldest.values()].map((comment) => readState(comment.body)), state]
   for (const entry of states) {
-    if (entry?.month?.key !== key || !(entry.month.costUsd > 0)) continue
-    costUsd += entry.month.costUsd
+    let spent = entry?.month?.key === key ? entry.month.costUsd : 0
+    // The current pull's checkpoint was folded on entry. Other pulls may still be running.
+    if (includeInflight && entry?.inflight && monthKey(entry.inflight.at) === key) spent += entry.inflight.costUsd
+    if (!(spent > 0)) continue
+    costUsd += spent
     pulls++
   }
   return { costUsd: money(costUsd), pulls }
