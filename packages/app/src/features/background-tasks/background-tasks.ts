@@ -405,6 +405,8 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
     ])
     if (request !== boardRequest || rootID() !== sessionID) return
     const observed = result?.data && Array.isArray(result.data.tasks) ? result.data : undefined
+    const observedShells = Array.isArray(observed?.shells) ? observed.shells : undefined
+    const shellWarning = observed && shells && !observedShells ? "Background command status is unavailable." : undefined
     const local = desktop && Array.isArray(desktop.tasks) ? desktop : undefined
     setBoard("refreshing", false)
     if (local) {
@@ -415,26 +417,31 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
       setBoard("truncated", "engine", observed.truncated)
       // Each answer replaces both: a guest's or an older engine's has neither, and none may linger.
       setBoard("limits", readLimits(observed.limits))
-      setBoard("shells", Array.isArray(observed.shells) ? observed.shells : [])
+      setBoard("shells", observedShells ?? [])
     }
     if (input.desktop && !local && board.desktop.length) {
-      setBoard("error", "Desktop task updates unavailable. Showing the last known state.")
+      setBoard(
+        "error",
+        ["Desktop task updates unavailable. Showing the last known state.", shellWarning].filter(Boolean).join(" "),
+      )
       if (observed) setBoard("tasks", observed.tasks)
       return
     }
     if (!observed) {
-      if (board.tasks.length) setBoard("error", "Task updates unavailable. Showing the last known state.")
-      if (!board.tasks.length && local?.truncated)
+      if (board.tasks.length || board.shells.length) {
+        setBoard("error", "Task updates unavailable. Showing the last known state.")
+        return
+      }
+      if (local?.truncated)
         setBoard("error", "Showing the most recent tasks. Open a child session for more.")
       return
     }
     setBoard("tasks", observed.tasks)
-    setBoard(
-      "error",
+    const truncationWarning =
       board.truncated.engine || board.truncated.desktop
         ? "Showing the most recent tasks. Open a child session for more."
-        : undefined,
-    )
+        : undefined
+    setBoard("error", [truncationWarning, shellWarning].filter(Boolean).join(" ") || undefined)
   }
   createEffect(
     on(rootID, () => {

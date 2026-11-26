@@ -664,7 +664,7 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
     install,
     ...(codium
       ? [
-          { id: "mint", run: "vector github mint --purpose task", env: mintEnv },
+          { id: "mint", run: "vector github mint --purpose task", env: { ...mintEnv } },
           // Ship Desk's capture ticket (A49, V31), asked for with the run token before any repository file is on disk.
           // It goes to $GITHUB_OUTPUT, and the command's own lines go nowhere: a refusal from vectordev.ai can name the
           // plan or a billing state, and a public repository's log is public (INV-P1). It never stops the run.
@@ -743,7 +743,7 @@ export function buildAgentsWorkflow(options: AgentsWorkflowOptions): string {
         steps: [
           setup,
           install,
-          { id: "mint", run: "vector github mint --purpose review", env: mintEnv },
+          { id: "mint", run: "vector github mint --purpose review", env: { ...mintEnv } },
           checkout(1, true),
           {
             run: "vector github review",

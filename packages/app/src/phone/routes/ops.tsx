@@ -32,9 +32,8 @@ import { opsRoute, type OpsRequest } from "@/features/cloud/ops/ops-requests"
 import { phoneApi, PhoneApiError } from "../api"
 import { phonePath } from "../config"
 import { alertsSupport } from "../environment"
-import { alertsState } from "../push"
+import { useAlertsState } from "../push"
 import { opsParts, planNotice } from "../status"
-import { browserPush } from "./notifications"
 import { Empty, Notice, Panel, type RouteProps } from "./parts"
 
 // Production checks on the phone (WP A50; the A38 shell's route): incidents with snooze, "Fix it" and Undo, the releases
@@ -100,8 +99,11 @@ export function OpsRoute(props: RouteProps) {
 
   // Push opt-in: On Call and Ship Desk tell the phone, so a phone without alerts is offered them here.
   const support = alertsSupport(props.environment)
-  const push = support === "ready" ? browserPush() : undefined
-  const [alerts] = createResource(() => (push && props.status.listed.has("alerts") ? push : undefined), alertsState)
+  const alertsListed = () => props.status.listed.has("alerts")
+  const { state: alerts } = useAlertsState(
+    () => props.session,
+    () => support === "ready" && alertsListed(),
+  )
 
   return (
     <Panel title="Production">
@@ -109,7 +111,7 @@ export function OpsRoute(props: RouteProps) {
       <ul class="phone-list">
         <For each={parts()}>{(part) => <li>{PARTS[part]}</li>}</For>
       </ul>
-      <Show when={alerts() === "off" || (props.status.listed.has("alerts") && support === "install-first")}>
+      <Show when={alertsListed() && (support === "install-first" || (!alerts.loading && alerts() === "off"))}>
         <div class="phone-row" role="note">
           <p>Get a short alert on this phone when a check fails or a card is ready.</p>
           <button
