@@ -18,7 +18,7 @@ Branch `preserve-tool-metadata` (PR #167, worked locally as `cx-preserve-tool-me
 
 ## 2026-11-26, joined current main
 
-Merged `origin/main` (`dbeb0666`, 63 commits) into the branch with no conflicts. Main changed none of the PR's files. The review pipeline digest (`REVIEW_PIPELINE_SOURCES`, `f9db452856d78a8c`) still matches, so core `test/review/model-evidence.test.ts` passes (37 tests) without a change.
+Merged `origin/main` (`dbeb0666`, 63 commits, then `b57b8d53` with #160) into the branch with no conflicts. Main changed none of the PR's files. The review pipeline digest (`REVIEW_PIPELINE_SOURCES`, `f9db452856d78a8c`) still matches, so core `test/review/model-evidence.test.ts` passes (37 tests) without a change.
 
 **Stacking.** The branch contains PR #163 (`reclaim-dead-bindings`) whole, and through it older commits of #162, #161 and #128. It merges after #163 or together with it. PR #170 is stacked on this branch.
 
