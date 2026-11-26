@@ -579,11 +579,12 @@ type Endpoint9_6Input = {
   readonly requestID: Endpoint9_6Request["params"]["requestID"]
   readonly reply: Endpoint9_6Request["payload"]["reply"]
   readonly message?: Endpoint9_6Request["payload"]["message"]
+  readonly confirm?: Endpoint9_6Request["payload"]["confirm"]
 }
 const Endpoint9_6 = (raw: RawClient["server.permission"]) => (input: Endpoint9_6Input) =>
   raw["session.permission.reply"]({
     params: { sessionID: input["sessionID"], requestID: input["requestID"] },
-    payload: { reply: input["reply"], message: input["message"] },
+    payload: { reply: input["reply"], message: input["message"], confirm: input["confirm"] },
   }).pipe(Effect.mapError(mapClientError))
 
 const adaptGroup9 = (raw: RawClient["server.permission"]) => ({

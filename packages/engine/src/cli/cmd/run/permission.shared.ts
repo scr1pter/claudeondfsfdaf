@@ -15,6 +15,7 @@
 // the request, delegating to tool.ts for tool-specific formatting.
 import type { PermissionRequest } from "@vectordevai/sdk/v2"
 import { PermissionV2 } from "@vectordevai/core/permission"
+import { canApproveOnce, connectedWriteDetails, oneTimePermissionReply } from "@vectordevai/tui/connect-presentation"
 import type { PermissionReply } from "./types"
 import { toolPath, toolPermissionInfo } from "./tool"
 
@@ -29,6 +30,7 @@ export type PermissionBodyState = {
   selected: PermissionOption
   message: string
   submitting: boolean
+  allowOnce: boolean
   allowAlways: boolean
 }
 
@@ -70,20 +72,23 @@ function patterns(request: PermissionRequest): string[] {
 }
 
 export function createPermissionBodyState(
-  request: Pick<PermissionRequest, "id" | "permission" | "always">,
+  request: Pick<PermissionRequest, "id" | "permission" | "always" | "metadata">,
 ): PermissionBodyState {
+  const allowOnce = canApproveOnce(request)
   return {
     requestID: request.id,
     stage: "permission",
-    selected: "once",
+    selected: allowOnce ? "once" : "reject",
     message: "",
     submitting: false,
+    allowOnce,
     allowAlways: PermissionV2.canAlwaysApprove(request.permission, request.always),
   }
 }
 
 export function permissionOptions(state: PermissionBodyState): PermissionOption[] {
   if (state.stage === "permission") {
+    if (!state.allowOnce) return ["reject"]
     return state.allowAlways ? ["once", "always", "reject"] : ["once", "reject"]
   }
 
@@ -95,6 +100,16 @@ export function permissionOptions(state: PermissionBodyState): PermissionOption[
 }
 
 export function permissionInfo(request: PermissionRequest): PermissionInfo {
+  const write = connectedWriteDetails(request)
+  if (write) {
+    return {
+      icon: "↔",
+      title: "Apply review fixes",
+      lines: [write.description],
+      diff: write.diff,
+    }
+  }
+
   const pats = patterns(request)
   const input = data(request)
   const info = toolPermissionInfo(request.permission, input, dict(request.metadata), pats)
@@ -176,8 +191,12 @@ export function permissionHover(state: PermissionBodyState, option: PermissionOp
   }
 }
 
-export function permissionRun(state: PermissionBodyState, requestID: string, option: PermissionOption): PermissionStep {
-  if (state.submitting) {
+export function permissionRun(
+  state: PermissionBodyState,
+  request: PermissionRequest,
+  option: PermissionOption,
+): PermissionStep {
+  if (state.submitting || state.requestID !== request.id) {
     return { state }
   }
 
@@ -203,10 +222,9 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
       }
     }
 
-    return {
-      state,
-      reply: permissionReply(requestID, "once"),
-    }
+    if (option !== "once" || !state.allowOnce) return { state }
+    const reply = oneTimePermissionReply(request)
+    return reply ? { state, reply } : { state }
   }
 
   if (state.stage !== "always" || !state.allowAlways) {
@@ -225,7 +243,7 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
 
   return {
     state,
-    reply: permissionReply(requestID, "always"),
+    reply: permissionReply(request.id, "always"),
   }
 }
 

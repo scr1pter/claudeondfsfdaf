@@ -387,6 +387,8 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
               reason: "Connect could not check VectorScope's review model.",
             },
           )
+        if (ConnectGit.nonRepository(ctx, ctx.directory))
+          return member({ state: "unavailable", reason: ConnectGit.NON_REPOSITORY })
         return member({ state: "ready", sendsTo: widest(exit.value) })
       }).pipe(
         Effect.catchCause(() =>

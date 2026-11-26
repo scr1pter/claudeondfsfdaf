@@ -403,24 +403,7 @@ export const LIGHT_FIX =
   "Fixes through connect run on Work and Thorough requests, not on a Light one. Call escalate if the user wants these findings fixed."
 
 /** The title of a run's tool call. */
-export function titleOf(run: Connect.Run): string {
-  if (run.request.action === "fix") {
-    if (run.status !== "done" || !run.result)
-      return run.progress?.message ? `VectorScope fix: ${run.progress.message}` : "VectorScope fix"
-    const state = run.result.state
-    if (state === "refused") return "VectorScope fix not started"
-    if (state === "failed") return "VectorScope fix failed"
-    if (state === "cancelled") return "VectorScope fix cancelled"
-    return `VectorScope fix: ${run.request.mode === "worktree" ? "in a worktree" : "approved"}`
-  }
-  if (run.status !== "done" || !run.result)
-    return run.progress?.message ? `VectorScope: ${run.progress.message}` : "VectorScope review"
-  const state = run.result.state
-  if (state === "refused") return "VectorScope did not review"
-  if (state === "failed") return "VectorScope review failed"
-  if (state === "cancelled") return "VectorScope review cancelled"
-  return `VectorScope review: ${ConnectFrame.shownVerdict(run.result)}`
-}
+export const titleOf = ConnectFrame.titleOf
 
 /** What the model reads when a review goes on in the background: only Vector's words, and the run id. */
 export function backgroundOutput(run: Connect.Run): string {

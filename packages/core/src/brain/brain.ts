@@ -405,6 +405,7 @@ export interface Interface {
       readonly query: string
       readonly files?: readonly string[]
       readonly personal: boolean
+      readonly audience?: Audience
       readonly exclude?: ReadonlySet<string>
     },
   ) => Effect.Effect<readonly Candidate[]>
@@ -422,6 +423,7 @@ export interface Interface {
       readonly files?: readonly string[]
       readonly budget: number
       readonly personal: boolean
+      readonly audience?: Audience
       readonly exclude?: ReadonlySet<string>
       readonly sessionID?: string
       /** The request message it is for, so outcome credit can find what reached it. */
@@ -448,12 +450,14 @@ export interface Interface {
   readonly lines: (
     place: Place,
     ids: readonly string[],
-    options: { readonly personal: boolean },
+    options: { readonly personal: boolean; readonly audience?: Audience },
   ) => Effect.Effect<ReadonlyMap<string, string>>
   readonly list: (
     place: Place,
     input: { readonly filter?: Filter; readonly query?: string; readonly scope?: BrainSchema.Scope },
   ) => Effect.Effect<BrainSchema.Entry[]>
+  /** Repository owner dismissals only, without file sync, personal recall or usage writes. */
+  readonly reviewDismissals: (place: Place) => Effect.Effect<BrainSchema.Entry[]>
   readonly propose: (place: Place, proposal: Proposal) => Effect.Effect<WriteResult>
   /** Owner-click review context only. Ordinary learned proposals cannot write this kind or choose this origin. */
   readonly dismissReview: (
@@ -895,6 +899,51 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     return { text, ids: [...shown], tokens: Token.estimate(text), personal }
   })
 
+  const activationSteps = Effect.fnUntraced(function* (ids: readonly string[]) {
+    if (ids.length === 0) return new Map<string, { actor: string; action: string; at: number }>()
+    const steps = yield* db
+      .select({
+        entry: BrainEventTable.entry_id,
+        actor: BrainEventTable.actor,
+        action: BrainEventTable.action,
+        at: BrainEventTable.at,
+      })
+      .from(BrainEventTable)
+      .where(
+        and(
+          inArray(BrainEventTable.entry_id, [...ids]),
+          inArray(BrainEventTable.action, ["added", "superseded", "promoted", "restored", "approved"]),
+        ),
+      )
+      .orderBy(asc(BrainEventTable.id))
+      .all()
+      .pipe(Effect.orDie)
+    return new Map(steps.map((step) => [step.entry, step]))
+  })
+
+  const outwardRows = Effect.fnUntraced(function* (place: Place, rows: readonly Row[]) {
+    const candidates = rows.filter(
+      (row) =>
+        row.repository_id === place.repository &&
+        row.scope === "repository" &&
+        (row.origin === "user" || row.origin === "import") &&
+        !row.tier0 &&
+        !row.pinned &&
+        !row.stale &&
+        row.kind !== "fact" &&
+        row.kind !== "review" &&
+        row.kind !== "skill" &&
+        BrainPrivate.screened({ kind: row.kind, text: row.body, private: row.private }),
+    )
+    // An import can also be promoted by an agent repeating it. Only an owner putting it into use qualifies here.
+    const steps = yield* activationSteps(candidates.filter((row) => row.origin === "import").map((row) => row.id))
+    return candidates.filter((row) => {
+      if (row.origin === "user") return true
+      const step = steps.get(row.id)
+      return step?.actor === "user" && (step.action === "approved" || step.action === "restored")
+    })
+  })
+
   const recallable = Effect.fnUntraced(function* (place: Place, personal: boolean, exclude: ReadonlySet<string>) {
     return (yield* visibleRows(place, personal, ["active"])).filter(
       (row) => !row.tier0 && !row.pinned && !row.stale && row.kind !== "review" && !exclude.has(row.id),
@@ -903,10 +952,24 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
 
   const candidates = Effect.fn("Brain.candidates")(function* (
     place: Place,
-    input: { query: string; files?: readonly string[]; personal: boolean; exclude?: ReadonlySet<string> },
+    input: {
+      query: string
+      files?: readonly string[]
+      personal: boolean
+      audience?: Audience
+      exclude?: ReadonlySet<string>
+    },
   ) {
-    yield* sync(place)
-    const rows = yield* recallable(place, input.personal, input.exclude ?? new Set())
+    const outward = input.audience === "outward"
+    if (!outward) yield* sync(place)
+    const visible = yield* recallable(place, input.personal && !outward, input.exclude ?? new Set())
+    // Scoped notes require a real file read. Naming a path in the request does not grant that authority.
+    const rows = outward
+      ? yield* outwardRows(
+          place,
+          visible.filter((row) => row.paths.length === 0),
+        )
+      : visible
     const files = (input.files ?? []).map((file) => BrainPaths.relative(place.root, file))
     const query = BrainLexical.terms([input.query, ...files].join(" "))
     const now = Date.now()
@@ -959,6 +1022,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       files?: readonly string[]
       budget: number
       personal: boolean
+      audience?: Audience
       exclude?: ReadonlySet<string>
       sessionID?: string
       requestID?: string
@@ -1011,7 +1075,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
   const lines = Effect.fn("Brain.lines")(function* (
     place: Place,
     ids: readonly string[],
-    options: { personal: boolean },
+    options: { personal: boolean; audience?: Audience },
   ) {
     if (ids.length === 0) return new Map<string, string>()
     const rows = yield* db
@@ -1020,13 +1084,20 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .where(
         and(
           inArray(BrainEntryTable.id, [...ids]),
-          visible(place, options.personal),
+          visible(place, options.personal && options.audience !== "outward"),
           eq(BrainEntryTable.status, "active"),
         ),
       )
       .all()
       .pipe(Effect.orDie)
-    return new Map(rows.map((row) => [row.id, line(row)]))
+    const eligible =
+      options.audience === "outward"
+        ? yield* outwardRows(
+            place,
+            rows.filter((row) => row.paths.length === 0),
+          )
+        : rows
+    return new Map(eligible.map((row) => [row.id, line(row)]))
   })
 
   const attach = Effect.fn("Brain.attach")(function* (
@@ -1299,24 +1370,8 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     const rows = (yield* visibleRows(place, true, ["active"])).filter(
       (row) => row.origin === "agent" && (!scope || row.scope === scope),
     )
-    if (rows.length === 0) return []
-    const steps = yield* db
-      .select({ entry: BrainEventTable.entry_id, actor: BrainEventTable.actor, at: BrainEventTable.at })
-      .from(BrainEventTable)
-      .where(
-        and(
-          inArray(
-            BrainEventTable.entry_id,
-            rows.map((row) => row.id),
-          ),
-          inArray(BrainEventTable.action, ["added", "superseded", "promoted", "restored", "approved"]),
-        ),
-      )
-      .orderBy(asc(BrainEventTable.id))
-      .all()
-      .pipe(Effect.orDie)
     // In id order, so each entry keeps its latest step.
-    const latest = new Map(steps.map((step) => [step.entry, step]))
+    const latest = yield* activationSteps(rows.map((row) => row.id))
     return rows
       .flatMap((row) => {
         const step = latest.get(row.id)
@@ -1354,6 +1409,32 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       .filter((row) => ranked.has(row.id) || row.body.toLowerCase().includes(query) || row.id === query)
       .toSorted((a, b) => (ranked.get(a.id) ?? 1e9) - (ranked.get(b.id) ?? 1e9) || byPlace(a, b))
       .map(toEntry)
+  })
+
+  const reviewDismissals = Effect.fn("Brain.reviewDismissals")(function* (place: Place) {
+    if (place.held || !place.repository.trim()) return []
+    // The generic list synchronizes personal and repository mirrors. A review-only read must not visit those files.
+    const rows = yield* db
+      .select()
+      .from(BrainEntryTable)
+      .where(
+        and(
+          eq(BrainEntryTable.repository_id, place.repository),
+          eq(BrainEntryTable.scope, "repository"),
+          eq(BrainEntryTable.kind, "review"),
+          eq(BrainEntryTable.origin, "user"),
+          eq(BrainEntryTable.status, "active"),
+          eq(BrainEntryTable.private, false),
+          eq(BrainEntryTable.stale, false),
+          isNull(BrainEntryTable.hold_reason),
+          isNull(BrainEntryTable.superseded_by),
+        ),
+      )
+      .orderBy(desc(BrainEntryTable.updated_at), asc(BrainEntryTable.id))
+      .limit(LIMIT.repository)
+      .all()
+      .pipe(Effect.orDie)
+    return rows.map(toEntry).filter(BrainPrivate.screened)
   })
 
   // --- Writing ----------------------------------------------------------------------------------------------------
@@ -2948,6 +3029,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     get,
     lines,
     list,
+    reviewDismissals,
     propose,
     dismissReview,
     update,

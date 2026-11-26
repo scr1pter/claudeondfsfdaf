@@ -294,27 +294,47 @@ describe("hand-offs to Hands", () => {
           expect([name, who, run.result?.state, run.result?.refusal]).toEqual([name, who, "refused", "unknown"])
           expect(run.result?.summary).toBe("computer is only listed; connect cannot hand work to it.")
           expect(run.result?.sessions).toEqual([])
-          if (who !== "background") continue
-          // Pins a held behaviour (CN-11 deviations entry, "Held, pre-existing, unscheduled"): a background hand-off
-          // starts its `connect` job, named for VectorScope and naming Hands, before admission refuses it. The job ends
-          // with the refused run.
-          const job = yield* jobs.wait({ id: run.id, timeout: 5_000 })
-          expect(job.timedOut).toBe(false)
-          expect(job.info).toMatchObject({
-            type: ConnectHub.JOB_TYPE,
-            title: `VectorScope ${name}`,
-            status: "completed",
-            metadata: { background: true, runID: run.id, member: Hands.ID, action: name },
-          })
         }
         expect(asks).toEqual([])
         expect(prompts).toEqual([])
       }
-      // Only the two background hand-offs started a job.
-      expect((yield* jobs.list()).filter((job) => job.type === ConnectHub.JOB_TYPE)).toHaveLength(2)
+      expect((yield* jobs.list()).filter((job) => job.type === ConnectHub.JOB_TYPE)).toEqual([])
+      expect(yield* hub.runs({ sessionID: requester.id })).toEqual([])
       // Refused before the member was described: Hands' availability was never read for a hand-off.
       expect(script.probes).toBe(0)
       expect(yield* sessions.children(requester.id)).toEqual([])
+    }),
+  )
+
+  it.instance("a list-only hand-off keeps the isolated-task and helper refusal reasons", () =>
+    Effect.gen(function* () {
+      reset()
+      const test = yield* TestInstance
+      const sessions = yield* Session.Service
+      const hub = yield* ConnectHub.Service
+      const jobs = yield* BackgroundJob.Service
+      const requester = yield* sessions.create({ title: "Requester" })
+      const helper = yield* sessions.create({ parentID: requester.id, internal: "vectorscope.review" })
+      const review = { action: "review", to: Hands.ID, directory: test.directory, background: true } as const
+      const target = { kind: "task", task: helper.id } as const
+      const task = yield* hub.run({
+        request: { ...review, target, requester: { kind: "user", sessionID: requester.id } },
+      })
+      expect(task.result).toMatchObject({
+        refusal: "input",
+        target,
+        summary: "An isolated task review needs its launching conversation and VectorScope.",
+      })
+      const nested = yield* hub.run({
+        request: { ...review, target: { kind: "uncommitted" }, requester: { kind: "agent", sessionID: helper.id } },
+      })
+      expect(nested.result).toMatchObject({
+        refusal: "not-allowed",
+        summary: "A helper session cannot hand work to another member.",
+      })
+      expect((yield* jobs.list()).filter((job) => job.type === ConnectHub.JOB_TYPE)).toEqual([])
+      expect(yield* hub.runs()).toEqual([])
+      expect(script.probes).toBe(0)
     }),
   )
 

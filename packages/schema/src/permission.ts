@@ -40,6 +40,19 @@ export interface Request extends Schema.Schema.Type<typeof Request> {}
 export const Reply = Schema.Literals(["once", "always", "reject"]).annotate({ identifier: "PermissionV2.Reply" })
 export type Reply = typeof Reply.Type
 
+/** Sent by a supported client only after the user explicitly approves a protected Connect request once. */
+export const ReplyConfirmation = Schema.Literal(true)
+  .annotate({
+    description: "Required with Allow once after the user explicitly approves a Connect write or cloud handoff.",
+  })
+  .pipe(Schema.optional)
+
+export const ReplyBody = Schema.Struct({
+  reply: Reply,
+  message: Schema.String.pipe(Schema.optional),
+  confirm: ReplyConfirmation,
+})
+
 const Asked = define({ type: "permission.v2.asked", schema: Request.fields })
 const Replied = define({
   type: "permission.v2.replied",

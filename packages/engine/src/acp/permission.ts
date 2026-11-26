@@ -55,7 +55,11 @@ export class Handler {
     const session = await this.owner(permission.sessionID)
     if (!session) return
 
-    if (!this.input.connection.requestPermission) {
+    // The editor can supply the same selection from a setting or a click, so it cannot confirm a Connect write.
+    if (
+      PermissionPolicy.requiresConnectConfirmation(permission.permission) ||
+      !this.input.connection.requestPermission
+    ) {
       await this.reply(permission.id, "reject", session.cwd)
       return
     }

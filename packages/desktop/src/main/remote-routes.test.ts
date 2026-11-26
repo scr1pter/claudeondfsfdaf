@@ -28,7 +28,9 @@ const PROJECTS = [
 async function setup() {
   const clock = { now: 1_000_000 }
   const calls: EngineRequest[] = []
-  const pending = [{ id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["rm -rf build"] }]
+  const pending: { id: string; sessionID: string; permission: string; patterns: string[]; metadata?: object }[] = [
+    { id: "per_1", sessionID: "ses_1", permission: "bash", patterns: ["rm -rf build"] },
+  ]
   const turns = createRemoteTurns()
   const marksAtCall: boolean[] = []
   // The engine's capabilities answer (no answer: the read throws), and how it answers a review start.
@@ -378,6 +380,68 @@ describe("permission answers from a phone", () => {
       ),
     ).toBe("REMOTE_APPROVAL_EXPIRED")
     expect(engineCalls().length).toBe(before)
+  })
+
+  test("only a passkey-confirmed engine write request forwards explicit confirmation", async () => {
+    const { ask, engineCalls, passkey, pending } = await setup()
+    pending.push(
+      {
+        id: "per_write",
+        sessionID: "ses_1",
+        permission: "connect_write",
+        patterns: ["a.txt"],
+        metadata: { runID: "cr_fixture", description: "Apply the fix", diff: "+after" },
+      },
+      { id: "per_incomplete", sessionID: "ses_1", permission: "connect_write", patterns: ["a.txt"] },
+      {
+        id: "per_long",
+        sessionID: "ses_1",
+        permission: "connect_write",
+        patterns: ["a.txt"],
+        metadata: {
+          runID: "cr_fixture",
+          description: "Apply the fix",
+          diff: "+".repeat(Connect.MAX_PHONE_APPROVAL_DIFF + 1),
+        },
+      },
+      { id: "per_cloud", sessionID: "ses_1", permission: "connect_cloud", patterns: ["cloud.review"] },
+    )
+    const reply = (requestID: string, body: unknown) =>
+      ask({ method: "POST", path: `/permission/${requestID}/reply`, directory: "/repo", body })
+
+    expect(code(await reply("per_write", { reply: "once", confirm: true }))).toBe("REMOTE_APPROVAL_INVALID")
+    expect(engineCalls()).toEqual([])
+
+    for (const requestID of ["per_incomplete", "per_long", "per_cloud"]) {
+      const challenge = await ask({ method: "POST", path: "/remote/approval", directory: "/repo", body: { requestID } })
+      expect(code(challenge)).toBe("REMOTE_APPROVAL_DETAILS")
+      expect(code(await reply(requestID, { reply: "once", confirm: true }))).toBe("REMOTE_APPROVAL_DETAILS")
+    }
+    for (const requestID of ["per_write", "per_1"]) {
+      const challenge = await ask({
+        method: "POST",
+        path: "/remote/approval",
+        directory: "/repo",
+        body: { requestID },
+      })
+      expect(challenge.status).toBe(200)
+      const assertion = await passkey.get((challenge.body as { challenge: string }).challenge)
+      // The phone can supply these fields, but only the engine's pending permission determines the forwarded body.
+      const answer = await reply(requestID, {
+        reply: "once",
+        passkey: assertion,
+        confirm: true,
+        permission: "connect_write",
+      })
+      expect(answer.status).toBe(200)
+    }
+
+    expect((await reply("per_write", { reply: "reject", confirm: true })).status).toBe(200)
+    expect(engineCalls().map((call) => call.body)).toEqual([
+      { reply: "once", confirm: true },
+      { reply: "once" },
+      { reply: "reject" },
+    ])
   })
 
   test("refuses a passkey answer for another request, another phone, another site, a lapsed challenge or no user check", async () => {

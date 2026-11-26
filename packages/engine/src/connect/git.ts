@@ -5,8 +5,10 @@ import { realpath } from "node:fs/promises"
 import { Cause, Effect, Stream } from "effect"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { Connect } from "@vectordevai/schema/connect"
+import { ProjectID } from "@vectordevai/schema/project-id"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Git } from "@/git"
+import type { InstanceContext } from "@/project/instance-context"
 
 const MAX = 64 * 1024 * 1024
 const NAMES = ["--name-only", "--no-renames", "--no-ext-diff", "--no-relative", "-z"]
@@ -304,6 +306,18 @@ function selected(repository: ReadOnlyGit.Repository, admitted: string, active: 
 /** VectorScope's member reason and a review's refusal when an instance's worktree is reached through a link. */
 export const LINKED = "Open this project through its real folder path to use connected reviews."
 
+export const NON_REPOSITORY = "Open a Git repository to use connected reviews."
+
+/** Project discovery reports this exact context when it opens a directory without a Git checkout. */
+export function nonRepository(instance: InstanceContext | undefined, directory: string) {
+  return (
+    instance?.directory === directory &&
+    instance.worktree === "/" &&
+    instance.project.id === ProjectID.global &&
+    instance.project.vcs === undefined
+  )
+}
+
 /**
  * Whether each folder is its own real path. Connect never resolves a link to read at the folder behind it: read rules
  * match paths as written, so admitting the resolved folder would widen them. Rejects when a folder is missing.
@@ -325,6 +339,8 @@ export const use = <A, E, R>(
     const placed = task === undefined ? undefined : taskRoots.get(task)
     if (task !== undefined && !placed) return yield* refusal()
     const root = placed?.directory ?? instance?.worktree
+    if (task === undefined && nonRepository(instance, directory))
+      return yield* new Connect.Refusal({ code: "unavailable", message: NON_REPOSITORY })
     if (!root || root === "/") return yield* refusal()
     const active = () => task === undefined || taskRoots.get(task) === placed
     const acquire = Effect.tryPromise({

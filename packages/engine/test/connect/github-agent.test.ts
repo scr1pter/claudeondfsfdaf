@@ -496,22 +496,12 @@ describe("hand-offs to the GitHub agent", () => {
             expect([name, who, run.result?.state, run.result?.refusal]).toEqual([name, who, "refused", "unknown"])
             expect(run.result?.summary).toBe("github-agent is only listed; connect cannot hand work to it.")
             expect(run.result?.sessions).toEqual([])
-            if (who !== "background") continue
-            // The held behaviour CN-11 pins for Hands (deviations "Held, pre-existing, unscheduled"): a background
-            // hand-off starts its `connect` job, named for VectorScope, before admission refuses it.
-            const job = yield* jobs.wait({ id: run.id, timeout: 5_000 })
-            expect(job.timedOut).toBe(false)
-            expect(job.info).toMatchObject({
-              type: ConnectHub.JOB_TYPE,
-              title: `VectorScope ${name}`,
-              status: "completed",
-              metadata: { background: true, runID: run.id, member: "github-agent", action: name },
-            })
           }
           expect(asks).toEqual([])
           expect(prompts).toEqual([])
         }
-        expect((yield* jobs.list()).filter((job) => job.type === ConnectHub.JOB_TYPE)).toHaveLength(2)
+        expect((yield* jobs.list()).filter((job) => job.type === ConnectHub.JOB_TYPE)).toEqual([])
+        expect(yield* hub.runs({ sessionID: requester.id })).toEqual([])
         // Refused before the member was described: the workflow file was never read for a hand-off.
         expect(counted.describes).toBe(0)
         expect(yield* sessions.children(requester.id)).toEqual([])

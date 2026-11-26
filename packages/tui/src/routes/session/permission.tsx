@@ -24,7 +24,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { VECTOR_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
-import { connectedConsent, connectedDiff } from "./connect-presentation"
+import { canApproveOnce, connectedConsent, connectedWriteDetails, oneTimePermissionReply } from "./connect-presentation"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -476,9 +476,10 @@ function PermissionRequestPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            const connected = connectedConsent(permission, props.request.metadata)
+            const write = connectedWriteDetails(props.request)
+            const connected =
+              permission === "connect_write" ? write?.description : connectedConsent(permission, props.request.metadata)
             if (connected !== undefined) {
-              const diff = connectedDiff(permission, props.request.metadata)
               return {
                 icon: "↔",
                 title:
@@ -489,9 +490,15 @@ function PermissionRequestPrompt(props: { request: PermissionRequest; directory?
                       : "Connected review",
                 body: (
                   <box paddingLeft={1} flexDirection="column" gap={1}>
-                    <text fg={theme.text}>{connected}</text>
-                    <Show when={diff}>
-                      <EditBody request={{ ...props.request, metadata: { ...props.request.metadata, diff } }} />
+                    <text fg={theme.text} wrapMode="word">
+                      {connected}
+                    </text>
+                    <Show when={write?.diff}>
+                      {(diff) => (
+                        <EditBody
+                          request={{ ...props.request, metadata: { ...props.request.metadata, diff: diff() } }}
+                        />
+                      )}
                     </Show>
                   </box>
                 ),
@@ -544,7 +551,9 @@ function PermissionRequestPrompt(props: { request: PermissionRequest; directory?
               header={header()}
               body={current.body}
               options={{
-                ...(computer()?.canApprove === false ? {} : { once: computer()?.primaryLabel ?? "Allow once" }),
+                ...(computer()?.canApprove === false || !canApproveOnce(props.request)
+                  ? {}
+                  : { once: computer()?.primaryLabel ?? "Allow once" }),
                 ...(canAlways() ? { always: computer() ? "Always allow" : "Allow always" } : {}),
                 reject: computer() ? "Deny" : "Reject",
               }}
@@ -569,10 +578,11 @@ function PermissionRequestPrompt(props: { request: PermissionRequest; directory?
                   })
                   return
                 }
-                if (computer()?.canApprove === false) return
+                if (option !== "once" || computer()?.canApprove === false) return
+                const reply = oneTimePermissionReply(props.request)
+                if (!reply) return
                 void sdk.client.permission.reply({
-                  reply: "once",
-                  requestID: props.request.id,
+                  ...reply,
                   directory: props.directory,
                   workspace: project.workspace.current(),
                 })

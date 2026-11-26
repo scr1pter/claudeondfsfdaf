@@ -44,7 +44,7 @@ export const dismissals = Effect.fn("ReviewContext.dismissals")(function* (input
   const { Brain } = yield* Effect.promise(() => import("@vectordevai/core/brain/brain"))
   const { BrainPrivate } = yield* Effect.promise(() => import("@vectordevai/core/brain/private"))
   const brain = yield* Brain.Service
-  const entries = yield* brain.list(input.place, { scope: "repository", filter: "active" })
+  const entries = yield* brain.reviewDismissals(input.place)
   const notes: HumanComment[] = []
   const files = input.files.slice(0, MAX_REQUIREMENT_FILES)
   for (const entry of entries.toSorted((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))) {

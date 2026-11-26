@@ -9,6 +9,7 @@ import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
+import { canConfirmConnectWrite } from "@/features/connect/consent"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
 
 export const todoState = (input: {
@@ -93,11 +94,17 @@ export function createSessionComposerController(options?: { closeMs?: number | (
     if (!perm || perm.id !== requestID) return
     if (store.responding === perm.id) return
 
-    if (PermissionPolicy.handsAsk(perm.permission)) {
+    const connect = PermissionPolicy.requiresConnectConfirmation(perm.permission)
+    if (connect && response !== "reject" && (response !== "once" || !canConfirmConnectWrite(perm))) return
+
+    if (connect || PermissionPolicy.handsAsk(perm.permission)) {
       if (store.accepted === perm.id) return Promise.resolve(true)
       setStore("responding", perm.id)
       return sdk()
-        .client.permission.reply({ requestID: perm.id, reply: response }, { throwOnError: true })
+        .client.permission.reply(
+          { requestID: perm.id, reply: response, ...(connect && response === "once" ? { confirm: true } : {}) },
+          { throwOnError: true },
+        )
         .then(() => {
           if (permissionRequest()?.id === perm.id) setStore("accepted", perm.id)
           return true

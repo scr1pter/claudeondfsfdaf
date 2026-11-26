@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { spawn } from "node:child_process"
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { Database } from "@vectordevai/core/database/database"
 import { BackgroundJobTable } from "@vectordevai/core/background-job.sql"
@@ -418,6 +419,134 @@ it.instance(
         ),
       ).toHaveLength(1)
       expect(script.calls).toBe(1)
+    }),
+  options,
+)
+
+it.instance(
+  "retention prunes only old open directory bindings with the exact dead job lease",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      const clock = yield* TestClock.make()
+      const now = yield* Clock.currentTimeMillis
+      const old = now - ConnectDirectoryRequest.RETENTION_MS - 1
+      const dead = BackgroundJobStore.open()
+      const live = BackgroundJobStore.open()
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          BackgroundJobStore.close(dead)
+          BackgroundJobStore.close(live)
+          BackgroundJobStore.useAwakeSince(Date.now())
+        }),
+      )
+      const seed = (options: {
+        readonly owner?: BackgroundJobStore.Owner
+        readonly status?: "interrupted" | "cancelled" | "completed"
+        readonly mismatchedDigest?: boolean
+        readonly young?: boolean
+      }) =>
+        Effect.gen(function* () {
+          const input = reviewInput()
+          yield* clock.setTime(options.young ? now : old)
+          const admission = yield* f.requests.reserve(f.scope, input).pipe(Effect.provideService(Clock.Clock, clock))
+          if (admission.kind !== "reserved") throw new Error("The original directory request did not reserve")
+          const anchor = yield* f.sessions.create({ internal: ConnectDirectory.INTERNAL })
+          yield* f.requests.prepare(admission.token, anchor.id)
+          yield* (yield* SessionAudience.Service).fenceIsolation({ sessionID: anchor.id, actor: "owner" })
+          const token = yield* ConnectDirectory.issue({ sessionID: anchor.id, ...f.scope }, admission.claim.scope)
+          const id = Connect.RunID.create()
+          const run = {
+            id,
+            status: "running",
+            time: { created: old, started: old },
+            request: {
+              id,
+              requestID: id,
+              to: "vectorscope",
+              action: "review",
+              target: { kind: "uncommitted" },
+              requester: { kind: "user" },
+              directory: f.scope.directory,
+              background: true,
+            },
+          } as const
+          const proof = admission.claim.proof
+          if (options.owner) {
+            yield* f.jobs.started({
+              id,
+              type: ConnectHub.JOB_TYPE,
+              owner: options.owner,
+              parentSessionID: anchor.id,
+              directory: f.scope.directory,
+              startedAt: old,
+              background: true,
+              metadata: {
+                directoryReview: true,
+                runID: id,
+                member: "vectorscope",
+                action: "review",
+                requestKey: proof.key,
+                inputDigest: options.mismatchedDigest ? "0".repeat(64) : proof.inputDigest,
+                scopeDigest: proof.scopeDigest,
+              },
+            })
+            if (options.status)
+              yield* f.jobs.settled(id, { owner: options.owner.runtime, status: options.status, completedAt: old })
+          }
+          yield* ConnectDirectory.write(token, run)
+          ConnectDirectory.retire(token)
+          yield* f.requests.bind(admission.token, { anchorID: anchor.id, runID: id })
+          const binding = path.join(
+            f.global.data,
+            "storage",
+            ...ConnectDirectoryRequest.prefix(admission.claim.scope),
+            "bindings",
+            `${input.requestKey}.json`,
+          )
+          return { anchor: anchor.id, id, binding, run }
+        })
+
+      const closed = yield* seed({ owner: dead })
+      const interrupted = yield* seed({ owner: dead, status: "interrupted" })
+      const foreignLive = { ...live, runtime: `${randomUUID()}:${randomUUID()}` }
+      const stalled = yield* seed({ owner: foreignLive })
+      yield* f.jobs.heartbeat(foreignLive.runtime, old)
+      BackgroundJobStore.useAwakeSince(now - BackgroundJobStore.STALE - 1)
+      const stalledRow = (yield* f.jobs.forParent(stalled.anchor))[0]
+      if (!stalledRow) throw new Error("The stalled foreign lease fixture was not persisted")
+      expect(BackgroundJobStore.liveness(stalledRow)).toBe("dead")
+      expect(BackgroundJobStore.alive(stalledRow.owner)).toBe("alive")
+      const retained = [
+        stalled,
+        yield* seed({ owner: live }),
+        yield* seed({ owner: live, status: "cancelled" }),
+        yield* seed({ owner: { ...dead, runtime: `${randomUUID()}:${randomUUID()}`, machine: randomUUID() } }),
+        yield* seed({ owner: { ...dead, runtime: "legacy-fixture" } }),
+        yield* seed({ owner: dead, mismatchedDigest: true }),
+        yield* seed({ owner: dead, status: "completed" }),
+        yield* seed({ owner: dead, young: true }),
+        yield* seed({}),
+      ]
+      BackgroundJobStore.close(dead)
+      for (const row of [...retained, closed, interrupted])
+        expect(yield* Effect.promise(() => fs.stat(row.binding))).toBeDefined()
+      // A real new owner request drives the ledger's bounded sweep without starting a model.
+      script.state = "unavailable"
+      settled.wait = true
+      yield* f.owner.directoryReview(reviewInput())
+
+      for (const row of retained) expect(yield* Effect.promise(() => fs.stat(row.binding))).toBeDefined()
+      for (const row of [closed, interrupted]) {
+        // Check the bound review itself before the test fixture sweeps any of its synthetic data.
+        expect((yield* ConnectDirectory.load(f.scope, row.id))?.run).toEqual(row.run)
+        expect((yield* f.jobs.forParent(row.anchor)).map((job) => job.id)).toEqual([row.id])
+        expect((yield* f.sessions.get(row.anchor)).id).toBe(row.anchor)
+        const gone = yield* Effect.tryPromise(() => fs.stat(row.binding)).pipe(Effect.exit)
+        expect(Exit.isFailure(gone)).toBe(true)
+      }
+      expect(script.calls).toBe(0)
+      expect(yield* f.permission.list()).toEqual([])
     }),
   options,
 )
