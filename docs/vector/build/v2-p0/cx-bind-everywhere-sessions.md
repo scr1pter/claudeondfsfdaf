@@ -1,6 +1,6 @@
 # cx-bind-everywhere-sessions: bind unattended sessions to their worktree (#156)
 
-Branch `cx-bind-everywhere-sessions`, which finishes Codex's draft PR #156 (`bind-everywhere-sessions`). The draft had been idle for over a day. The owner's deadline for all v2 work is Saturday 2026-11-28, so this run took it over. No flag changes: `VECTOR_EVERYWHERE_ENABLED` stays off, so no job is offered and the runner never reaches this path in production. No public claims.
+Branch `cx-bind-everywhere-sessions`, which finishes Codex's draft PR #156 (`bind-everywhere-sessions`). The draft had been idle for over a day. This run took it over. No flag changes: `VECTOR_EVERYWHERE_ENABLED` stays off, so no job is offered and the runner never reaches this path in production. No public claims.
 
 ## 2026-11-26, takeover: merge main and verify the session binding
 
