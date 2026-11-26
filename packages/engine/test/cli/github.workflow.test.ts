@@ -661,6 +661,16 @@ function agents(options = CODIUM) {
 }
 
 describe("workflow v3", () => {
+  test("the task and review mint steps own separate environment objects", async () => {
+    // The YAML writer already prints separate mappings, so parsing its output cannot catch an earlier shared mutation.
+    const source = await Bun.file(new URL("../../../core/src/review/workflow.ts", import.meta.url)).text()
+    const lines = source.split("\n")
+    for (const purpose of ["task", "review"]) {
+      const mint = lines.find((line) => line.includes(`run: "vector github mint --purpose ${purpose}"`))
+      expect(mint).toContain("env: { ...mintEnv }")
+    }
+  })
+
   for (const [name, options] of [
     ["Codium", CODIUM],
     ["own key auto-review", OWN_KEY],

@@ -71,10 +71,13 @@ on `remote.vectordev.ai`, an iPhone Home Screen install, and Vercel applying the
 - If the account service ever moves to a custom domain, change `connect-src` in `vercel.json`.
 - List `alerts` (`CODIUM_LISTED_PERKS`) only once something sends alerts: the desktop's sender is A41, the server's senders are On Call and Ship Desk (A50) and the cloud computer (A56). The readiness check cannot know that.
 
+## Subscription changes
+
+The service worker tells an open phone page when the browser's push subscription changes. The page checks the signed-in account's registration with a lookup ID and fingerprint on that signal and when it comes back into view. Turning alerts on or restoring them for a changed subscription requires a tap in Alerts to send the browser's registration details.
+
 ## Not done
 
 - Remote's pairing, sessions, approvals and devices (A42), the cloud computer's phone view (A56) and the production cards (A50) fill their routes; here they are shells with honest empty states.
 - The desktop half of encrypted alerts (A41's `remote-notify.ts` and `platform.phoneAlerts`) must seal alerts as `alerts.ts` describes; pairing (A42) stores each computer's alert key with `saveAlertKey`.
-- `pushsubscriptionchange` is not handled: the worker has no session to re-register with. Opening Alerts again re-registers.
 - The relay's `wss:` host is not in `connect-src` yet; A42 adds it with the relay URL.
 - bun.lock was already modified in the worktree before this work and is not mine; it is left out of the commit. Nothing was pushed.
