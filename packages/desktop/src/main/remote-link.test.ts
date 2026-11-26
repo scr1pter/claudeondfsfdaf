@@ -607,6 +607,35 @@ describe("jobs (R-C2)", () => {
     }
   })
 
+  test("disabling Remote during the initial token lookup stops the ticket request", async () => {
+    const relay = createMemoryRelay()
+    let tokenReads = 0
+    const pending = Promise.withResolvers<string>()
+    const env = jobsComputer(relay, {}, undefined, async () => {
+      tokenReads += 1
+      return pending.promise
+    })
+    const opening = env.link.setEnabled(true)
+    try {
+      await until(() => tokenReads === 1)
+      await env.link.setEnabled(false)
+      pending.resolve("vct_desktop")
+      await opening
+
+      expect(env.link.status().state).toBe("off")
+      expect(env.attempts).toHaveLength(0)
+      expect(env.sockets()).toBe(0)
+
+      await env.link.setEnabled(true)
+      await turns(() => env.link.status().state === "online")
+      expect(env.attempts).toHaveLength(1)
+      expect(env.sockets()).toBe(1)
+    } finally {
+      pending.resolve("vct_desktop")
+      env.link.stop()
+    }
+  })
+
   test("the jobs cadence counts from each connection, and a close, want(false) or stop() ends it", async () => {
     const relay = createMemoryRelay()
     // The app's own timing: a 25-s ping, the 12-hour jobs cadence and a 1-s retry base.

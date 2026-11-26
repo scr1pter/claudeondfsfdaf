@@ -727,10 +727,11 @@ export function createRemoteLink(deps: LinkDependencies) {
     if (!identity || state.socket || state.opening) return
     state.opening = true
     setStatus("connecting")
-    const minted = await mint(identity, await ticketToken())
+    const token = await ticketToken()
+    const minted = wanted() ? await mint(identity, token) : undefined
     state.opening = false
     if (state.socket) return
-    if (!wanted()) return void setStatus(deps.enabled.get() ? "ready" : "off")
+    if (!minted || !wanted()) return void setStatus(deps.enabled.get() ? "ready" : "off")
     if ("refused" in minted) {
       setStatus(minted.refused, minted.message)
       retryIn(minted.retryMs)
