@@ -772,8 +772,8 @@ export const settleRun = Effect.fnUntraced(function* (result: SessionV1.WithPart
 })
 
 /**
- * Merges `patch` into the metadata of the parent's task tool part, found by
- * message and call id, and publishes message.part.updated. The processor
+ * Merges `patch` into a tool part's metadata, optionally updates a completed part's title, and publishes
+ * message.part.updated. The part is found by message and call id. The processor
  * writes the tool's returned metadata when it settles the call, so a part
  * that is still pending or running is retried briefly instead of patched. A
  * part that does not exist (a caller without a processor) is skipped. A
@@ -785,6 +785,7 @@ export function patchPart(input: {
   messageID: MessageID
   callID: string
   patch: object | ((stored: Record<string, unknown> | undefined) => object)
+  title?: string
 }) {
   const attempt = Effect.gen(function* () {
     const part = (yield* MessageV2.parts(input.messageID)).find(
@@ -793,10 +794,9 @@ export function patchPart(input: {
     if (!part) return "missing" as const
     if (part.state.status !== "completed" && part.state.status !== "error") return "pending" as const
     const patch = typeof input.patch === "function" ? input.patch(part.state.metadata) : input.patch
-    yield* input.sessions.updatePart({
-      ...part,
-      state: { ...part.state, metadata: merge(part.state.metadata, patch) },
-    })
+    const state = { ...part.state, metadata: merge(part.state.metadata, patch) }
+    if (state.status === "completed" && input.title !== undefined) state.title = input.title
+    yield* input.sessions.updatePart({ ...part, state })
     return "done" as const
   }).pipe(locked(partLock))
   return Effect.gen(function* () {

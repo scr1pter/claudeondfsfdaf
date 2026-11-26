@@ -10,6 +10,7 @@ import { GithubAgents } from "@vectordevai/core/github-agents"
 import { Global } from "@vectordevai/core/global"
 import { Shell } from "@vectordevai/core/shell"
 import { which } from "@vectordevai/core/util/which"
+import * as UnattendedSeccomp from "./unattended-seccomp"
 
 export type Mechanism = "seatbelt" | "bubblewrap" | "none"
 
@@ -27,6 +28,8 @@ export type Wrapped = {
   sandboxed: boolean
   mechanism: Mechanism
   reason?: string
+  /** Compiled policy supplied on the unattended bubblewrap's private descriptor. */
+  seccomp?: Uint8Array
 }
 
 const SEATBELT = "/usr/bin/sandbox-exec"
@@ -294,9 +297,9 @@ function refusal(platform: NodeJS.Platform, reason = "the sandbox could not be a
 // An unattended session's commands (R-M2) go through `unattended` below: `offline` with `writes: "workspace"`, so the
 // shell tool does pass that for those sessions, and only for them.
 export const UNATTENDED_NOTICE =
-  "This unattended run's commands go through Vector's offline sandbox: they reach no TCP or UDP network, not even servers on this computer, and no socket under /tmp or /run, and they can write only in this repository's files, not its Git metadata."
+  "This unattended run's commands go through Vector's offline sandbox. They cannot reach TCP or UDP services outside it, use filesystem Unix sockets, or write to this repository's Git metadata."
 export const UNATTENDED_REFUSAL =
-  "Vector did not run this command. An unattended run's commands run only in Vector's offline sandbox, on Linux with bubblewrap, and it cannot be applied here."
+  "Vector did not run this command. The unattended offline sandbox requires Linux with bubblewrap and socket filtering, and it cannot be applied here."
 
 // What an unattended run's commands keep of the engine's environment: what a build needs to find its tools and speak
 // the user's language, the folders a toolchain is configured with (JAVA_HOME, GOROOT) and Vector's own markers for its
@@ -344,29 +347,30 @@ const UNATTENDED_SECRETS = [
 ]
 
 /**
- * The bubblewrap an unattended session's commands would run in: on Linux only, found as the shell sandbox finds it,
- * and only when root alone can change it (the file and its folder are root's, and nobody else may write either), as the
- * process isolation floor asks of /usr/bin/bwrap. Undefined everywhere else.
+ * The trusted canonical bubblewrap and bootstrap shell paths require a supported Linux syscall ABI.
  */
 export function unattendedBinary(platform: NodeJS.Platform = process.platform) {
-  if (platform !== "linux" || sandboxAvailability(platform).mechanism !== "bubblewrap") return undefined
+  if (platform !== "linux" || !UnattendedSeccomp.supported() || !unattendedBootstrap()) return undefined
   const binary = which("bwrap")
-  return binary !== null && rootOnly(binary) ? binary : undefined
+  return binary === null ? undefined : rootOnly(binary)
+}
+
+export function unattendedBootstrap() {
+  return rootOnly("/bin/sh")
 }
 
 /**
- * An unattended session's command (R-M2): in the offline sandbox whatever VECTOR_SHELL_SANDBOX or Vector Local says,
- * with no TCP or UDP network, not even this computer's, and no host socket under /tmp or /run (a socket file elsewhere
- * that no mount covers stays reachable); writes only in the workspace, which must hold the working folder, and never in
- * its `.git`; the home-directory secrets and the stores above hidden; and the scrubbed environment above. Only
- * bubblewrap qualifies. Windows has no sandbox and seatbelt lets this computer's servers and every socket through, so
- * both are refused, as is anything the sandbox cannot wrap, always with the one fixed message.
+ * An unattended command uses the namespace, the seccomp program, and the descriptor check together. A platform or
+ * command the sandbox cannot wrap gets the same fixed refusal.
  */
 export function unattended(
   input: Omit<Parameters<typeof wrapCommand>[0], "allowNetwork" | "writes">,
 ): Exclude<Offline, { type: "unfiltered" }> {
   const binary = unattendedBinary(input.platform)
-  if (binary === undefined) return { type: "refused", message: UNATTENDED_REFUSAL }
+  const bootstrap = unattendedBootstrap()
+  const seccomp = UnattendedSeccomp.filter()
+  if (binary === undefined || bootstrap === undefined || seccomp === undefined)
+    return { type: "refused", message: UNATTENDED_REFUSAL }
   // The command's HOME is the home folder whose secrets the profile hides, whatever the engine's environment says now.
   const home = input.home ?? os.homedir()
   const metadata = gitMetadata(input.workspaceRoot)
@@ -375,18 +379,28 @@ export function unattended(
     metadata === undefined ||
     decided.type !== "sandboxed" ||
     decided.wrapped.mechanism !== "bubblewrap" ||
-    decided.wrapped.command !== binary
+    rootOnly(decided.wrapped.command) !== binary
   )
     return { type: "refused", message: UNATTENDED_REFUSAL }
   // These mounts go after every mount wrapCommand makes, before the data folder turns read-only and the command starts.
   const args = decided.wrapped.args
   const at = args.findIndex((arg) => arg === "--remount-ro" || arg === "--chdir")
-  if (at < 0) return { type: "refused", message: UNATTENDED_REFUSAL }
+  const cwd = args.indexOf("--chdir", at)
+  if (at < 0 || cwd < at || cwd + 2 >= args.length) return { type: "refused", message: UNATTENDED_REFUSAL }
   return {
     ...decided,
     wrapped: {
       ...decided.wrapped,
-      args: [...args.slice(0, at), ...metadata, ...hiddenStores(home), ...args.slice(at)],
+      command: binary,
+      seccomp,
+      args: [
+        ...args.slice(0, at),
+        ...metadata,
+        ...hiddenStores(home),
+        ...UnattendedSeccomp.args,
+        ...args.slice(at, cwd + 2),
+        ...UnattendedSeccomp.command(bootstrap, args.slice(cwd + 2)),
+      ],
     },
     notice: UNATTENDED_NOTICE,
   }
@@ -420,16 +434,20 @@ function unattendedEnvironment(env: NodeJS.ProcessEnv, home: string): NodeJS.Pro
   }
 }
 
-// Root's alone: a regular file in a folder, both owned by root and writable by nobody else, so no other user (and
-// nothing their commands run) can put another program in its place.
+// Start the canonical file. Every ancestor must also be root-controlled, since a writable ancestor can replace it.
 function rootOnly(file: string) {
-  if (!fs.existsSync(file)) return false
-  const real = fs.realpathSync(file)
-  const owned = (entry: string) => {
-    const info = fs.statSync(entry, { throwIfNoEntry: false })
-    return info !== undefined && info.uid === 0 && (info.mode & 0o022) === 0
+  try {
+    const real = fs.realpathSync(file)
+    const info = fs.statSync(real)
+    if (!info.isFile() || info.uid !== 0 || (info.mode & 0o022) !== 0) return undefined
+    for (let directory = path.dirname(real); ; directory = path.dirname(directory)) {
+      const parent = fs.statSync(directory)
+      if (!parent.isDirectory() || parent.uid !== 0 || (parent.mode & 0o022) !== 0) return undefined
+      if (directory === path.dirname(directory)) return real
+    }
+  } catch {
+    return undefined
   }
-  return fs.statSync(real).isFile() && owned(real) && owned(path.dirname(real))
 }
 
 // NOTE: `writes`'s docblock below predates `unattended` above, which passes "workspace" for an unattended session.

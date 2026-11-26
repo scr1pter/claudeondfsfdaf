@@ -104,6 +104,56 @@ afterEach(async () => {
   await resetDatabase()
 })
 
+it.live("both v1 reply routes keep unconfirmed Connect approvals pending", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture(false, "web")
+    const ask = (permission: string) =>
+      f.raw("/fixture/permission", owner, { sessionID: f.sessionID, permission }).pipe(Effect.forkChild)
+    const pending = (permission: string) =>
+      pollWithTimeout(
+        call(() => f.client.permission.list()).pipe(
+          Effect.map((response) => response.data?.find((item) => item.permission === permission)),
+        ),
+        "The permission did not become pending",
+      )
+
+    for (const permission of ["connect_write", "connect_cloud"]) {
+      const waiting = yield* ask(permission)
+      const request = yield* pending(permission)
+      const oldRoute = `/session/${request.sessionID}/permissions/${request.id}`
+      const route = `/permission/${request.id}/reply`
+      for (const [path, payload] of [
+        [oldRoute, { response: "once", confirm: true }],
+        [route, { reply: "once" }],
+        [route, { reply: "always", confirm: true }],
+      ] as const) {
+        const refused = yield* f.raw(path, owner, payload)
+        expect(refused.status).toBe(409)
+        expect(yield* call(() => refused.json())).toMatchObject({ resource: request.id })
+        expect((yield* pending(permission)).id).toBe(request.id)
+      }
+      expect((yield* f.raw(route, owner, { reply: "once", confirm: "true" })).status).toBe(400)
+      expect((yield* f.raw(route, guest, { reply: "once", confirm: true })).status).toBe(403)
+      expect((yield* f.raw(route, forwarded, { reply: "once", confirm: true })).status).toBe(403)
+      const approved = yield* call(() =>
+        f.client.permission.reply({ requestID: request.id, reply: "once", confirm: true }),
+      )
+      expect(approved.data).toBe(true)
+      const answered = yield* Fiber.join(waiting)
+      expect(yield* call(() => answered.json())).toBe(true)
+      expect((yield* f.raw(route, owner, { reply: "once", confirm: true })).status).toBe(404)
+    }
+
+    const denied = yield* ask("connect_write")
+    const request = yield* pending("connect_write")
+    expect(
+      (yield* f.raw(`/session/${request.sessionID}/permissions/${request.id}`, owner, { response: "reject" })).status,
+    ).toBe(200)
+    const answered = yield* Fiber.join(denied)
+    expect(yield* call(() => answered.json())).toBe(false)
+  }),
+)
+
 production.live("the production assembly does not qualify Windows Git or a project-only VectorScope model", () =>
   Effect.gen(function* () {
     const f = yield* fixture(false, "web", false, true)

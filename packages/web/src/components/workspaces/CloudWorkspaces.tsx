@@ -18,6 +18,7 @@ import {
 import vectorMark from "../../assets/vector-mark.webp"
 import { vectorAccountClient } from "../../lib/account-client"
 import {
+  cloudPermissionReply,
   cloudWorkspaceLocation,
   cloudWorkspacePath,
   cloudWorkspacesClient,
@@ -442,12 +443,14 @@ export function CloudWorkspaces() {
 
   const replyPermission = async (id: string, reply: "once" | "reject") => {
     if (!client || !workspaceId || action) return
+    const permission = permissions.find((item) => item.id === id && item.sessionID === sessionId)
+    if (!permission) return
+    const body = cloudPermissionReply(permission, reply)
+    if (!body) return
     setAction(`permission:${id}`)
     setError("")
     try {
-      const confirmed = await client.engine(workspaceId, `/permission/${encodeURIComponent(id)}/reply`, "POST", {
-        reply,
-      })
+      const confirmed = await client.engine(workspaceId, `/permission/${encodeURIComponent(id)}/reply`, "POST", body)
       if (confirmed !== true)
         throw new Error("Vector could not confirm your approval response. Refresh before trying again.")
       setPermissions((current) => current.filter((item) => item.id !== id))
@@ -1040,7 +1043,8 @@ export function CloudWorkspaces() {
                             .map((item) => (
                               <section key={item.id} className="cw-approval">
                                 <span className="cw-eyebrow">Approval needed</span>
-                                <h3>Allow {item.permission}?</h3>
+                                <h3>{item.connectWrite ? "Allow this Connect write?" : `Allow ${item.permission}?`}</h3>
+                                {item.connectWrite && <p>{item.connectWrite.description}</p>}
                                 <ul>
                                   {item.patterns.map((pattern, index) => (
                                     <li key={index}>
@@ -1048,7 +1052,16 @@ export function CloudWorkspaces() {
                                     </li>
                                   ))}
                                 </ul>
-                                <p>Allow applies to this request once.</p>
+                                {item.connectWrite?.diff && (
+                                  <pre className="cw-diff" aria-label="Patch preview">
+                                    {item.connectWrite.diff}
+                                  </pre>
+                                )}
+                                <p>
+                                  {cloudPermissionReply(item, "once")
+                                    ? "Allow applies to this request once."
+                                    : "This approval can only be denied here."}
+                                </p>
                                 <div>
                                   <button
                                     type="button"
@@ -1061,7 +1074,7 @@ export function CloudWorkspaces() {
                                   <button
                                     type="button"
                                     className="cw-primary"
-                                    disabled={Boolean(action)}
+                                    disabled={Boolean(action) || !cloudPermissionReply(item, "once")}
                                     onClick={() => replyPermission(item.id, "once")}
                                   >
                                     Allow once

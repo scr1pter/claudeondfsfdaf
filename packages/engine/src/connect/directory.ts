@@ -157,11 +157,12 @@ export const load = Effect.fn("ConnectDirectory.load")(function* (
  * exists but the receipt does not. The hub writes the receipt before the request key binds, and only `prune` removes
  * one, after it is done. `bytes` is what was read, so a caller can bound its reads.
  */
-export interface Settled {
-  readonly kind: "done" | "open" | "gone" | "unknown"
-  readonly ended?: number
-  readonly bytes: number
-}
+export type OpenReceipt = Pick<typeof Receipt.Type, "projectID" | "directory" | "canonical" | "identity">
+
+export type Settled =
+  | { readonly kind: "done"; readonly ended?: number; readonly bytes: number }
+  | { readonly kind: "open"; readonly receipt: OpenReceipt; readonly bytes: number }
+  | { readonly kind: "gone" | "unknown"; readonly bytes: number }
 
 export const settled = Effect.fn("ConnectDirectory.settled")(function* (
   place: { readonly project: string; readonly directory: string },
@@ -191,7 +192,22 @@ export const settled = Effect.fn("ConnectDirectory.settled")(function* (
     hash(decoded.canonical) !== place.directory
   )
     return { kind: "unknown", bytes: raw.bytes } satisfies Settled
-  if (decoded.run.status !== "done") return { kind: "open", bytes: raw.bytes } satisfies Settled
+  if (decoded.run.status !== "done") {
+    const request = decoded.run.request
+    if (
+      request.action !== "review" ||
+      request.to !== "vectorscope" ||
+      !request.background ||
+      request.target.kind === "task" ||
+      request.requester.kind !== "user" ||
+      request.requester.sessionID !== undefined ||
+      request.requestID !== run.runID ||
+      request.directory !== decoded.directory
+    )
+      return { kind: "unknown", bytes: raw.bytes } satisfies Settled
+    const { projectID, directory, canonical, identity } = decoded
+    return { kind: "open", bytes: raw.bytes, receipt: { projectID, directory, canonical, identity } } satisfies Settled
+  }
   return {
     kind: "done",
     ...(decoded.run.time.ended !== undefined ? { ended: decoded.run.time.ended } : {}),

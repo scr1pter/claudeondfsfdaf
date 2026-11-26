@@ -6,7 +6,7 @@ import { Image } from "@/image/image"
 import { ComputerSession } from "@/computer/session"
 import { ComputerNativeActions } from "@/computer/native-actions"
 import { SessionV1 } from "@vectordevai/core/v1/session"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Context, Scope, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Context, Scope, Schema, Semaphore } from "effect"
 import * as Stream from "effect/Stream"
 import { asSchema, type Tool } from "ai"
 import { Agent } from "@/agent/agent"
@@ -164,6 +164,7 @@ type ToolCall = {
   messageID: SessionV1.ToolPart["messageID"]
   sessionID: SessionV1.ToolPart["sessionID"]
   done: Deferred.Deferred<void>
+  writes: Semaphore.Semaphore
 }
 
 interface ProcessorContext extends Input {
@@ -366,12 +367,24 @@ const layer = Layer.effect(
           messageID: call.messageID,
           sessionID: call.sessionID,
         })
+        if (ctx.toolcalls[toolCallID]?.done !== call.done) return undefined
         if (!part || part.type !== "tool") {
           delete ctx.toolcalls[toolCallID]
           return undefined
         }
         return { call, part }
       })
+
+      // The SDK starts the executor independently of stream handling. Read and write a call's part under the same
+      // permit so a stale transition cannot replace an annotation. A retired call cannot hand its permit to a retry.
+      const serializeToolWrite = <A, E, R>(effect: Effect.Effect<A, E, R>, toolCallID: string) =>
+        Effect.suspend(() => {
+          const call = ctx.toolcalls[toolCallID]
+          if (!call) return Effect.succeed(undefined)
+          return call.writes.withPermits(1)(
+            Effect.suspend(() => ctx.toolcalls[toolCallID]?.done === call.done ? effect : Effect.succeed(undefined)),
+          )
+        })
 
       const updateToolCall = Effect.fn("SessionProcessor.updateToolCall")(function* (
         toolCallID: string,
@@ -387,7 +400,7 @@ const layer = Layer.effect(
           sessionID: part.sessionID,
         }
         return part
-      })
+      }, serializeToolWrite)
 
       const completeToolCall = Effect.fn("SessionProcessor.completeToolCall")(function* (
         toolCallID: string,
@@ -438,7 +451,7 @@ const layer = Layer.effect(
         if (match.part.tool === "computer")
           yield* computerSessions.markCompleted(ctx.sessionID, ctx.assistantMessage.parentID)
         yield* settleToolCall(toolCallID)
-      })
+      }, serializeToolWrite)
 
       // This runs only for a normal result event, after settlement. The abort path can complete a call too, but
       // must not open a new permission request. Page back through this user turn so separate assistant steps count.
@@ -515,7 +528,7 @@ const layer = Layer.effect(
         )
         yield* settleToolCall(toolCallID)
         return true
-      })
+      }, serializeToolWrite)
 
       // Counts one provider step against the run of this session's root. A stop on a step that would continue ends
       // the turn with BudgetStopError. A stop on a final answer leaves the answer alone; the run's stopped flag still
@@ -632,6 +645,7 @@ const layer = Layer.effect(
         } satisfies SessionV1.ToolPart)
         ctx.toolcalls[input.id] = {
           done: yield* Deferred.make<void>(),
+          writes: yield* Semaphore.make(1),
           partID: part.id,
           messageID: part.messageID,
           sessionID: part.sessionID,
@@ -1113,21 +1127,27 @@ const layer = Layer.effect(
         )
 
         for (const toolCallID of Object.keys(ctx.toolcalls)) {
-          const match = yield* readToolCall(toolCallID)
-          if (!match) continue
-          const part = match.part
-          const end = Date.now()
-          const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
-          yield* session.updatePart({
-            ...part,
-            state: {
-              ...part.state,
-              status: "error",
-              error: "Tool execution aborted",
-              metadata: { ...metadata, interrupted: true },
-              time: { start: "time" in part.state ? part.state.time.start : end, end },
-            },
-          })
+          yield* serializeToolWrite(
+            Effect.gen(function* () {
+              const match = yield* readToolCall(toolCallID)
+              if (!match) return
+              const part = match.part
+              const end = Date.now()
+              const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+              yield* session.updatePart({
+                ...part,
+                state: {
+                  ...part.state,
+                  status: "error",
+                  error: "Tool execution aborted",
+                  metadata: { ...metadata, interrupted: true },
+                  time: { start: "time" in part.state ? part.state.time.start : end, end },
+                },
+              })
+              yield* settleToolCall(toolCallID)
+            }),
+            toolCallID,
+          )
         }
         ctx.toolcalls = {}
         ctx.assistantMessage.time.completed = Date.now()

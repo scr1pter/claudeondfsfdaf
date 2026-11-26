@@ -24,6 +24,7 @@ import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
 import type { SessionV1 } from "@vectordevai/core/v1/session"
 import { Connect } from "@vectordevai/schema/connect"
+import { ProjectID } from "@vectordevai/schema/project-id"
 import { executeLocalReview, type LocalReviewDeps } from "@/cli/cmd/review"
 import type { ConnectAdapter } from "@/connect/adapter"
 import { VectorScopeAdapter } from "@/connect/adapters/vectorscope"
@@ -1643,6 +1644,66 @@ describe("whether VectorScope can review", () => {
     instance,
   )
 })
+
+const NON_REPOSITORY = "Open a Git repository to use connected reviews."
+
+const supportedRepository = process.platform === "linux" ? it.instance : it.instance.skip
+supportedRepository(
+  "a non-Git folder lists VectorScope unavailable and refuses a review before consent",
+  () =>
+    Effect.gen(function* () {
+      reset()
+      const ctx = yield* requireInstance
+      expect(ctx.worktree).toBe("/")
+      expect(ctx.project.id).toBe(ProjectID.global)
+      expect(ctx.project.vcs).toBeUndefined()
+      const sessions = yield* Session.Service
+      const hub = yield* ConnectHub.Service
+      const requester = yield* sessions.create({ title: "Requester" })
+      yield* say(requester.id, "review my changes")
+      const listed = (yield* hub.members()).find((item) => item.id === "vectorscope")
+      expect(listed).toMatchObject({ state: "unavailable", reason: NON_REPOSITORY })
+      expect(listed?.sendsTo).toBeUndefined()
+      const { ask, asks } = asker()
+      const { ops, prompts } = recorder()
+      const run = yield* hub.run({ request: review(requester.id, ctx.directory), call: { ask, promptOps: ops } })
+      expect(run.result).toMatchObject({ state: "refused", refusal: "unavailable", verdict: "not-reviewed" })
+      expect(run.result?.summary).toContain(NON_REPOSITORY)
+      expect(asks).toEqual([])
+      expect(prompts).toEqual([])
+      expect(calls).toEqual([])
+      expect(yield* sessions.children(requester.id)).toEqual([])
+    }),
+  { ...instance, git: false },
+)
+
+supportedRepository(
+  "an empty Git checkout can still be ready under the global project ID",
+  () =>
+    Effect.gen(function* () {
+      reset()
+      const directory = yield* tmpdirScoped()
+      yield* git(directory, "init", "-q")
+      yield* write(directory, {
+        "vector.json": JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...instance.config }),
+      })
+      yield* trust(directory)
+      const store = yield* InstanceStore.Service
+      yield* store.provide(
+        { directory },
+        Effect.gen(function* () {
+          const ctx = yield* requireInstance
+          expect(ctx.project.id).toBe(ProjectID.global)
+          expect(ctx.project.vcs).toBe("git")
+          expect(ctx.worktree).toBe(ctx.directory)
+          const hub = yield* ConnectHub.Service
+          const listed = (yield* hub.members()).find((item) => item.id === "vectorscope")
+          expect(listed?.state, listed?.reason).toBe("ready")
+        }),
+      )
+    }),
+  instance,
+)
 
 // A project reached through a link. The instance store opens the real folder, so a link to the project or to a folder
 // above it changes nothing. A worktree kept as written does not: TaskIsolation.loadWork loads a task worktree under the

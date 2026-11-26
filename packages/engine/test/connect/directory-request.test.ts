@@ -771,6 +771,55 @@ it.effect("a settled key replays for its retention, then an admission prunes it 
   }),
 )
 
+it.effect("an open binding is inspected only after the existing age floor and never by a replay", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture
+    const old = yield* boundWith(f.service, f.scope, "running")
+    const pending = yield* reserved(f.service, f.scope)
+    yield* f.service.release(pending.token)
+    const inspected: string[] = []
+    const inspect: ConnectDirectoryRequest.InspectOpen = (binding) =>
+      Effect.sync(() => {
+        inspected.push(binding.key)
+        return true
+      })
+    const admit = () =>
+      f.service
+        .reserve(f.scope, input(), undefined, inspect)
+        .pipe(
+          Effect.flatMap((start) =>
+            start.kind === "reserved" ? f.service.release(start.token) : Effect.die("A new request must reserve"),
+          ),
+        )
+    yield* TestClock.adjust(ConnectDirectoryRequest.RETENTION_MS - 1)
+    yield* admit()
+    const young = yield* boundWith(f.service, f.scope, "running")
+    // Legacy index entries omit the age hint, so only the reservation can rule out an early lookup.
+    for (const file of [path.join(ledgerRoot, "index.json"), path.join(f.folder, "index.json")]) {
+      const index = yield* stored(file)
+      yield* store(file, {
+        ...index,
+        entries: index.entries.map((entry) =>
+          entry.key === young.request.requestKey ? { key: entry.key, digest: entry.digest } : entry,
+        ),
+      })
+    }
+    expect(inspected).toEqual([])
+    yield* TestClock.adjust(1)
+    expect((yield* f.service.reserve(f.scope, old.request, undefined, inspect)).kind).toBe("bound")
+    expect(inspected).toEqual([])
+    yield* admit()
+    expect(inspected).toEqual([old.request.requestKey])
+    expect(yield* where(f.folder, old.request.requestKey)).toEqual(pruned)
+    expect(yield* where(f.folder, young.request.requestKey)).toMatchObject({ binding: true })
+    expect(yield* where(f.folder, pending.request.requestKey)).toMatchObject({
+      pointer: true,
+      slot: true,
+      refused: false,
+    })
+  }),
+)
+
 small.effect("a full directory prunes its oldest settled key past the replay window, never a younger one", () =>
   Effect.gen(function* () {
     const f = yield* fixture

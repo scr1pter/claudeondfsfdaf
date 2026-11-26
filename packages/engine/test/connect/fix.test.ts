@@ -396,7 +396,7 @@ describe("the question a fix asks", () => {
     }),
   )
 
-  it.instance("through Permission, an allow rule does not answer it, and an always reply saves nothing", () =>
+  it.instance("through Permission, only explicit Allow once answers a fix and nothing is saved", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const permissions = yield* Permission.Service
@@ -419,7 +419,10 @@ describe("the question a fix asks", () => {
         )
       const first = yield* permissions.ask(input).pipe(Effect.forkChild)
       const asked = yield* pending()
-      yield* permissions.reply({ requestID: asked.id, reply: "always" })
+      expect(yield* permissions.reply({ requestID: asked.id, reply: "always" }).pipe(Effect.flip)).toMatchObject({
+        _tag: "Permission.ConfirmationRequiredError",
+      })
+      yield* permissions.reply({ requestID: asked.id, reply: "once", confirm: true })
       yield* Fiber.join(first)
       const second = yield* permissions.ask(input).pipe(Effect.forkChild)
       const again = yield* pending()
@@ -1037,7 +1040,11 @@ describe("merging a fix worktree", () => {
         const approved = attempt()
         const second = yield* asked()
         expect(second.id).not.toBe(first.id)
-        yield* permissions.reply({ requestID: second.id, reply: "once" })
+        expect(yield* permissions.reply({ requestID: second.id, reply: "once" }).pipe(Effect.flip)).toMatchObject({
+          _tag: "Permission.ConfirmationRequiredError",
+        })
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("export const last = 1\n")
+        yield* permissions.reply({ requestID: second.id, reply: "once", confirm: true })
         expect(yield* Effect.promise(() => approved)).toBe("merged")
         expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("export const last = 2\n")
       }),
