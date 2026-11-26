@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron"
 import type { ElectronAPI, WslServersEvent } from "./types"
 import { vercelPreloadApi } from "./cloud-vercel"
+import { returnedBrainPreloadApi } from "./github-agents-returned"
 import type { UpdaterState } from "@vectordevai/app/updater"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
@@ -25,9 +26,7 @@ const api: ElectronAPI = {
     unbind: (input) => ipcRenderer.invoke("github-agents-unbind", input),
     runs: () => ipcRenderer.invoke("github-agents-runs"),
     previewBrain: (cwd) => ipcRenderer.invoke("github-agents-brain-preview", cwd),
-    returnedArtifacts: (input) => ipcRenderer.invoke("github-agents-returned-artifacts", input),
-    previewReturned: (input) => ipcRenderer.invoke("github-agents-returned-preview", input),
-    importReturned: (input) => ipcRenderer.invoke("github-agents-returned-import", input),
+    ...returnedBrainPreloadApi(ipcRenderer),
   },
   killSidecar: () => ipcRenderer.invoke("kill-sidecar"),
   awaitInitialization: () => ipcRenderer.invoke("await-initialization"),

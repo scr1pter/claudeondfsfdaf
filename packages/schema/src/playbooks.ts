@@ -30,6 +30,13 @@ export const MINIMUM = 2
 /** One entry of `GET /api/account/playbooks`: the file at `url` (an R2 link, 10 minutes) has this SHA-256. */
 export type Link = { readonly name: string; readonly version: string; readonly sha256: string; readonly url: string }
 
+export type ModelRole = "floor" | "default" | "ceiling"
+
+/** The installer validates this role and the engine resolves it against the user's Codium plan. */
+export function modelRole(value: string | undefined) {
+  return /^codium:(floor|default|ceiling)$/.exec(value ?? "")?.[1] as ModelRole | undefined
+}
+
 export function validName(value: unknown): value is string {
   return typeof value === "string" && value.length <= NAME_MAX && NAME.test(value)
 }

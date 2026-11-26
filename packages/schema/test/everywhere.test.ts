@@ -7,6 +7,7 @@ import {
   DECLINE_CODES,
   INSTALLATION_PATTERNS,
   JOB_ID_PATTERN,
+  JOB_RECORD_RETENTION_MS,
   LASTING_DECLINES,
   LIMITS,
   MILESTONES,
@@ -35,6 +36,7 @@ import {
   isBranch,
   isIssueKey,
   isRepositoryName,
+  jobIdTime,
   jobOfActionsPrompt,
   looksLikeCode,
   offerParts,
@@ -216,6 +218,13 @@ describe("ids", () => {
     expect(createJobId(5)).not.toBe(createJobId(5))
     // Every character a jid may hold is allowed in a branch name.
     expect(`vector/ve-${jid.slice(4, 16)}`).toMatch(BRANCH_PATTERN)
+  })
+
+  test("job ids give back the creation time they encode, which bounds local publication recovery", () => {
+    for (const time of [0, 1_000, Date.UTC(2026, 10, 24, 9, 30), 2 ** 50 - 1]) expect(jobIdTime(createJobId(time))).toBe(time)
+    expect(jobIdTime("vej_short")).toBeUndefined()
+    expect(jobIdTime(jid.toUpperCase())).toBeUndefined()
+    expect(JOB_RECORD_RETENTION_MS).toBe(30 * 24 * 60 * 60_000)
   })
 
   test("job ids refuse a time they cannot hold", () => {

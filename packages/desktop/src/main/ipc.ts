@@ -5,6 +5,7 @@ import {
   onVectorAccountAuthorityChange,
 } from "./vector-account-runtime"
 import { createGithubAgents } from "./github-agents"
+import { registerGithubAgentsReturnedIpc } from "./github-agents-returned-ipc"
 import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
 import { isComputerOverlay } from "./computer-overlay-registry"
 import { registerComputerOverlayIpc } from "./computer-overlay-ipc"
@@ -323,14 +324,10 @@ export function registerIpcHandlers(deps: Deps) {
   )
   handle("github-agents-runs", () => githubAgents.runs())
   handle("github-agents-brain-preview", (_event, cwd: string) => githubAgents.previewBrain(cwd))
-  handle("github-agents-returned-artifacts", (_event, input: Parameters<GithubAgentsAPI["returnedArtifacts"]>[0]) =>
-    githubAgents.returnedArtifacts(input),
-  )
-  handle("github-agents-returned-preview", (_event, input: Parameters<GithubAgentsAPI["previewReturned"]>[0]) =>
-    githubAgents.previewReturned(input),
-  )
-  handle("github-agents-returned-import", (_event, input: Parameters<GithubAgentsAPI["importReturned"]>[0]) =>
-    githubAgents.importReturned(input),
+  registerGithubAgentsReturnedIpc(
+    (channel, listener) => ipcMain.handle(channel, listener),
+    assertTrustedRenderer,
+    githubAgents,
   )
   app.once("will-quit", () => {
     void githubAgents.clearBrain()

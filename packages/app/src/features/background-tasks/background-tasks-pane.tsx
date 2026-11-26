@@ -1157,7 +1157,7 @@ function AgentDetails(props: { agent: TaskAgent; tasks: BackgroundTasks }) {
                 <p>
                   {editable()
                     ? "Delivered at the next safe step. Your conversation stays open."
-                    : "This task has finished. Open its session to continue; your draft is kept."}
+                    : "Messaging is unavailable for this task. Your draft is kept."}
                 </p>
                 <button type="submit" disabled={!editable() || state.sending || !props.tasks.draft(props.agent).trim()}>
                   {state.sending ? "Sending…" : "Send message"}
