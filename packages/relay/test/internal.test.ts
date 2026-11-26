@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { AccountRelay } from "../src/account-relay"
 import { handleRequest } from "../src/index"
-import { INTERNAL_HEADERS, internalCanonical, sha256Hex, signInternal, verifyInternalSignature } from "../src/internal"
+import {
+  INTERNAL_HEADERS,
+  internalCanonical,
+  sha256Hex,
+  signInternal,
+  verifyInternalRequest,
+  verifyInternalSignature,
+} from "../src/internal"
 import { base64url, fromUtf8, utf8 } from "../src/bytes"
 import { RELAY_LIMITS } from "../src/limits"
 import { CLOSE, DEVICE_BYTES, FRAME, decodeFrame, encodeFrame } from "../src/protocol"
@@ -67,7 +74,7 @@ async function check(
   headers: Record<string, string>,
   input: { now?: number; path?: string; method?: string } = {},
 ) {
-  return verifyInternalSignature(
+  return verifyInternalRequest(
     INTERNAL_SECRET,
     { method: input.method ?? "POST", path: input.path ?? PATH, headers: new Headers(headers), body: utf8(body) },
     input.now ?? NOW,
@@ -101,7 +108,24 @@ describe("internal signature", () => {
   test("a request signed for the relay passes and gives its nonce", async () => {
     const body = JSON.stringify({ account: ACCOUNT })
     const headers = await headersFor(body, { nonce: "a".repeat(22) })
-    expect(await check(body, headers)).toEqual({ ok: true, nonce: "a".repeat(22) })
+    expect(await check(body, headers)).toEqual({ ok: true, nonce: "a".repeat(22), signedAt: NOW })
+  })
+
+  test("the existing nonce-only verifier keeps its exact public reply", async () => {
+    const body = "{}"
+    const headers = await headersFor(body, { nonce: "c".repeat(22) })
+    expect(
+      await verifyInternalSignature(
+        INTERNAL_SECRET,
+        {
+          method: "POST",
+          path: PATH,
+          headers: new Headers(headers),
+          body: utf8(body),
+        },
+        NOW,
+      ),
+    ).toEqual({ ok: true, nonce: "c".repeat(22) })
   })
 
   test("a changed body, path, method, timestamp or nonce fails", async () => {
@@ -174,7 +198,7 @@ describe("internal routes", () => {
     const call = async (
       action: string,
       body: unknown,
-      input: { headers?: Record<string, string>; method?: string; raw?: string } = {},
+      input: { headers?: Record<string, string>; method?: string; raw?: string; now?: number } = {},
     ) => {
       const text = input.raw ?? JSON.stringify(body)
       const path = `/internal/v1/${action}`
@@ -182,7 +206,7 @@ describe("internal routes", () => {
         method: input.method ?? "POST",
         path,
         body: text,
-        now: clock.now,
+        now: input.now ?? clock.now,
       })
       const response = await handleRequest(
         new Request(`https://relay.example${path}`, {
@@ -486,6 +510,221 @@ describe("internal routes", () => {
     expect((await call("presence", { account: ACCOUNT, pad: "x".repeat(17_000) })).status).toBe(413)
     expect((await (await worker({ secret: "too-short" })).call("presence", { account: ACCOUNT })).status).toBe(503)
     expect((await (await worker({ secret: "" })).call("presence", { account: ACCOUNT })).status).toBe(503)
+  })
+
+  for (const kill of [true, false])
+    test(`a delayed signed flag cannot undo the newer ${kill ? "kill" : "clear"}, including after restart`, async () => {
+      const h = await worker()
+      expect(await h.call("flags", { kill }, { now: NOW + 1000 })).toMatchObject({ status: 200, body: { kill } })
+      const object = h.namespace.objects.get("control")!
+      object.relay = new AccountRelay(object.state, h.env, h.runtime)
+      expect(await h.call("flags", { kill: !kill }, { now: NOW })).toMatchObject({
+        status: 200,
+        body: { kill, applied: false },
+      })
+      expect(h.kv.values.get("kill") ?? null).toBe(kill ? "1" : null)
+      // Equal whole-second signatures deliberately follow arrival order, with the old {kill} response.
+      expect(await h.call("flags", { kill: !kill }, { now: NOW + 1000 })).toMatchObject({
+        status: 200,
+        body: { kill: !kill },
+      })
+      expect(h.kv.values.get("kill") ?? null).toBe(kill ? null : "1")
+    })
+
+  test("only the HMAC-verified timestamp reaches the flag object, never an external forward header", async () => {
+    const h = await worker()
+    const result = await h.call(
+      "flags",
+      { kill: true },
+      {
+        now: NOW + 1000,
+        headers: { "x-vector-relay-signed-at": String(NOW + 290_000) },
+      },
+    )
+    expect(result.status).toBe(200)
+    expect(h.namespace.calls[0]!.headers.get("x-vector-relay-signed-at")).toBe(String(NOW + 1000))
+    expect(await h.call("flags", { kill: false }, { now: NOW + 2000 })).toMatchObject({
+      status: 200,
+      body: { kill: false },
+    })
+    const count = h.namespace.calls.length
+    expect(
+      (
+        await h.call(
+          "flags",
+          { kill: true },
+          {
+            headers: {
+              "x-vector-relay-signed-at": String(NOW + 290_000),
+              [INTERNAL_HEADERS.signature]: "A".repeat(43),
+            },
+          },
+        )
+      ).status,
+    ).toBe(401)
+    expect(h.namespace.calls).toHaveLength(count)
+    expect(h.kv.values.has("kill")).toBe(false)
+  })
+
+  for (const kill of [true, false])
+    test(`equal-stamp flag arrival order survives a delayed first body decode (${kill})`, async () => {
+      const h = await worker()
+      expect((await h.call("flags", { kill: false }, { now: NOW - 1000 })).status).toBe(200)
+      const relay = h.namespace.objects.get("control")!.relay
+      const fetch = relay.fetch.bind(relay)
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const arrived = Promise.withResolvers<void>()
+      let arrivals = 0
+      let secondDecoded = false
+      relay.fetch = (request) => {
+        const arrival = ++arrivals
+        const json = request.json.bind(request)
+        request.json = async () => {
+          if (arrival === 1) {
+            entered.resolve()
+            await release.promise
+          } else secondDecoded = true
+          return json()
+        }
+        const operation = fetch(request)
+        if (arrival === 2) arrived.resolve()
+        return operation
+      }
+      const first = h.call("flags", { kill }, { now: NOW })
+      await entered.promise
+      const second = h.call("flags", { kill: !kill }, { now: NOW })
+      try {
+        await arrived.promise
+        expect(secondDecoded).toBe(false)
+      } finally {
+        release.resolve()
+      }
+      expect((await first).status).toBe(200)
+      expect((await second).status).toBe(200)
+      expect(secondDecoded).toBe(true)
+      expect(h.kv.values.get("kill") ?? null).toBe(kill ? null : "1")
+    })
+
+  for (const kill of [true, false])
+    test(`overlapping flag writes keep KV in arrival order when ${kill ? "put" : "delete"} waits`, async () => {
+      const h = await worker()
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const writes: boolean[] = []
+      const snapshots: unknown[] = []
+      const mutate = async (value: boolean) => {
+        writes.push(value)
+        const rows = h.namespace.objects
+          .get("control")!
+          .state.sql.rows<{ v: string }>("SELECT v FROM meta WHERE k = ?", "flags")
+        snapshots.push(rows.length ? JSON.parse(rows[0]!.v) : undefined)
+        if (writes.length === 1) {
+          entered.resolve()
+          await release.promise
+        }
+        if (value) h.kv.values.set("kill", "1")
+        else h.kv.values.delete("kill")
+      }
+      h.kv.put = async () => mutate(true)
+      h.kv.delete = async () => mutate(false)
+      const first = h.call("flags", { kill }, { now: NOW })
+      await entered.promise
+      // Observe the second arrival at the real object; it must not decode or write while KV is held.
+      const arrived = Promise.withResolvers<void>()
+      let secondDecoded = false
+      const relay = h.namespace.objects.get("control")!.relay
+      const fetch = relay.fetch.bind(relay)
+      relay.fetch = (request) => {
+        const json = request.json.bind(request)
+        request.json = () => {
+          secondDecoded = true
+          return json()
+        }
+        const operation = fetch(request)
+        arrived.resolve()
+        return operation
+      }
+      const second = h.call("flags", { kill: !kill }, { now: NOW + 1000 })
+      try {
+        await arrived.promise
+        expect(secondDecoded).toBe(false)
+        expect(writes).toEqual([kill])
+        expect(snapshots).toEqual([{ kill, signedAt: NOW, confirmed: false }])
+      } finally {
+        release.resolve()
+      }
+      expect((await first).status).toBe(200)
+      expect((await second).status).toBe(200)
+      expect(writes).toEqual([kill, !kill])
+      expect(snapshots).toEqual([
+        { kill, signedAt: NOW, confirmed: false },
+        { kill: !kill, signedAt: NOW + 1000, confirmed: false },
+      ])
+      expect(h.kv.values.get("kill") ?? null).toBe(kill ? null : "1")
+    })
+
+  for (const kill of [true, false])
+    for (const advance of [0, 1000])
+      for (const restart of [false, true])
+        test(`an unconfirmed ${kill ? "kill" : "clear"} fences stale calls and permits ${advance ? "newer" : "same-stamp"} reapply ${restart ? "after restart" : "without restart"}`, async () => {
+          const h = await worker()
+          const writes: boolean[] = []
+          let failing = true
+          const mutate = async (value: boolean) => {
+            writes.push(value)
+            if (value) h.kv.values.set("kill", "1")
+            else h.kv.values.delete("kill")
+            if (failing) throw new Error("fixture lost KV reply")
+          }
+          h.kv.put = async () => mutate(true)
+          h.kv.delete = async () => mutate(false)
+          expect(await h.call("flags", { kill }, { now: NOW + 1000 })).toMatchObject({
+            status: 503,
+            body: { error: { code: "INTERNAL_UNAVAILABLE" } },
+          })
+          const object = h.namespace.objects.get("control")!
+          if (restart) object.relay = new AccountRelay(object.state, h.env, h.runtime)
+          expect((await h.call("flags", { kill: !kill }, { now: NOW })).status).toBe(503)
+          expect(writes).toEqual([kill])
+          failing = false
+          expect(await h.call("flags", { kill }, { now: NOW + 1000 + advance })).toMatchObject({
+            status: 200,
+            body: { kill },
+          })
+          expect(writes).toEqual([kill, kill])
+          expect(await h.call("flags", { kill: !kill }, { now: NOW })).toMatchObject({
+            status: 200,
+            body: { kill, applied: false },
+          })
+          expect(h.kv.values.get("kill") ?? null).toBe(kill ? "1" : null)
+        })
+
+  test("malformed durable flag metadata refuses without resetting the fence or writing KV", async () => {
+    const h = await worker()
+    expect((await h.call("flags", { kill: true })).status).toBe(200)
+    const state = h.namespace.objects.get("control")!.state
+    let writes = 0
+    h.kv.put = async () => {
+      writes++
+    }
+    h.kv.delete = async () => {
+      writes++
+    }
+    for (const raw of [
+      "not json",
+      "null",
+      JSON.stringify({ kill: true, signedAt: NOW }),
+      JSON.stringify({ kill: true, signedAt: NOW + 0.5, confirmed: true }),
+      JSON.stringify({ kill: true, signedAt: -1000, confirmed: true }),
+      JSON.stringify({ kill: true, signedAt: NOW, confirmed: "true" }),
+    ]) {
+      state.sql.exec("UPDATE meta SET v = ? WHERE k = ?", raw, "flags")
+      expect((await h.call("flags", { kill: false }, { now: NOW + 2000 })).status).toBe(503)
+      expect(state.sql.rows("SELECT v FROM meta WHERE k = ?", "flags")).toEqual([{ v: raw }])
+      expect(h.kv.values.get("kill")).toBe("1")
+      expect(writes).toBe(0)
+    }
   })
 
   test("the kill flag is written through a control object, not an account's", async () => {
