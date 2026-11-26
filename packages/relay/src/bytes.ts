@@ -15,6 +15,29 @@ export function fromUtf8(bytes: Uint8Array): string | undefined {
   }
 }
 
+/** Read only a fixed prefix; cancellation must not delay rejecting an oversized internal request. */
+export async function readPrefix(body: ReadableStream<Uint8Array> | null, limit: number) {
+  if (!body) return { bytes: new Uint8Array(0), complete: true }
+  const reader = body.getReader()
+  const bytes = new Uint8Array(limit)
+  let size = 0
+  try {
+    while (size < limit) {
+      const next = await reader.read().catch(() => undefined)
+      if (!next) return undefined
+      if (next.done) return { bytes: bytes.subarray(0, size), complete: true }
+      const length = Math.min(next.value.byteLength, limit - size)
+      bytes.set(next.value.subarray(0, length), size)
+      size += length
+    }
+    // The incoming chunk may be much larger than the limit; only its fitting prefix is copied or retained.
+    void reader.cancel().catch(() => {})
+    return { bytes, complete: false }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 export function base64url(bytes: Uint8Array): string {
   let binary = ""
   for (const byte of bytes) binary += String.fromCharCode(byte)
