@@ -9,9 +9,8 @@
 // A playbook is one saved-workflow JSON file named after the playbook: vector-<words>.json. `check` runs the publish
 // check alone (packages/core/src/playbooks/check.ts) and needs no settings or network, so CI and the playbooks' own
 // repository can run it on every change: every command the playbook names must pass the skill command allowlist, and
-// every model is a Codium role. Loading the check creates Vector's own data, config, state, cache and temporary
-// folders (core's global.ts, through the learned skills' allowlist), as any Vector command does. `publish` runs the
-// same check, uploads the file once to the media bucket (VECTOR_R2_ACCOUNT_ID and VECTOR_R2_MEDIA_*) at
+// every model is a Codium role. `publish` runs the same check, uploads the file once to the media bucket
+// (VECTOR_R2_ACCOUNT_ID and VECTOR_R2_MEDIA_*) at
 // playbooks/<name>/<version>.json (playbooks/test/… for the test store) through a presigned upload that signs its exact
 // size, and then records it in the library of one Stripe mode's Codium store (KV_REST_API_URL and KV_REST_API_TOKEN, or
 // UPSTASH_REDIS_REST_*). A published version never changes, in the library or the bucket: a fix is a higher version.
