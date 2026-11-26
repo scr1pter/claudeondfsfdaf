@@ -1,6 +1,6 @@
 # reserve-everywhere-worktrees: durable job reservations for unattended worktrees (#153)
 
-Branch `reserve-everywhere-worktrees` (PR #153), finished locally on `cx-reserve-everywhere-worktrees`. Codex opened the draft on 2026-11-24 and left it idle, so this v2 run took it over on 2026-11-26 to finish it before the Saturday deadline. Vector Everywhere stays dormant: `VECTOR_EVERYWHERE_ENABLED` stays off and no flag changes. Files: `packages/engine/src/worktree/index.ts` and `packages/engine/test/everywhere/worktree.test.ts`.
+Branch `reserve-everywhere-worktrees` (PR #153), finished locally on `cx-reserve-everywhere-worktrees`. Codex opened the draft on 2026-11-24 and left it idle, so this v2 run took it over on 2026-11-26 to finish it so it lands in main before the redesign starts (the owner's deadline for v2 is 2027-01-01). Vector Everywhere stays dormant: `VECTOR_EVERYWHERE_ENABLED` stays off and no flag changes. Files: `packages/engine/src/worktree/index.ts` and `packages/engine/test/everywhere/worktree.test.ts`.
 
 ## 2026-11-26, a job id could be reused after a restart or a lost folder
 
