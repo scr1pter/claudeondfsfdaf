@@ -238,6 +238,8 @@ describe("Sandbox.offline", () => {
       type: "refused",
       message:
         "Vector did not run this command. With Web access None in Vector Local, commands run only inside Vector's sandbox, and bubblewrap (bwrap) is not on PATH, so no sandbox can be applied. Install bubblewrap (the bwrap command) to run commands, or change Web access in Vector Local.",
+      // The sandbox's own reason, for a caller with wording of its own (the review fix executor, SF-08).
+      reason: "bubblewrap (bwrap) is not on PATH, so no sandbox can be applied",
     })
     expect(withoutBwrapSync(() => Sandbox.offlineRefusal("linux"))).toBe(
       refused.type === "refused" ? refused.message : "",

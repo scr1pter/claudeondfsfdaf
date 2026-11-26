@@ -19,6 +19,7 @@ import { ConfigPermissionV1 } from "./permission"
 import { ConfigPluginV1 } from "./plugin"
 import { ConfigProviderV1 } from "./provider"
 import { ConfigResearchV1 } from "./research"
+import { ConfigReviewV1 } from "./review"
 import { ConfigConnectV1 } from "./connect"
 import { ConfigServerV1 } from "./server"
 import { ConfigSkillsV1 } from "./skills"
@@ -311,6 +312,11 @@ export const Info = Schema.Struct({
   connect: Schema.optional(ConfigConnectV1.Info).annotate({
     description:
       "Not available in Vector 1.99.112 or earlier, which rejects this key. Connected tools preview. Reviews run on the models you choose; GitHub is optional. A repository can only turn automatic reviews down or lower their limits.",
+  }),
+  // VS-23d (SF-15): hidden until owner Q16. The published config.json leaves it out (engine script/schema.ts).
+  review: Schema.optional(ConfigReviewV1.Info).annotate({
+    description:
+      "Review settings of yours rather than a repository's: privacy and holdback only raise what a repository asks, and zdrAttested lists the routes you attest keep no data. Read from your user config only.",
   }),
   experimental: Schema.optional(
     Schema.Struct({

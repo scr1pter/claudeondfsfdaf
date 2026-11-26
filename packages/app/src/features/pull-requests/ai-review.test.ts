@@ -1,14 +1,23 @@
 import { describe, expect, test } from "bun:test"
 import { createVectorClient } from "@vectordevai/sdk/v2/client"
-import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
-import { noteTriageUnchecked, noteVerifyUnfinished } from "@vectordevai/core/review/format"
+import { budgetDiff, parseUnifiedDiff } from "@vectordevai/core/review/diff"
+import {
+  BUDGET_ESTIMATE_UNAVAILABLE,
+  noteBudgetEstimate,
+  noteHeldBack,
+  noteIgnoreUnchecked,
+  notePrivacyRefused,
+  noteRedacted,
+  noteTriageUnchecked,
+  noteVerifyUnfinished,
+} from "@vectordevai/core/review/format"
 import { evidenceScope, type ModelCertificate } from "@vectordevai/core/review/model-evidence"
 import { noteSameLabPair } from "@vectordevai/core/review/second-lab"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
-import { parseReviewConfig } from "@vectordevai/core/review/config"
-import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
-import { buildFinalizePrompt, SCOPE } from "@vectordevai/core/review/prompt"
-import { REVIEW_REPORT_JSON_SCHEMA, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
+import { DESKTOP_DIAGNOSTICS_NOTICE, DESKTOP_STRICT_NOTICE, parseReviewConfig } from "@vectordevai/core/review/config"
+import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "@vectordevai/core/review/types"
+import { buildFinalizePrompt, MAX_TRUSTED_CHARS, SCOPE } from "@vectordevai/core/review/prompt"
+import { REVIEW_REPORT_JSON_SCHEMA, strictReportJsonSchema, VERIFY_JSON_SCHEMA } from "@vectordevai/core/review/schema"
 import {
   afterFixes,
   applyFix,
@@ -36,9 +45,11 @@ import {
   reviewCatalog,
   reviewEvents,
   reviewFooter,
+  reviewPanelResult,
   reviewSpendText,
   type ReviewSpend,
   runReview,
+  skippedText,
   trackReviewSpend,
   verificationChip,
   workflowModel,
@@ -157,6 +168,8 @@ function fakeClient(
     onAbort?: () => void
     find?: ReviewClient["find"]
     uncommitted?: string // the engine's raw diff of the working tree
+    // The engine's global config, for its review block: what GET /global/config returns, or a read that fails.
+    global?: Record<string, unknown> | "fail" | "empty"
   } = {},
 ) {
   const calls = {
@@ -165,6 +178,7 @@ function fakeClient(
     update: [] as UpdateCall[],
     abort: [] as string[],
     raw: [] as (string | undefined)[],
+    global: 0,
   }
   const replies = new Map<string, ReviewMessage[]>()
   const client: ReviewClient = {
@@ -204,6 +218,19 @@ function fakeClient(
       },
     },
     ...(options.find ? { find: options.find } : {}),
+    ...(options.global
+      ? {
+          global: {
+            config: {
+              get: async () => {
+                calls.global++
+                if (options.global === "fail") throw new Error("The engine is not answering.")
+                return options.global === "empty" ? {} : { data: options.global as Record<string, unknown> }
+              },
+            },
+          },
+        }
+      : {}),
   }
   return { client, calls }
 }
@@ -368,6 +395,366 @@ describe("review spend presentation", () => {
 })
 
 describe("runReview", () => {
+  const desktopStrictNotice =
+    'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".'
+
+  test("SF-26 desktop labels requested Brain cards on a fresh and reused ordinary review", async () => {
+    const open = (cards: "off" | "brain") =>
+      fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify({ verify: "off", cards }) } })
+    const plain = (await run(open("off").client))!
+    const notice = "Brain context cards are available in local CLI reviews. Desktop reviews omit them."
+    const active = (await run(open("brain").client))!
+    expect(active.notes).toContain(notice)
+    expect(active.report).toEqual(plain.report)
+    expect((await run(open("brain").client, { previous: plain }))?.notes).toContain(notice)
+    expect((await run(open("off").client, { previous: active }))?.notes).not.toContain(notice)
+  })
+
+  test("desktop strict requests use ordinary review and label fresh, restored and reused results", async () => {
+    const config = (guardrail?: string) => JSON.stringify({ verify: "off", ...(guardrail ? { guardrail } : {}) })
+    const execute = (guardrail?: string) =>
+      fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": config(guardrail) } })
+    const plain = execute()
+    const explicitOff = execute("off")
+    const strict = execute("strict")
+    const baseline = (await run(plain.client))!
+    const off = (await run(explicitOff.client))!
+    const ordinary = (await run(strict.client))!
+    expect(off.selection).toEqual(baseline.selection)
+    expect(off.notes).toEqual(baseline.notes)
+    expect(off.notes).not.toContain(desktopStrictNotice)
+    expect(strict.calls.prompt.map((call) => call.format)).toEqual(plain.calls.prompt.map((call) => call.format))
+    expect(strict.calls.prompt.map((call) => call.parts)).toEqual(plain.calls.prompt.map((call) => call.parts))
+    expect(ordinary.selection).toEqual(baseline.selection)
+    expect(ordinary.selection.inline).toHaveLength(1)
+    expect(ordinary).not.toHaveProperty("strict")
+    expect(ordinary.selection).not.toHaveProperty("strict")
+    expect(ordinary.notes).toEqual([...baseline.notes, desktopStrictNotice])
+
+    const old = { ...ordinary, notes: ["An earlier review note."] }
+    const reopened = execute("strict")
+    const restored = (await run(reopened.client, { previous: old, catalog: [] }))!
+    expect(restored.unchanged).toBe(true)
+    expect(restored.selection).toEqual(ordinary.selection)
+    expect(restored.notes).toEqual([...old.notes, desktopStrictNotice])
+    expect(old.notes).toEqual(["An earlier review note."])
+    const reused = (await run(reopened.client, { previous: restored, catalog: [] }))!
+    expect(reused.notes).toEqual(restored.notes)
+    const switched = fakeClient({ files: { "src/list.ts": BASE, ".vector/review.json": config("strict") } })
+    const rebuilt = (await run(switched.client, { previous: restored, catalog: [] }))!
+    expect(rebuilt.checkout.mode).toBe("rebuilt")
+    expect(rebuilt.notes).toEqual(restored.notes)
+    expect(switched.calls.create).toEqual([])
+    expect(reopened.calls.create).toEqual([])
+    const disabled = execute("off")
+    const afterStrict = (await run(disabled.client, { previous: restored }))!
+    expect(afterStrict.unchanged).not.toBe(true)
+    expect(afterStrict.notes).toEqual(baseline.notes)
+    expect(afterStrict.selection).toEqual(baseline.selection)
+  })
+
+  test("desktop strict requests disclose the limitation on early outcomes and provider refusals", async () => {
+    const configured = (other: Record<string, unknown> = {}) =>
+      fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": JSON.stringify({ guardrail: "strict", ...other }) },
+      })
+    const ignored = configured()
+    const result = (await run(ignored.client, { diff: join(lockDiff) }))!
+    expect(result.notes).toContain(desktopStrictNotice)
+    expect(result.selection).not.toHaveProperty("strict")
+    const held = configured({ holdback: "secrets" })
+    const heldResult = (await run(held.client, {
+      diff: join(fileDiff("deploy/.netrc", ["@@ -1 +1 @@", "-old", "+new"])),
+    }))!
+    expect(heldResult.notes).toContain(desktopStrictNotice)
+    const capped = configured({ maxInputTokens: 1 })
+    const stopped = (await run(capped.client))!
+    expect(stopped.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(() => reviewPanelResult(stopped)).toThrow(desktopStrictNotice)
+    const unavailable = configured()
+    await expect(run(unavailable.client, { catalog: [] })).rejects.toThrow(desktopStrictNotice)
+    const noChanges = configured()
+    await expect(run(noChanges.client, { diff: "" })).rejects.toThrow(desktopStrictNotice)
+    for (const fake of [ignored, held, capped, unavailable, noChanges]) expect(fake.calls.create).toEqual([])
+  })
+
+  test("a configured token budget requires a complete preview before any model call, including a rerun", async () => {
+    const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":500000}' } })
+    const outcome = (await run(fake.client))!
+    expect(outcome).toMatchObject({
+      partial: "budget-estimate",
+      unreviewed: ["src/list.ts", "bun.lock"],
+      sessions: [],
+      specialists: [],
+    })
+    expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(outcome.notes.join(" ")).toContain("No model request was sent.")
+    expect(() => reviewPanelResult(outcome)).toThrow(outcome.notes.join(" "))
+    expect(reviewEvents(outcome.selection, outcome.partial)).toEqual({
+      comment: false,
+      approve: false,
+      "request-changes": false,
+    })
+    expect(outcome.fileKeys).toBeUndefined()
+    expect(outcome.settingsKey).toBeUndefined()
+    for (const summary of [
+      buildDesktopSummary(outcome),
+      buildDesktopReview(outcome).body,
+      buildDesktopReview(outcome).fallbackBody,
+    ]) {
+      expect(summary).toContain(BUDGET_ESTIMATE_UNAVAILABLE)
+      expect(summary).not.toContain("No issues found")
+      expect(summary).not.toContain("Risk:")
+    }
+    const again = (await run(fake.client, { previous: outcome }))!
+    expect(again.unchanged).toBeUndefined()
+    expect(again.partial).toBe("budget-estimate")
+    expect(fake.calls.create).toEqual([])
+    expect(fake.calls.prompt).toEqual([])
+  })
+
+  test("the settings observer cannot disable token admission or inject warnings", async () => {
+    const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":1}' } })
+    const outcome = (await run(fake.client, {
+      onSettings: (observed) => {
+        observed.config.maxInputTokens = 0
+        ;(observed.warnings as string[]).push("review.privacy observer injection")
+      },
+    }))!
+    expect(outcome.partial).toBe("budget-estimate")
+    expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(outcome.notes.join(" ")).not.toContain("observer injection")
+    expect(fake.calls.create).toEqual([])
+    expect(fake.calls.prompt).toEqual([])
+  })
+
+  test("a missing desktop preview takes precedence over cached coverage and provider selection", async () => {
+    const options = { files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":500000}' } }
+    const admitted = fakeClient(options)
+    const previous = (await run(admitted.client, { estimateFirstTurn: async () => 100 }))!
+    expect(reviewPanelResult(previous)).toBe(previous)
+    expect(previous.fileKeys).toBeDefined()
+    expect(previous.dispatch).toBeDefined()
+
+    const retried = fakeClient({ ...options, uncommitted: diff })
+    const rerun = (await run(retried.client, { previous, catalog: [] }))!
+    const changes = (await runReview({ uncommitted: true, directory: "/w/project", catalog: [] }, retried.client))!
+    for (const stopped of [rerun, changes]) {
+      expect(stopped.partial).toBe("budget-estimate")
+      expect(stopped.unchanged).toBeUndefined()
+      expect(stopped.dispatch).toBeUndefined()
+      expect(stopped.fileKeys).toBeUndefined()
+      expect(stopped.settingsKey).toBeUndefined()
+      expect(() => reviewPanelResult(stopped)).toThrow("No model request was sent.")
+    }
+    expect(retried.calls.create).toEqual([])
+    expect(retried.calls.prompt).toEqual([])
+  })
+
+  test("absent and zero token caps preserve the same desktop SDK requests and reported evidence", async () => {
+    const preview: NonNullable<ReviewRunInput["estimateFirstTurn"]> = () => {
+      throw new Error("uncapped reviews must not invoke preview")
+    }
+    const before = fakeClient({ files: { "src/list.ts": HEAD } })
+    const zero = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":0}' } })
+    const a = (await run(before.client, { estimateFirstTurn: preview }))!
+    const b = (await run(zero.client, { estimateFirstTurn: preview }))!
+    expect(before.calls.create.length).toBeGreaterThan(0)
+    expect(zero.calls.create).toEqual(before.calls.create)
+    expect(zero.calls.prompt).toEqual(before.calls.prompt)
+    expect(b.report).toEqual(a.report)
+    expect(b.selection).toEqual(a.selection)
+    expect(b.dispatch).toBeUndefined()
+    expect(b.shrink).toBeUndefined()
+  })
+
+  test("a missing, invalid or failed conditional preview stops before the first specialist", async () => {
+    for (const invalid of [undefined, 0, NaN, Infinity, -10, 1.5, "error"] as const) {
+      const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":500000}' } })
+      const outcome = (await run(fake.client, {
+        estimateFirstTurn: async (request) => {
+          if (request.pass === "review") return 100
+          expect(request.pass).toBe("verify")
+          if (invalid === "error") throw new Error("preview unavailable")
+          return invalid
+        },
+      }))!
+      expect(outcome.partial).toBe("budget-estimate")
+      expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+      expect(fake.calls.create).toEqual([])
+      expect(fake.calls.prompt).toEqual([])
+    }
+  })
+
+  test("counts review, security and conditional verification together on free, local and plan models", async () => {
+    for (const costKind of ["free", "local", "plan"] as const) {
+      const fake = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":299,"security":"always"}' },
+      })
+      const model = { ...pickle, costKind }
+      const reserved: number[] = []
+      const outcome = (await run(fake.client, {
+        catalog: [model],
+        preferredModels: [modelName(model)],
+        estimateFirstTurn: async (request) => {
+          if (request.pass === "verify") reserved.push(request.candidateLimit!)
+          return 100
+        },
+      }))!
+      expect(outcome.dispatch?.passes.map((p) => p.pass)).toEqual(["review", "security", "verify"])
+      expect(reserved.every((count) => count === 20)).toBe(true)
+      expect(outcome.dispatch?.firstTurnTokens).toBe(300)
+      expect(outcome.partial).toBe("budget-estimate")
+      expect(outcome.notes[0]).toBe(noteBudgetEstimate())
+      expect(fake.calls.prompt).toEqual([])
+      expect(fake.calls.create).toEqual([])
+    }
+  })
+
+  test("a smaller changed-lines prompt really runs and the omitted context is never cached as full coverage", async () => {
+    const fake = fakeClient({
+      files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":300,"verify":"off"}' },
+    })
+    const outcome = (await run(fake.client, {
+      estimateFirstTurn: async ({ text }) => (text.includes("export function last(items: number[])") ? 400 : 300),
+    }))!
+    expect(outcome.partial).toBeUndefined()
+    expect(outcome.dispatch?.firstTurnTokens).toBe(400)
+    expect(outcome.shrink?.map((step) => [step.step, step.estimate.firstTurnTokens])).toEqual([["diff", 300]])
+    expect(fake.calls.prompt).toHaveLength(1)
+    expect(fake.calls.prompt[0]!.parts?.[0]?.text).toContain("+  return items[items.length]")
+    expect(fake.calls.prompt[0]!.parts?.[0]?.text).not.toContain("export function last(items: number[])")
+    expect(outcome.notes.join(" ")).toContain("Partial coverage")
+    expect(outcome.fileKeys).toBeUndefined()
+  })
+
+  test("checks the actual verifier first turn against the remaining allowance before opening its session", async () => {
+    const fake = fakeClient({
+      files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":400,"triageModel":"openai/gpt-5.5"}' },
+    })
+    const outcome = (await run(fake.client, {
+      estimateFirstTurn: async (request) =>
+        request.pass === "verify" && request.candidateLimit === undefined ? 301 : 100,
+    }))!
+    expect(outcome.partial).toBe("budget")
+    expect(reviewPanelResult(outcome)).toBe(outcome)
+    expect(reviewEvents(outcome.selection, outcome.partial)).toEqual({
+      comment: true,
+      approve: false,
+      "request-changes": true,
+    })
+    expect(outcome.unreviewed).toEqual(["src/list.ts"])
+    expect(outcome.cost?.costUsd).toBeGreaterThan(0)
+    expect(outcome.verification?.status).toBe("skipped")
+    expect(outcome.notes.join(" ")).toContain("remaining token budget")
+    expect(outcome.fileKeys).toBeUndefined()
+    expect(fake.calls.create.map((call) => call.internal)).toEqual(["vectorscope.review"])
+    expect(fake.calls.prompt).toHaveLength(1)
+    expect(buildDesktopReview(outcome).body).toContain("Review incomplete.")
+    expect(outcome.selection.inline).toEqual([])
+    expect(buildDesktopReview(outcome).body).not.toContain("No issues found")
+    const retry = (await run(fake.client, { previous: outcome, estimateFirstTurn: async () => 100 }))!
+    expect(retry.unchanged).toBeUndefined()
+    expect(retry.partial).toBeUndefined()
+    expect(retry.verification?.status).toBe("ok")
+    expect(fake.calls.create.map((call) => call.internal)).toEqual([
+      "vectorscope.review",
+      "vectorscope.review",
+      "vectorscope.verify",
+    ])
+  })
+
+  test("shrinking a rebuilt review retains head-only changes in the specialist, verify and judge requests", async () => {
+    const context = "// unchanged " + "x".repeat(7600)
+    const before = "export const second = '" + "a".repeat(500) + "'"
+    const after = "export const second = missingValue"
+    const firstName = "src/first.ts"
+    const secondName = "src/second.ts"
+    const diff = join(
+      fileDiff(firstName, ["@@ -1,2 +1,2 @@", " " + context, "-oldFirst()", "+newFirst()"]),
+      fileDiff(secondName, ["@@ -1 +1 @@", "-" + before, "+" + after]),
+    )
+    expect(budgetDiff(parseUnifiedDiff(diff), 8000).notInlined.map((f) => f.path)).toEqual([secondName])
+    const judge = { providerID: "google", modelID: "gemini-2.5-pro", costKind: "plan" as const }
+    const fake = fakeClient({
+      files: {
+        [firstName]: context + "\noldFirst()\n",
+        [secondName]: before + "\n",
+        ".vector/review.json": JSON.stringify({
+          maxInputTokens: 300,
+          maxDiffChars: 8000,
+          panel: true,
+          triageModel: modelName(pickle),
+          judgeModel: modelName(judge),
+        }),
+      },
+      reply: (call) =>
+        isVerify(call)
+          ? answer(verdicts(call))
+          : answer(report([{ ...offByOne, path: secondName, line: 1, evidence: [firstName + ":2"] }])),
+    })
+    const outcome = (await run(fake.client, {
+      diff,
+      catalog: [sonnet, pickle, judge],
+      estimateFirstTurn: async ({ text }) => (text.includes(context) ? 200 : 100),
+    }))!
+    expect(outcome.checkout.mode).toBe("rebuilt")
+    expect(outcome.shrink?.map((step) => step.step)).toEqual(["diff"])
+    expect(outcome.partial).toBeUndefined()
+    expect(fake.calls.create.map((call) => call.internal)).toEqual([
+      "vectorscope.review",
+      "vectorscope.verify",
+      "vectorscope.judge",
+    ])
+    for (const request of fake.calls.prompt) {
+      const text = request.parts![0]!.text
+      expect(text).toContain("+" + after)
+      expect(text).toContain("+newFirst()")
+      expect(text).not.toContain(context)
+    }
+  })
+
+  test("cancel interrupts a nonresponsive desktop preview before dispatch and while estimating a checker", async () => {
+    for (const when of ["before", "checker"] as const) {
+      const cancel = new AbortController()
+      let started!: (signal: AbortSignal) => void
+      const pending = new Promise<AbortSignal>((resolve) => {
+        started = resolve
+      })
+      const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":400}' } })
+      const result = run(fake.client, {
+        signal: cancel.signal,
+        estimateFirstTurn: async (request) => {
+          if (when === "checker" && (request.pass !== "verify" || request.candidateLimit !== undefined)) return 100
+          started(request.signal)
+          return new Promise<number>(() => {})
+        },
+      })
+      const signal = await pending
+      cancel.abort()
+      const outcome = await result
+      expect(signal.aborted).toBe(true)
+      expect(fake.calls.prompt).toHaveLength(when === "before" ? 0 : 1)
+      if (when === "before") expect(outcome).toBeUndefined()
+      else expect(outcome?.verification?.status).toBe("skipped")
+    }
+  })
+
+  test("a nonresponsive preview expires within the review timeout without opening a session", async () => {
+    const fake = fakeClient({ files: { "src/list.ts": HEAD, ".vector/review.json": '{"maxInputTokens":400}' } })
+    let signal: AbortSignal | undefined
+    const outcome = (await run(fake.client, {
+      timeoutMs: 100,
+      estimateFirstTurn: async (request) => {
+        signal = request.signal
+        return new Promise<number>(() => {})
+      },
+    }))!
+    expect(signal?.aborted).toBe(true)
+    expect(outcome.notes[0]).toBe(BUDGET_ESTIMATE_UNAVAILABLE)
+    expect(fake.calls.create).toEqual([])
+  })
+
   test("creates the session with the review rules and prompts the review agent with the schema", async () => {
     const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD } })
     const outcome = await run(client)
@@ -990,6 +1377,400 @@ describe("runReview", () => {
   })
 })
 
+// VS-23d (SF-15): the user config's hidden review block, read from the engine's global config route, and review.json
+// through mergeReviewConfig. Under privacy "zdr" the sessions' review scope says so, and the engine server holds them to
+// the route rules (engine test/server/httpapi-review-privacy.test.ts); under holdback "secrets" the runner calls the
+// same core functions Review.run does.
+describe("review privacy and holdback on the desktop (VS-23d)", () => {
+  const scopeOf = (call: PromptCall) => call.parts?.[0]?.metadata?.[SCOPE] as Record<string, unknown> | undefined
+  const configDiffOf = (header: string[], lines: string[]) => [
+    "diff --git a/.vector/review.json b/.vector/review.json",
+    ...header,
+    ...lines,
+  ]
+
+  test("without a user review block, with an empty one or one at standard, the review is the one of before", async () => {
+    const files = { "src/list.ts": HEAD, ".vector/review.json": '{"verify":"off","maxComments":5}' }
+    const agree = await Promise.all(
+      [undefined, {}, { review: {} }, { review: { privacy: "standard", holdback: "off" } }].map(async (global) => {
+        const fake = fakeClient({ files, ...(global ? { global } : {}) })
+        const outcome = await run(fake.client)
+        expect(fake.calls.global).toBe(global ? 1 : 0)
+        return { create: fake.calls.create, prompt: fake.calls.prompt, outcome: { ...outcome, durationMs: 0 } }
+      }),
+    )
+    for (const each of agree.slice(1)) expect(each).toEqual(agree[0]!)
+    expect(agree[0]!.create[0]!.permission).toEqual(reviewPermissionRules({}))
+    expect(agree[0]!.prompt.every((call) => scopeOf(call)?.privacy === undefined)).toBe(true)
+  })
+
+  test("a user config that cannot be read rejects the review before any session", async () => {
+    for (const [global, error] of [
+      ["fail", "The engine is not answering."],
+      ["empty", "Vector could not read your review settings, so it did not start the review."],
+    ] as const) {
+      const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD }, global })
+      await expect(run(client)).rejects.toThrow(error)
+      expect(calls.create).toEqual([])
+      expect(calls.prompt).toEqual([])
+    }
+  })
+
+  test("under the user config's zdr every session's scope asks for it, and the server's refusal ends the review", async () => {
+    const refused = {
+      name: "UnknownError",
+      data: {
+        message:
+          'Vector did not send this request: this review\'s privacy is "zdr", and the route rules refused it (unattested-provider). Nothing was sent.',
+      },
+    }
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      global: { review: { privacy: "zdr" } },
+      reply: () => ({ ...answer(undefined, 0), info: { role: "assistant", error: refused } }),
+    })
+    await expect(run(client)).rejects.toThrow(
+      'Vector could not finish this review: Vector did not send this request: this review\'s privacy is "zdr"',
+    )
+    expect(calls.create.map((call) => call.internal)).toEqual(["vectorscope.review"])
+    expect(calls.prompt.length).toBeGreaterThan(0)
+    for (const call of calls.prompt) expect(scopeOf(call)).toMatchObject({ privacy: "zdr" })
+  })
+
+  test("review.json's zdr alone asks for it too, and a model its names refuse is refused before any session", async () => {
+    const files = { "src/list.ts": HEAD, ".vector/review.json": '{"privacy":"zdr","verify":"off"}' }
+    const held = fakeClient({ files })
+    const outcome = await run(held.client)
+    expect(scopeOf(held.calls.prompt[0]!)).toMatchObject({ privacy: "zdr" })
+    const plain = fakeClient({ files: { ...files, ".vector/review.json": '{"verify":"off"}' } })
+    const before = await run(plain.client)
+    // The settings key moves with the privacy, so a review made without it is not reused under it, wherever it comes
+    // from: the same files under the user config's zdr get another key too.
+    expect(outcome?.settingsKey).not.toBe(before?.settingsKey)
+    const raised = await run(
+      fakeClient({
+        files: { ...files, ".vector/review.json": '{"verify":"off"}' },
+        global: { review: { privacy: "zdr" } },
+      }).client,
+    )
+    expect(raised?.settingsKey).not.toBe(before?.settingsKey)
+    expect(scopeOf(plain.calls.prompt[0]!)?.privacy).toBeUndefined()
+
+    const free: ReviewModel = { providerID: "vector", modelID: "acme/coder:free", costKind: "free", context: 200_000 }
+    const codium: ReviewModel = {
+      providerID: "vector-plan",
+      modelID: "vector-flash",
+      costKind: "codium",
+      context: 200_000,
+    }
+    for (const [model, refusal] of [
+      [free, "free-model"],
+      [codium, "codium-unaccepted"],
+    ] as const) {
+      const { client, calls } = fakeClient({ files })
+      await expect(run(client, { catalog: [model], preferredModels: [modelName(model)] })).rejects.toThrow(
+        notePrivacyRefused({ model: modelName(model), refusal, attempts: 0 }).replaceAll("**", ""),
+      )
+      expect(calls.create).toEqual([])
+    }
+  })
+
+  test("a pull request that drops the base's zdr from review.json is still held to it, wherever the checkout is", async () => {
+    const modified = configDiffOf(
+      ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+      ["@@ -1 +1 @@", '-{"privacy":"zdr","minConfidence":0.99}', '+{"minConfidence":0.99}'],
+    )
+    const deleted = configDiffOf(
+      ["deleted file mode 100644", "index 1111111..0000000", "--- a/.vector/review.json", "+++ /dev/null"],
+      ["@@ -1 +0,0 @@", '-{"privacy":"zdr"}'],
+    )
+    const renamed = [
+      "diff --git a/.vector/review.json b/.vector/old-review.json",
+      "similarity index 50%",
+      "rename from .vector/review.json",
+      "rename to .vector/old-review.json",
+      "index 1111111..2222222 100644",
+      "--- a/.vector/review.json",
+      "+++ b/.vector/old-review.json",
+      "@@ -1 +1 @@",
+      '-{"privacy":"zdr"}',
+      "+{}",
+    ]
+    // A longer file whose change leaves the base's privacy outside the hunk: the checkout at either end still shows it.
+    const outside = configDiffOf(
+      ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+      ["@@ -5,1 +5,1 @@", '-  "minConfidence": 0.5', '+  "minConfidence": 0.9'],
+    )
+    const long = (confidence: string) =>
+      [
+        "{",
+        '  "privacy": "zdr",',
+        '  "verify": "off",',
+        '  "maxComments": 5,',
+        `  "minConfidence": ${confidence}`,
+        "}",
+        "",
+      ].join("\n")
+    const cases: [string, string[], Record<string, string>][] = [
+      ["checkout at the base", modified, { ".vector/review.json": '{"privacy":"zdr","minConfidence":0.99}\n' }],
+      ["checkout at the head", modified, { ".vector/review.json": '{"minConfidence":0.99}\n' }],
+      ["checkout elsewhere: the hunk's base side", modified, { ".vector/review.json": '{"verify":"all"}\n' }],
+      ["deleted by the pull request", deleted, {}],
+      ["renamed away, checkout at the head", renamed, { ".vector/old-review.json": "{}\n" }],
+      ["outside the hunk, checkout at the base", outside, { ".vector/review.json": long("0.5") }],
+      ["outside the hunk, checkout at the head", outside, { ".vector/review.json": long("0.9") }],
+    ]
+    for (const [name, lines, files] of cases) {
+      const { client, calls } = fakeClient({ files: { "src/list.ts": HEAD, ...files } })
+      const outcome = await run(client, { diff: join(listDiff, lines) })
+      expect({ name, scope: scopeOf(calls.prompt[0]!)?.privacy }).toEqual({ name, scope: "zdr" })
+      // The base's other settings are not read from a review.json the pull request changes: its minConfidence of 0.99
+      // would drop the finding at 0.95, and the default keeps it.
+      expect({ name, listed: outcome?.selection.inline.length }).toEqual({ name, listed: 1 })
+    }
+    // A pull request that adds review.json raises nothing from a base that had none.
+    const added = configDiffOf(
+      ["new file mode 100644", "index 0000000..2222222", "--- /dev/null", "+++ b/.vector/review.json"],
+      ["@@ -0,0 +1 @@", '+{"privacy":"standard"}'],
+    )
+    const { client, calls } = fakeClient({
+      files: { "src/list.ts": HEAD, ".vector/review.json": '{"privacy":"standard"}\n' },
+    })
+    await run(client, { diff: join(listDiff, added) })
+    expect(scopeOf(calls.prompt[0]!)?.privacy).toBeUndefined()
+  })
+
+  // I-1: with the checkout at neither end, the base side of the hunks is a fragment that is not JSON. Only where it sets
+  // privacy or holdback is read from it, so a mention anywhere else, or a "standard" it sets, leaves the review the
+  // one of before SF-15: parseReviewConfig's defaults for a pull request that changes review.json.
+  test("a pull request's review.json hunks that set neither key leave the review as before, with the checkout elsewhere", async () => {
+    const hunk = (lines: string[]) =>
+      configDiffOf(
+        ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+        ["@@ -2,3 +2,3 @@", ...lines, '-  "minConfidence": 0.5', '+  "minConfidence": 0.9'],
+      )
+    // The control's hunk names neither key; the variants' lines, spelled in its place, give its prompts.
+    const control = ['   "ignore": ["docs/other/**"],', '   "verify": "all",']
+    const variants = [
+      ['   "ignore": ["docs/privacy/**"],', '   "privacy": "standard",'],
+      ['   "ignore": ["docs/privacy/**"],', '   "skipLabels": ["holdback", "privacy"],'],
+    ]
+    const review = async (lines: string[]) => {
+      const settings: ReviewConfig[] = []
+      const { client, calls } = fakeClient({
+        files: { "src/list.ts": HEAD, ".vector/review.json": '{"verify":"off"}\n' },
+      })
+      const outcome = await run(client, {
+        diff: join(listDiff, hunk(lines)),
+        onSettings: (read) => settings.push(read.config),
+      })
+      // In the prompts' JSON, where each line is spelled escaped.
+      const escaped = (line: string) => JSON.stringify(line.trim()).slice(1, -1)
+      const spelled = (text: string) =>
+        lines.reduce((result, line, index) => result.replaceAll(escaped(line), escaped(control[index]!)), text)
+      return {
+        config: settings[0],
+        create: calls.create,
+        prompt: JSON.parse(spelled(JSON.stringify(calls.prompt))) as PromptCall[],
+        settingsKey: outcome?.settingsKey,
+        notes: outcome?.notes,
+      }
+    }
+    const before = await review(control)
+    expect(before.config).toEqual(parseReviewConfig({ json: undefined, trigger: "desktop" }).config)
+    expect(before.prompt.every((call) => scopeOf(call)?.privacy === undefined)).toBe(true)
+    expect(before.create[0]!.permission).toEqual(reviewPermissionRules({}))
+    for (const lines of variants) expect({ lines, ...(await review(lines)) }).toEqual({ lines, ...before })
+  })
+
+  test("a fragment that sets a key, cuts its value off or gives no level reads as the stricter setting", async () => {
+    const elsewhere = { "src/list.ts": HEAD, ".vector/review.json": '{"verify":"off"}\n' }
+    const cases: [string, string[], Partial<ReviewConfig>, string[]][] = [
+      ["sets zdr", ['   "privacy": "zdr",', '-  "minConfidence": 0.5'], { privacy: "zdr" }, []],
+      [
+        "cut off",
+        ['-  "minConfidence": 0.5', '   "holdback":'],
+        { holdback: "secrets" },
+        ['.vector/review.json could not be read and mentions "holdback"; using "secrets", the stricter setting.'],
+      ],
+      [
+        "no level",
+        ['-  "privacy": "max",', '   "minConfidence": 0.5'],
+        { privacy: "zdr" },
+        ['.vector/review.json: "privacy" must be "standard" or "zdr"; using "zdr", the stricter setting.'],
+      ],
+    ]
+    for (const [name, lines, raised, notes] of cases) {
+      const settings: ReviewConfig[] = []
+      const { client } = fakeClient({ files: elsewhere })
+      const outcome = await run(client, {
+        diff: join(
+          listDiff,
+          configDiffOf(
+            ["index 1111111..2222222 100644", "--- a/.vector/review.json", "+++ b/.vector/review.json"],
+            ["@@ -4,2 +4,1 @@", ...lines],
+          ),
+        ),
+        onSettings: (read) => settings.push(read.config),
+      })
+      const config = settings[0]!
+      expect({ name, privacy: config.privacy, holdback: config.holdback }).toEqual({
+        name,
+        privacy: raised.privacy,
+        holdback: raised.holdback,
+      })
+      // The warning that says why is in the outcome's notes.
+      expect({ name, notes: outcome?.notes.filter((note) => note.startsWith(".vector/review.json")) }).toEqual({
+        name,
+        notes,
+      })
+    }
+  })
+
+  test("the privacy settings' warnings reach the outcome's notes and a refusal's text", async () => {
+    const warning =
+      'review.privacy in the global config must be "standard" or "zdr"; using "zdr", the stricter setting.'
+    const held = fakeClient({ files: { "src/list.ts": HEAD }, global: { review: { privacy: 1 } } })
+    const outcome = await run(held.client)
+    expect(scopeOf(held.calls.prompt[0]!)).toMatchObject({ privacy: "zdr" })
+    expect(outcome?.notes).toContain(warning)
+    const free: ReviewModel = { providerID: "vector", modelID: "acme/coder:free", costKind: "free", context: 200_000 }
+    const refused = fakeClient({ files: { "src/list.ts": HEAD }, global: { review: { privacy: 1 } } })
+    await expect(run(refused.client, { catalog: [free], preferredModels: [modelName(free)] })).rejects.toThrow(
+      `${notePrivacyRefused({ model: modelName(free), refusal: "free-model", attempts: 0 }).replaceAll("**", "")} ${warning}`,
+    )
+    expect(refused.calls.create).toEqual([])
+  })
+
+  test("under holdback secrets a credential file is held back and values are redacted, from either source", async () => {
+    const ghp = "ghp_" + "a1B2".repeat(9)
+    const netrcDiff = fileDiff("deploy/.netrc", [
+      "@@ -1 +1 @@",
+      "-machine example.test login old",
+      "+machine example.test login ci password hunter2",
+    ])
+    const tokenDiff = fileDiff("src/token.ts", ["@@ -0,0 +1 @@", `+export const token = "${ghp}"`])
+    const onHeld = { ...offByOne, path: "deploy/.netrc", line: 1, title: "The password is committed" }
+    for (const source of ["global", "review.json"] as const) {
+      const fake = fakeClient({
+        files: {
+          "src/list.ts": HEAD,
+          "src/token.ts": `export const token = "${ghp}"\n`,
+          "deploy/.netrc": "machine example.test login ci password hunter2\n",
+          ...(source === "review.json" ? { ".vector/review.json": '{"holdback":"secrets"}' } : {}),
+        },
+        ...(source === "global" ? { global: { review: { holdback: "secrets" } } } : {}),
+        find: {
+          text: async () => ({
+            data: [{ path: { text: "src/use.ts" }, lines: { text: `use("${ghp}", last(items))` }, line_number: 4 }],
+          }),
+        },
+        reply: (input) => (isVerify(input) ? answer(verdicts(input)) : answer(report([offByOne, onHeld]))),
+      })
+      const outcome = (await run(fake.client, {
+        pr: { ...pr, body: `Rotated ${ghp}.`, comments: [{ author: "bob", body: `Is ${ghp} still live?` }] },
+        diff: join(listDiff, netrcDiff, tokenDiff),
+        checks: [{ name: "unit", conclusion: "failure", excerpt: `request failed with ${ghp}` }],
+      }))!
+      const texts = fake.calls.prompt.map((call) => call.parts?.[0]?.text ?? "")
+      expect({ source, leaked: texts.filter((text) => text.includes(ghp) || text.includes("hunter2")).length }).toEqual(
+        {
+          source,
+          leaked: 0,
+        },
+      )
+      expect(texts[0]).toContain("[redacted]")
+      expect(texts[0]).toContain("were removed before sending")
+      expect(outcome.skipped).toContainEqual({ path: "deploy/.netrc", reason: "held-back" })
+      expect(outcome.files.map((file) => file.path)).not.toContain("deploy/.netrc")
+      expect(outcome.notes).toEqual(
+        expect.arrayContaining([
+          noteHeldBack(["deploy/.netrc"])!,
+          noteRedacted(["src/token.ts"])!,
+          noteIgnoreUnchecked(),
+        ]),
+      )
+      // The sessions' rules deny the read tool the credential files and the held path, so the engine's tools redact.
+      const rules = reviewPermissionRules({ holdback: "secrets", held: ["deploy/.netrc"] })
+      for (const call of fake.calls.create) expect(call.permission).toEqual(rules)
+      // The finding on the held path never reaches the double-check, and is not listed.
+      expect(texts.filter((_, index) => isVerify(fake.calls.prompt[index]!)).join("")).not.toContain(onHeld.title)
+      const listed = [...outcome.selection.inline, ...outcome.selection.outsideDiff, ...outcome.selection.overflow]
+      expect(listed.map((finding) => finding.path)).not.toContain("deploy/.netrc")
+    }
+  })
+
+  test("when holdback leaves nothing to send, no session is created and the held files are skipped", async () => {
+    const netrcDiff = fileDiff("deploy/.netrc", ["@@ -1 +1 @@", "-machine a login old", "+machine a login new"])
+    const { client, calls } = fakeClient({
+      files: { "deploy/.netrc": "machine a login new\n" },
+      global: { review: { holdback: "secrets" } },
+    })
+    const outcome = (await run(client, { diff: join(netrcDiff) }))!
+    expect(calls.create).toEqual([])
+    expect(outcome.skipped).toEqual([{ path: "deploy/.netrc", reason: "held-back" }])
+    expect(outcome.files).toEqual([])
+    expect(outcome.notes).toEqual([noteHeldBack(["deploy/.netrc"])!, noteIgnoreUnchecked()])
+  })
+
+  test("holdback keeps the finding but withholds placeholder edits from desktop Apply and GitHub", async () => {
+    const suggestion = '  return items[items.length - 1] ?? "[redacted]"'
+    const options = {
+      files: { "src/list.ts": HEAD },
+      reply: (call: PromptCall) =>
+        isVerify(call) ? answer(verdicts(call)) : answer(report([{ ...offByOne, suggestion }])),
+    }
+    const ordinary = (await run(fakeClient(options).client))!
+    expect(findingGroups(ordinary)[0]?.findings[0]?.apply?.after).toEqual([suggestion])
+    expect(buildDesktopReview(ordinary, pr.url).comments[0]?.body).toContain("```suggestion")
+
+    const global = { review: { holdback: "secrets" } }
+    const held = (await run(fakeClient({ ...options, global }).client))!
+    const cached = fakeClient({ ...options, global })
+    const previous = { ...ordinary, settingsKey: held.settingsKey }
+    const reused = (await run(cached.client, { previous }))!
+    expect(reused.unchanged).toBe(true)
+    expect(cached.calls.prompt).toEqual([])
+    const changed = fakeClient({
+      files: { ...options.files, "src/auth/login.ts": "export const retries = 3\n" },
+      global,
+      reply: () => answer(report([])),
+    })
+    const carried = (await run(changed.client, { diff: join(listDiff, authDiff), previous }))!
+    expect(carried.carried).toBe(1)
+
+    for (const outcome of [held, reused, carried]) {
+      const finding = outcome.selection.inline[0]!
+      expect(finding.title).toBe(offByOne.title)
+      expect(finding.verified).toBe(true)
+      expect(finding.suggestion).toBeUndefined()
+      expect(outcome.report.findings[0]?.suggestion).toBeUndefined()
+      expect(findingGroups(outcome)[0]?.findings[0]?.apply).toBeUndefined()
+      const comment = buildDesktopReview(outcome, pr.url).comments[0]!.body
+      expect(comment).toContain(offByOne.title)
+      expect(comment).not.toContain("```suggestion")
+    }
+
+    const safe = (await run(fakeClient({ files: options.files, global }).client))!
+    expect(findingGroups(safe)[0]?.findings[0]?.apply?.after).toEqual([offByOne.suggestion])
+    expect(buildDesktopReview(safe, pr.url).comments[0]?.body).toContain("```suggestion")
+  })
+
+  test("holdback withholds a suggestion GitHub would turn into a placeholder", async () => {
+    const token = "ghp_" + "a1B2".repeat(9)
+    const suggestion = `  return items[items.length - 1] ?? "${token}"`
+    const { client } = fakeClient({
+      files: { "src/list.ts": HEAD },
+      global: { review: { holdback: "secrets" } },
+      reply: (call) => isVerify(call) ? answer(verdicts(call)) : answer(report([{ ...offByOne, suggestion }])),
+    })
+    const outcome = (await run(client))!
+    expect(outcome.selection.inline[0]?.suggestion).toBeUndefined()
+    expect(findingGroups(outcome)[0]?.findings[0]?.apply).toBeUndefined()
+    expect(buildDesktopReview(outcome, pr.url).comments[0]?.body).not.toContain("```suggestion")
+  })
+})
+
 describe("uncommitted changes", () => {
   // An untracked file, as `git diff --no-index /dev/null <file>` prints it after the tracked changes.
   const untracked = [
@@ -1231,6 +2012,16 @@ describe("models", () => {
 })
 
 describe("showing and posting", () => {
+  // VS-34 (SF-13a): the label only. The desktop runner records no held-back skip yet (SF-13b decides its half).
+  test("names a file held back from the model among the files not reviewed", () => {
+    expect(
+      skippedText([
+        { path: "config/prod/.envrc", reason: "held-back" },
+        { path: "bun.lock", reason: "lockfile" },
+      ]),
+    ).toBe("config/prod/.envrc (held back) · bun.lock (lockfile)")
+  })
+
   test("groups findings by severity, with each fix as a diff against the anchored code", async () => {
     // In its own file: a nit within 3 lines of the blocking finding would be deduped into it by location.
     const namesDiff = fileDiff("src/names.ts", ["@@ -1 +1 @@", "-export const i = 0", "+export const index = 0"])
@@ -2513,6 +3304,28 @@ describe("model evidence (VS-07)", () => {
       "This checkout's `.vector/review.json` names `vector/openrouter/free`. Automatic reviews read the copy committed on the pull request's base branch and run a model named there instead of `anthropic/claude-sonnet-4-5`, so these notes are about `vector/openrouter/free` and hold only when that copy names it too.",
       "`vector/openrouter/free` is a router: each request may be answered by a different model, so no evaluation applies to it.",
     ])
+
+    // Under privacy "zdr" the engine's scope is the zdr route's (Review.run, VS-23c), so the card applies only a
+    // certificate made on that route, as the engine does, and says why a standard-route one does not apply.
+    // parseReviewConfig never sets `privacy` (a sourced key, mergeReviewConfig's), so the settings are given as
+    // mergeReviewConfig returns them; the policy is the same, so only the route differs between the two certificates.
+    const zdr = { ...warn, privacy: "zdr" as const }
+    expect(parsed({ modelEvidence: "warn", privacy: "zdr" })).toEqual(warn)
+    const standard = certificate("anthropic/claude-sonnet-4-5", "engine", zdr)
+    expect(
+      workflowModel(["anthropic/claude-sonnet-4-5"], providers, { evidence: zdr, now: NOW, certificates: [standard] })
+        ?.warnings,
+    ).toEqual([
+      local,
+      "The VectorScope evaluation of `anthropic/claude-sonnet-4-5` on record (`vs-test`) was made with another privacy setting, so it does not apply here.",
+    ])
+    expect(
+      workflowModel(["anthropic/claude-sonnet-4-5"], providers, {
+        evidence: zdr,
+        now: NOW,
+        certificates: [{ ...standard, route: "zdr" }],
+      }),
+    ).toEqual(today)
   })
 })
 
@@ -2775,4 +3588,254 @@ test("failed mixed review retains own receipts when no own token counters arrive
     codium: true,
     partial: true,
   })
+})
+
+describe("desktop rule citations (VS-43)", () => {
+  const strict = { review: { ruleCheck: "strict" } }
+  const quote = "Leave an empty list unchanged."
+
+  test("unset and explicit off send identical requests and save identical results", async () => {
+    const reviewWith = async (global: Record<string, unknown>) => {
+      const { calls, client } = fakeClient({ global, files: { "src/list.ts": HEAD, "AGENTS.md": quote } })
+      const outcome = await run(client, { now: () => 100 })
+      return { create: calls.create, prompt: calls.prompt, outcome }
+    }
+    const ordinary = await reviewWith({ review: {} })
+    expect(await reviewWith({ review: { ruleCheck: "off" } })).toEqual(ordinary)
+    expect(ordinary.prompt[0]?.format?.schema).toBe(REVIEW_REPORT_JSON_SCHEMA)
+    expect(ordinary.outcome?.selection.inline).toHaveLength(1)
+  })
+
+  test("forecasts the structured rule schema actually sent and preserves the desktop guardrail notice", async () => {
+    const files = {
+      "src/list.ts": HEAD,
+      "AGENTS.md": quote,
+      ".vector/review.json": '{"maxInputTokens":200000,"guardrail":"strict"}',
+    }
+    const reply = (call: PromptCall) =>
+      isVerify(call)
+        ? answer(verdicts(call))
+        : answer(report([{ ...offByOne, rule: { source: "repository_instructions", quote } }]))
+    const fake = fakeClient({ global: strict, files, reply })
+    const forecasts = new Map<string, unknown>()
+    const input = {
+      estimateFirstTurn: async (request: Parameters<NonNullable<ReviewRunInput["estimateFirstTurn"]>>[0]) => {
+        forecasts.set(request.pass, request.format)
+        return 100
+      },
+    }
+    const result = (await run(fake.client, input))!
+    const request = fake.calls.prompt[0]!
+    expect(forecasts.get("review")).toEqual(request.format)
+    expect(request.format?.schema).toEqual(strictReportJsonSchema({ ruleCheck: "strict" }))
+    expect(forecasts.get("verify")).toEqual(fake.calls.prompt.find(isVerify)?.format)
+    expect(result.notes).toContain(DESKTOP_STRICT_NOTICE)
+    expect(result.selection.inline[0]?.rule).toBe(quote)
+    const old = { ...result, notes: result.notes.filter((note) => note !== DESKTOP_STRICT_NOTICE) }
+    const cache = fakeClient({ global: strict, files, reply })
+    const retained = (await run(cache.client, { ...input, previous: old }))!
+    expect(retained.unchanged).toBe(true)
+    expect(retained.notes).toContain(DESKTOP_STRICT_NOTICE)
+    expect(retained.report.findings[0]?.rulesSource).toBe("working tree")
+    expect(cache.calls.prompt).toEqual([])
+  })
+
+  test("checks working-tree citations before verification, posting and saving", async () => {
+    const extra = ["src/missing.ts", "src/style.ts", "src/docs.ts", "src/outside.ts"]
+    const bad = "FORGED_RULE_SENTINEL"
+    const paths = [{ path: "src/list.ts", instructions: quote }]
+    const files = {
+      "src/list.ts": HEAD,
+      ...Object.fromEntries(extra.map((path) => [path, "after\n"])),
+      ".vector/review.json": JSON.stringify({ paths, security: "off", nits: true }),
+    }
+    const finding = (path: string, category: string, title: string, source: string, text: string) => ({
+      ...offByOne,
+      path,
+      category,
+      title,
+      line: path === "src/list.ts" ? 2 : 1,
+      rule: { source, quote: text, lines: { start: 1, end: 1 } },
+    })
+    const fake = fakeClient({
+      global: strict,
+      files,
+      reply: (call) =>
+        isVerify(call)
+          ? answer(verdicts(call))
+          : answer(
+              report([
+                finding("src/list.ts", "maintainability", "Preserve empty list", "paths[0]", quote),
+                finding(extra[0]!, "bug", "Broken empty return", "review_rules", bad),
+                finding(extra[1]!, "style", "Invented rule only", "scoped:rules.md", bad),
+                finding(extra[2]!, "docs", "Misquoted docs rule", "review_rules", bad),
+                finding(extra[3]!, "maintainability", "Wrong directory", "paths[0]", quote),
+              ]),
+            ),
+    })
+    const outcome = (await run(fake.client, {
+      diff: join(listDiff, ...extra.map((path) => fileDiff(path, ["@@ -1 +1 @@", "-before", "+after"]))),
+    }))!
+    const primary = fake.calls.prompt[0]!
+    expect(primary.format?.schema).toEqual(strictReportJsonSchema({ ruleCheck: "strict" }))
+    const prompt = primary.parts![0]!.text
+    expect(prompt).toContain('<review_rules source="working tree">')
+    expect(prompt).toContain("paths[0]")
+    expect(prompt.toLowerCase()).toContain("cite a rule only by quoting its smallest supporting line range")
+    const verifier = fake.calls.prompt.find(isVerify)!.parts![0]!.text
+    expect(verifier).toContain("Broken empty return")
+    for (const forbidden of [bad, "Invented rule only", "Misquoted docs rule", "Wrong directory"]) {
+      expect(verifier).not.toContain(forbidden)
+      expect(JSON.stringify(outcome.report.findings)).not.toContain(forbidden)
+      expect(JSON.stringify(buildDesktopReview(outcome, pr.url))).not.toContain(forbidden)
+    }
+    const accepted = outcome.selection.inline.find((item) => item.path === "src/list.ts")!
+    expect(accepted).toMatchObject({
+      severity: "concern",
+      verified: true,
+      rule: quote,
+      rulesSource: "working tree",
+      citation: { source: { kind: "paths", index: 0 }, quote },
+    })
+    expect(outcome.selection.inline.find((item) => item.path === extra[0])).toMatchObject({
+      severity: "blocking",
+      verified: true,
+    })
+    expect(outcome.selection.inline.find((item) => item.path === extra[0])?.rule).toBeUndefined()
+    expect(outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 3 })
+    expect(outcome.notes.join(" ")).toMatch(/stripped 1/i)
+    expect(buildDesktopReview(outcome, pr.url).comments.find((item) => item.path === "src/list.ts")?.body).toContain(
+      "paths[0] (working tree)",
+    )
+  })
+
+  test("never credits a pull request for its new instruction or text clipped off the wire", async () => {
+    const added = "Require an extra switch in this patch."
+    const clipped = "Require the hidden end of the instructions."
+    const cases = [
+      {
+        instructions: added,
+        text: added,
+        diff: join(listDiff, fileDiff("AGENTS.md", ["@@ -1 +1 @@", "-Old heading", "+" + added])),
+        reason: "source",
+      },
+      {
+        instructions: "x".repeat(MAX_TRUSTED_CHARS) + "\n\n" + clipped,
+        text: clipped,
+        diff: join(listDiff),
+        reason: "clipped",
+      },
+    ]
+    for (const item of cases) {
+      const fake = fakeClient({
+        global: strict,
+        files: { "src/list.ts": HEAD, "AGENTS.md": item.instructions, ...NO_VERIFY },
+        reply: () =>
+          answer(
+            report([{ ...offByOne, category: "docs", rule: { source: "repository_instructions", quote: item.text } }]),
+          ),
+      })
+      const outcome = (await run(fake.client, { diff: item.diff }))!
+      const instructions = fake.calls.prompt[0]!.parts![0]!.text.match(
+        /<repository_instructions [^>]*>([\s\S]*?)<\/repository_instructions>/,
+      )?.[1]
+      expect(instructions ?? "").not.toContain(item.text)
+      expect(outcome.selection.inline).toEqual([])
+      expect(outcome.report.findings).toEqual([])
+      expect(outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+      expect(outcome.notes.join(" ")).toContain(item.reason)
+    }
+  })
+
+  test("suppresses a secret-bearing rule block from both the wire and the proof", async () => {
+    const secret = "ghp_" + "x".repeat(36)
+    const fake = fakeClient({
+      global: { review: { ruleCheck: "strict", holdback: "secrets" } },
+      files: { "src/list.ts": HEAD, "AGENTS.md": quote + "\n\nPrivate: " + secret, ...NO_VERIFY },
+      reply: () =>
+        answer(report([{ ...offByOne, category: "docs", rule: { source: "repository_instructions", quote } }])),
+    })
+    const outcome = (await run(fake.client))!
+    expect(JSON.stringify(fake.calls.prompt)).not.toContain(secret)
+    expect(fake.calls.prompt[0]!.parts![0]!.text).not.toContain("<repository_instructions source=")
+    expect(outcome.context?.instructions).toBe(false)
+    expect(outcome.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+  })
+
+  // scope-finish takeover (2026-11-23): with ruleCheck off (the default) no citation refers to these blocks, so under
+  // holdback they are sent with their values redacted in place. They used to be sent raw beside the redacted diff.
+  test("with ruleCheck off, holdback redacts the instruction and rule blocks in place", async () => {
+    const secret = "ghp_" + "y".repeat(36)
+    const fake = fakeClient({
+      global: { review: { holdback: "secrets" } },
+      files: {
+        "src/list.ts": HEAD,
+        "AGENTS.md": `Deploy with ${secret} only.`,
+        ".vector/review.md": `Never log ${secret} anywhere.`,
+        ...NO_VERIFY,
+      },
+      reply: () => answer(report([])),
+    })
+    await run(fake.client)
+    const sent = JSON.stringify(fake.calls.prompt)
+    expect(sent).not.toContain(secret)
+    expect(sent).toContain("Deploy with [redacted] only.")
+    expect(sent).toContain("Never log [redacted] anywhere.")
+  })
+
+  test("revalidates cached authority and applies strict on the restricted finalize turn", async () => {
+    const files = { "src/list.ts": HEAD, "AGENTS.md": quote, ...NO_VERIFY }
+    const reply = () => answer(report([{ ...offByOne, rule: { source: "repository_instructions", quote } }]))
+    const device = fakeClient({ global: strict, files, reply })
+    const previous = (await run(device.client))!
+    const cleanCache = fakeClient({ global: strict, files })
+    const cached = (await run(cleanCache.client, { previous }))!
+    expect(cached.unchanged).toBe(true)
+    expect(cached.report.findings[0]?.rulesSource).toBe("working tree")
+    expect(cleanCache.calls.prompt).toEqual([])
+    const tainted = structuredClone(previous)
+    tainted.selection.inline[0]!.rule = "A stale displayed citation"
+    let first = true
+    const retry = fakeClient({
+      global: strict,
+      files,
+      reply: () => {
+        if (first) {
+          first = false
+          return answer({ broken: true })
+        }
+        return reply()
+      },
+    })
+    const result = (await run(retry.client, { previous: tainted }))!
+    expect(retry.calls.prompt).toHaveLength(2)
+    expect(retry.calls.prompt[1]?.parts?.[0]?.text).toBe(buildFinalizePrompt())
+    expect(retry.calls.prompt[1]?.format?.schema).toEqual(strictReportJsonSchema({ ruleCheck: "strict" }))
+    expect(result.selection.inline[0]?.rule).toBe(quote)
+    expect(JSON.stringify(result)).not.toContain("A stale displayed citation")
+    const localConfig = fakeClient({
+      files: { ...files, ".vector/review.json": '{"ruleCheck":"strict","verify":"off"}' },
+    })
+    const off = (await run(localConfig.client, { previous }))!
+    expect(localConfig.calls.prompt[0]?.format?.schema).toBe(REVIEW_REPORT_JSON_SCHEMA)
+    expect(off.settingsKey).not.toBe(previous.settingsKey)
+  })
+})
+
+test("desktop reviews report Linux-only offline diagnostics on fresh and cached runs", async () => {
+  const files = { "src/list.ts": HEAD }
+  const baseline = fakeClient({ files })
+  const ordinary = (await run(baseline.client))!
+  const current = fakeClient({ files, global: { review: { diagnostics: "offline" } } })
+  const result = (await run(current.client, { previous: ordinary }))!
+  expect(result.notes).toContain(DESKTOP_DIAGNOSTICS_NOTICE)
+  expect(result.selection).toEqual(ordinary.selection)
+  expect(JSON.stringify(current.calls.prompt)).not.toContain("untrusted_offline_diagnostics")
+  const reusable = fakeClient({ files, global: { review: { diagnostics: "offline" } } })
+  const previous = { ...result, notes: [] }
+  expect((await run(reusable.client, { previous }))!.notes).toContain(DESKTOP_DIAGNOSTICS_NOTICE)
+  await expect(run(reusable.client, { diff: "" })).rejects.toThrow(DESKTOP_DIAGNOSTICS_NOTICE)
+  expect(reusable.calls.prompt).toEqual([])
+  const disabled = fakeClient({ files, global: { review: { diagnostics: "off" } } })
+  expect((await run(disabled.client, { previous: result }))!.notes).not.toContain(DESKTOP_DIAGNOSTICS_NOTICE)
 })

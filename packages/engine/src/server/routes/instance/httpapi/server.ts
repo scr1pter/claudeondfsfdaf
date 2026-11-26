@@ -17,6 +17,8 @@ import { PlaybookClient } from "@/orchestration/playbooks"
 import { HostedFollow } from "@/hosted/follow"
 import { CloudBrain } from "@/brain/run-bundle"
 import { ReviewOwner } from "@/review/owner"
+import { ReviewSessionAdmissionLive } from "@/review/session-admission"
+import { ReviewFixOwner } from "@/review/fix-owner"
 import { ReviewMemoryOwner } from "@/review/memory-owner"
 import { ConnectOwner } from "@/connect/owner"
 import { TaskNotify } from "@/task/notify"
@@ -310,6 +312,9 @@ const app = LayerNode.group([
   TaskManager.node,
   WorkflowOwner.node,
   ReviewOwner.node,
+  // The V2 session routes (server package) read a review session's privacy through this port.
+  ReviewSessionAdmissionLive.node,
+  ReviewFixOwner.node,
   SessionCodeReview.node,
   ReviewMemoryOwner.node,
   ConnectOwner.node,

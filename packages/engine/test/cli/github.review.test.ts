@@ -12,6 +12,8 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { buildAnchorIndex, fromGitHubFiles, parseUnifiedDiff, type GitHubPrFile } from "@vectordevai/core/review/diff"
 import {
+  BUDGET_ESTIMATE_UNAVAILABLE,
+  noteBudgetEstimate,
   noteCannotStart,
   noteCommitGone,
   noteMonthBudget,
@@ -723,6 +725,38 @@ function reviewer(options: ReviewerOptions = {}) {
     }
   }
   return { run, calls }
+}
+
+// A refusal happens before the first session; unlike an admitted reviewer, it makes no checkpoint.
+function budgetRefusal(notes: string[] = []) {
+  const calls: RunInput[] = []
+  const run = async (input: RunInput): Promise<ReviewOutcome> => {
+    calls.push(input)
+    return {
+      partial: "budget-estimate",
+      report: { summary: "", risk: "low", files: [], findings: [] },
+      selection: selectFindings({
+        findings: [],
+        anchors: input.anchors,
+        head: input.head,
+        trust: input.trust,
+        mode: input.mode,
+        config: input.config,
+        prior: input.prior,
+      }),
+      skipped: input.skipped,
+      unreviewed: [...new Set([...input.anchors, ...input.files, ...input.skipped].map((file) => file.path))],
+      specialists: [],
+      sessions: [],
+      stats: { files: input.files.length, additions: 0, deletions: 0 },
+      base: input.base,
+      head: input.head,
+      mode: input.mode,
+      durationMs: 0,
+      notes,
+    }
+  }
+  return { calls, run }
 }
 
 let nonce = 0
@@ -1487,6 +1521,239 @@ describe("vector github review against a fake GitHub", () => {
   )
 
   test(
+    "SF-17 GitHub budget refusal preserves earlier findings, accounted spend and full retry after a push",
+    async () => {
+      await using w = await world({ baseFiles: { ".vector/review.json": JSON.stringify({ maxComments: 1 }) } })
+      await job(w, reviewer({ findings: () => [OFF_BY_ONE, TOKEN_AT_IMPORT] }))
+      const previous = state(w)!
+      expect(previous.findings).toHaveLength(1)
+      const original = sticky(w)!
+      const interrupted = { ...previous, inflight: { run: "prior", head: w.head, at: NOW, costUsd: 0.39 } }
+      original.body = original.body.replace(stateMarker(previous), stateMarker(interrupted))
+      const other: ReviewState = {
+        ...emptyState(),
+        month: { key: "2026-09", costUsd: 0.25 },
+        inflight: { run: "other", head: w.head, at: NOW, costUsd: 0.05 },
+      }
+      w.fake.addIssueComment(3, `${SUMMARY_MARKER}\n${stateMarker(other)}`, BOT_USER)
+      const head = await push(w, { "src/list.ts": UNRELATED_LIST })
+      const writeCount = w.fake.writes.length
+      const refused = budgetRefusal()
+      const env = { REVIEW_MAX_INPUT_TOKENS: "1", REVIEW_MAX_COST_USD_PER_MONTH: "1", REVIEW_MAX_COST_USD_PER_PR: "2" }
+      const { result } = await job(w, refused, { env })
+      expect(refused.calls).toHaveLength(1)
+      expect(refused.calls[0]!.spent).toEqual({ prUsd: 0.6, monthUsd: 0.9 })
+      expect(result).toMatchObject({
+        exitCode: 0,
+        notReviewed: "budget-estimate",
+        posted: { summaryId: original.id, reviewIds: [] },
+      })
+      expect(sticky(w)!.body).toContain(`Commit \`${short(head)}\`: ${noteBudgetEstimate()}`)
+      expect(state(w)).toEqual({
+        ...previous,
+        retryFullAfterBudget: true,
+        costUsd: 0.6,
+        month: { key: "2026-09", costUsd: 0.6 },
+      })
+      const writes = w.fake.writes.slice(writeCount)
+      expect(writes.map((request) => [request.method, request.path])).toEqual([
+        ["PATCH", `/repos/o/r/issues/comments/${original.id}`],
+        ["PATCH", `/repos/o/r/issues/comments/${original.id}`],
+      ])
+      expect(readState(writes[0]!.body!["body"])).toMatchObject({
+        retryFullAfterBudget: true,
+        inflight: { costUsd: 0 },
+      })
+      expect(w.fake.threads[0]!.isResolved).toBe(false)
+      await push(w, { "src/auth.ts": edit(FEATURE["src/auth.ts"], { 39: "export const changed = 3" }) })
+      await job(w, refused, { env })
+      expect(refused.calls[1]!.mode).toBe("full")
+      expect(refused.calls[1]!.spent).toEqual({ prUsd: 0.6, monthUsd: 0.9 })
+      const admitted = reviewer()
+      await job(w, admitted)
+      expect(admitted.calls).toHaveLength(1)
+      expect(admitted.calls[0]!.mode).toBe("full")
+      expect(admitted.calls[0]!.spent).toBeUndefined()
+      expect(state(w)?.retryFullAfterBudget).toBeUndefined()
+      expect(state(w)?.head).toBe(w.fake.pull.head.sha)
+    },
+    TIMEOUT,
+  )
+
+  test(
+    "SF-17 GitHub budget refusal on a command leaves the same analyzed head retryable after the cap is removed",
+    async () => {
+      await using w = await world()
+      await job(w, reviewer())
+      const alreadyReviewed = state(w)!
+      const command: RouteComment = { id: 7201, kind: "issue", author: "alice", body: "/vector review full" }
+      const env = { REVIEW_MAX_INPUT_TOKENS: "1", REVIEW_MAX_COST_USD_PER_MONTH: "3" }
+      const refused = budgetRefusal([BUDGET_ESTIMATE_UNAVAILABLE])
+      w.fake.faults.push({ method: "GET", path: /^\/repos\/o\/r\/issues\/comments$/, status: 403, times: 99 })
+      await job(w, refused, { env, trigger: "command", full: true, comment: command })
+      expect(refused.calls).toHaveLength(1)
+      expect(refused.calls[0]!.spent).toEqual({ prUsd: COST.costUsd })
+      expect(sticky(w)!.body).toContain(BUDGET_ESTIMATE_UNAVAILABLE)
+      expect(w.fake.reactions.filter((reaction) => reaction.subject === command.id)).toHaveLength(0)
+      expect(posts(w, /\/issues\/comments\/7201\/reactions$/).map((request) => request.body?.["content"])).toEqual([
+        "eyes",
+      ])
+      expect(state(w)).toEqual({ ...alreadyReviewed, retryFullAfterBudget: true })
+      w.fake.faults = []
+      const admitted = reviewer({ partial: "budget", unreviewed: ["src/db.ts"] })
+      const next = await job(w, admitted)
+      expect(next.result.notReviewed).toBeUndefined()
+      expect(admitted.calls).toHaveLength(1)
+      expect(admitted.calls[0]!.mode).toBe("full")
+      expect(state(w)).toMatchObject({ head: w.head, reviews: 2, unreviewed: ["src/db.ts"] })
+      expect(state(w)?.retryFullAfterBudget).toBeUndefined()
+    },
+    TIMEOUT,
+  )
+
+  test(
+    "SF-17 GitHub budget refusal retries even if GitHub cannot store its final sticky edit",
+    async () => {
+      await using w = await world()
+      const refused = budgetRefusal()
+      const first = await job(
+        w,
+        {
+          calls: refused.calls,
+          run: async (input) => {
+            const outcome = await refused.run(input)
+            w.fake.faults.push({ method: "PATCH", path: /\/issues\/comments\/\d+$/, status: 403, times: 1 })
+            return outcome
+          },
+        },
+        { env: { REVIEW_MAX_INPUT_TOKENS: "1", REVIEW_MAX_COST_USD_PER_MONTH: "3" } },
+      )
+      expect(refused.calls[0]!.spent).toEqual({ prUsd: 0, monthUsd: 0 })
+      expect(first.result.notReviewed).toBe("budget-estimate")
+      expect(first.log).toContainEqual(expect.stringContaining("Could not post the budget stop"))
+      expect(state(w)).toMatchObject({ retryFullAfterBudget: true, reviews: 0, costUsd: 0, inflight: { costUsd: 0 } })
+      const admitted = reviewer()
+      await job(w, admitted)
+      expect(admitted.calls[0]!.mode).toBe("full")
+      expect(state(w)).toMatchObject({ head: w.head, reviews: 1, costUsd: COST.costUsd })
+      expect(state(w)?.retryFullAfterBudget).toBeUndefined()
+    },
+    TIMEOUT,
+  )
+
+  test(
+    "SF-17 GitHub budget refusal keeps Codium token enforcement and its public reason without model progress",
+    async () => {
+      await using w = await world()
+      const finished: Pick<ReviewOutcome, "partial" | "specialists">[] = []
+      let steps = 0
+      const cloud: CodiumReviewControl = {
+        signal: new AbortController().signal,
+        stopped: () => undefined,
+        stepFinished: () => {
+          steps++
+        },
+        reviewFinished: (outcome) => finished.push(outcome),
+        redact: redactCodiumReviewText,
+        outcome: () => {},
+      }
+      const refused = budgetRefusal(["untrusted detail: $999 and vector-100"])
+      const { result, log } = await job(w, refused, {
+        cloud,
+        env: { REVIEW_MAX_INPUT_TOKENS: "1", REVIEW_MAX_COST_USD_PER_MONTH: "3" },
+      })
+      expect(refused.calls[0]!.config.maxInputTokens).toBe(1)
+      expect(refused.calls[0]!.config.maxCostUsdPerMonth).toBe(0)
+      expect(refused.calls[0]!.spent).toBeUndefined()
+      expect(steps).toBe(0)
+      expect(finished).toHaveLength(1)
+      expect(finished[0]).toMatchObject({ partial: "budget-estimate", specialists: [] })
+      expect(result.notReviewed).toBe("budget-estimate")
+      expect(sticky(w)!.body).toContain(noteBudgetEstimate())
+      expect(sticky(w)!.body + log.join(" ")).not.toMatch(
+        /untrusted detail|\$999|vector-100|no issues found|Codium is unavailable/i,
+      )
+      expect(state(w)).toEqual({ ...emptyState(), retryFullAfterBudget: true })
+    },
+    TIMEOUT,
+  )
+
+  test.each([
+    { checker: "verify" as const, codium: false, detail: "first-request-budget" },
+    { checker: "judge" as const, codium: true, detail: "first-request-budget" },
+    { checker: "security" as const, codium: false, detail: "first-request-changed" },
+  ])(
+    "SF-17 GitHub marks a refused $checker as incomplete and retains the completed primary review",
+    async ({ checker, codium, detail }) => {
+      await using w = await world()
+      const completed = reviewer({
+        partial: "budget",
+        unreviewed: ["src/auth.ts"],
+        findings: () => (codium ? [OFF_BY_ONE] : []),
+        summary: "No issues found. The whole review passed.",
+      })
+      const cost: ReviewCost = codium
+        ? { ...COST, kind: "codium", codium: true, model: "vector-plan/vector-flash", costUsd: 0 }
+        : COST
+      const run = async (input: RunInput): Promise<ReviewOutcome> => {
+        const primary = await completed.run({
+          ...input,
+          onCheckpoint: async () => {
+            await input.onCheckpoint?.(cost)
+          },
+        })
+        return {
+          ...primary,
+          cost,
+          specialists: [...primary.specialists, { name: checker, status: "skipped", steps: 0, detail }],
+          notes: [
+            `The ${checker} pass did not run because its complete first request could not fit within the reserved review budget.`,
+          ],
+        }
+      }
+      const cloud: CodiumReviewControl = {
+        signal: new AbortController().signal,
+        stopped: () => undefined,
+        stepFinished: () => {},
+        reviewFinished: () => {},
+        redact: redactCodiumReviewText,
+        outcome: () => {},
+      }
+      const { result } = await job(
+        w,
+        { calls: completed.calls, run },
+        {
+          env: { REVIEW_MAX_INPUT_TOKENS: "5000", REVIEW_MAX_COST_USD: "0" },
+          ...(codium ? { cloud } : {}),
+        },
+      )
+      expect(result.exitCode).toBe(0)
+      expect(result.notReviewed).toBeUndefined()
+      expect(state(w)).toMatchObject({ head: w.head, reviews: 1, costUsd: cost.costUsd, unreviewed: ["src/auth.ts"] })
+      const body = sticky(w)!.body
+      expect(body).toContain("## Vectorscope review · Incomplete")
+      expect(body).toContain(
+        detail === "first-request-changed"
+          ? "A prepared model request could no longer be confirmed to fit the configured budget"
+          : "A follow-up check could not confirm that its first request fit the configured budget",
+      )
+      expect(body).toContain("Checks remain for `src/auth.ts`")
+      expect(body).toContain(`The ${checker} pass did not run`)
+      expect(body).not.toMatch(/No issues found|the whole review passed|stopped at the|Risk: Low/i)
+      if (codium) {
+        expect(w.fake.reviewComments).toHaveLength(1)
+        expect(w.fake.reviewComments[0]!.body).toContain(OFF_BY_ONE.title)
+        expect(state(w)?.codiumReviews).toBe(1)
+        expect(body).not.toMatch(/\$\d|17,200|31,000/)
+      } else {
+        expect(w.fake.reviewComments).toHaveLength(0)
+        expect(body).toContain("0 blocking findings or concerns recorded")
+      }
+    },
+    TIMEOUT,
+  )
+
+  test(
     '19. failOn "blocking": the job fails after posting',
     async () => {
       await using w = await world()
@@ -1835,6 +2102,26 @@ describe("vector github review: the workflow's command end to end", () => {
         reply().tool("StructuredOutput", { results: [] }).usage({ input: 500, output: 20 }),
       )
     })
+
+  cliIt.live(
+    "SF-17 GitHub budget refusal reaches the real reviewer and posts no review or model request",
+    ({ llm, vector, home }) =>
+      Effect.gen(function* () {
+        const { w, runner, event } = yield* setup(home, opened)
+        const result = yield* vector.actionsStep(["github", "review"], {
+          cwd: runner,
+          timeoutMs: 100_000,
+          env: { ...actions(w, llm.url, { name: "pull_request", path: event }), REVIEW_MAX_INPUT_TOKENS: "1" },
+        })
+        vector.expectExit(result, 0, "the budget-gated review job")
+        expect(yield* llm.hits).toHaveLength(0)
+        expect(posts(w, /\/pulls\/7\/reviews$/)).toHaveLength(0)
+        expect(sticky(w)!.body).toContain(noteBudgetEstimate())
+        expect(sticky(w)!.body).not.toMatch(/no issues found|reviewing/i)
+        expect(state(w)).toEqual({ ...emptyState(), retryFullAfterBudget: true })
+      }),
+    120_000,
+  )
 
   cliIt.live(
     "an opened pull request is reviewed on the real reviewer, and the review and its tokens are posted",

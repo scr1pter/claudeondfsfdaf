@@ -83,6 +83,8 @@ const finish = (run: Recorded) =>
 const recording = Layer.succeed(
   ReviewOwner.Service,
   ReviewOwner.Service.of({
+    placement: () => Effect.die(new Error("Recording review owner does not resolve placement.")),
+    enabled: () => Effect.succeed(true),
     target: () =>
       Effect.gen(function* () {
         const context = yield* InstanceState.context

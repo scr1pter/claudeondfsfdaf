@@ -552,7 +552,7 @@ export interface Interface {
   ) => Effect.Effect<Got | undefined>
   readonly search: (
     place: Brain.Place,
-    input: { readonly query: string; readonly limit?: number; readonly personal: boolean; readonly sessionID?: string },
+    input: { readonly query: string; readonly limit?: number; readonly personal: boolean; readonly sessionID?: string; readonly readOnly?: true },
   ) => Effect.Effect<readonly BrainSchema.Card[]>
   /** Reads the repository's tracked docs into documents, at most every 10 minutes per repository. */
   readonly scan: (place: Brain.Place, options?: { readonly force?: boolean }) => Effect.Effect<number>
@@ -586,7 +586,7 @@ export interface Interface {
   readonly links: (
     place: Brain.Place,
     file: string,
-    options: { readonly personal: boolean },
+    options: { readonly personal: boolean; readonly documentsOnly?: true },
   ) => Effect.Effect<readonly BrainSchema.Link[]>
   /** What needs the user's look: conflicts, drift and held content, open ones only. */
   readonly review: (place: Brain.Place) => Effect.Effect<readonly BrainSchema.ReviewItem[]>
@@ -3030,14 +3030,14 @@ function make(input: {
 
   const search = Effect.fn("BrainKnowledge.search")(function* (
     place: Brain.Place,
-    request: { query: string; limit?: number; personal: boolean; sessionID?: string },
+    request: { query: string; limit?: number; personal: boolean; sessionID?: string; readOnly?: true },
   ) {
-    state.active = Date.now()
+    if (!request.readOnly) state.active = Date.now()
     const terms = BrainLexical.terms(request.query)
     const expanded = BrainFuse.expand(terms, yield* vocabularyOf(place, request.personal))
     const limit = request.limit ?? 5
     const lexicalFound = yield* lexical(place, expanded.query, { personal: request.personal })
-    const near = terms.size > 0 ? yield* meaning(place, request.query, { personal: request.personal }) : []
+    const near = !request.readOnly && terms.size > 0 ? yield* meaning(place, request.query, { personal: request.personal }) : []
     // By meaning too, once the local model is ready: both rankings fused, so a passage in other words can come first.
     const fused =
       near.length === 0
@@ -3051,11 +3051,13 @@ function make(input: {
       : lexicalFound.slice(0, limit).map((item) => item.ref)
     const shown = yield* cards(place, refs, request.personal)
     const picked = refs.flatMap((ref) => (shown.has(ref) ? [shown.get(ref)!] : []))
-    yield* record(picked, {
-      ...(request.sessionID ? { sessionID: request.sessionID } : {}),
-      tier: "search",
-      tokens: Token.estimate(picked.map((card) => card.line).join("\n")),
-    })
+    if (!request.readOnly) {
+      yield* record(picked, {
+        ...(request.sessionID ? { sessionID: request.sessionID } : {}),
+        tier: "search",
+        tokens: Token.estimate(picked.map((card) => card.line).join("\n")),
+      })
+    }
     return picked.map(
       (card): BrainSchema.Card => ({
         id: card.ref,
@@ -5848,7 +5850,7 @@ function make(input: {
     return { text: made.text, ids: made.ids, tokens } satisfies Brain.Injection
   })
 
-  const links = Effect.fn("BrainKnowledge.links")(function* (place: Brain.Place, file: string, options: { personal: boolean }) {
+  const links = Effect.fn("BrainKnowledge.links")(function* (place: Brain.Place, file: string, options: { personal: boolean; documentsOnly?: true }) {
     const relative = BrainPaths.relative(place.root, file)
     const anchors = yield* db
       .select()
@@ -5878,7 +5880,14 @@ function make(input: {
             .innerJoin(BrainDocumentTable, eq(BrainDocumentTable.id, BrainItemTable.document_id))
             .leftJoin(BrainRecordTable, eq(BrainRecordTable.item, BrainItemTable.id))
             .leftJoin(BrainPassageTable, eq(BrainPassageTable.item, BrainItemTable.id))
-            .where(and(eq(BrainItemTable.repository_id, place.repository), inArray(BrainItemTable.ref, owners)))
+            .where(and(
+              eq(BrainItemTable.repository_id, place.repository),
+              inArray(BrainItemTable.ref, owners),
+              options.documentsOnly ? eq(BrainItemTable.status, "active") : undefined,
+              options.documentsOnly ? inArray(BrainDocumentTable.status, [...USABLE]) : undefined,
+              options.documentsOnly && !options.personal ? eq(BrainItemTable.visibility, "repository") : undefined,
+              options.documentsOnly && !options.personal ? eq(BrainDocumentTable.visibility, "repository") : undefined,
+            ))
             .all()
             .pipe(Effect.orDie)
       ).map((row) => [row.ref, row]),
@@ -5898,6 +5907,7 @@ function make(input: {
         },
       ]
     })
+    if (options.documentsOnly) return documents
     // Memory whose paths cover the file is linked to it as well.
     const entries = (yield* brain.list(place, { filter: "active" }))
       .filter((entry) => (options.personal || (entry.scope === "repository" && !entry.private)) && entry.paths.some((pattern) => Brain.matches(pattern, relative)))

@@ -1,6 +1,6 @@
 // VS-43's rule citation check (addendum A, Now window): whether a finding's structured rule citation quotes trusted
 // rule text the review actually sent, in a scope that covers the finding, on a line the change touched. Pure and
-// browser-safe, and nothing calls it before VS-43 wiring, which runs it under `ruleCheck: "strict"`.
+// browser-safe, and applied by review runners only under `ruleCheck: "strict"`.
 //
 // I-2: a rule gives a finding repository authority only when the repository's trusted text says it. The trusted text
 // is the prompt's two trusted blocks as prompt.ts's trusted() sends them: trimmed, then clipped at MAX_TRUSTED_CHARS.

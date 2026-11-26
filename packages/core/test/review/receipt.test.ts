@@ -9,6 +9,7 @@ import {
   withReviewReceipt,
   RECEIPT_LIMITS,
 } from "@vectordevai/core/review/receipt"
+import { ROUTE_REFUSALS } from "@vectordevai/core/review/privacy"
 
 const head = "a".repeat(40)
 const runID = "review_fixture_1"
@@ -245,6 +246,26 @@ describe("VS-47 deterministic observation contract", () => {
       outcome(),
     )
     expect(receipt.routes).toMatchObject({ state: "observed", value: [{ sent: false, transport: "not-sent" }] })
+    // Every refusal the route rules give, VS-23b admission's own included, is one a receipt can carry.
+    for (const refusal of ROUTE_REFUSALS) {
+      const refused = buildReviewReceipt(
+        {
+          ...facts(),
+          routes: observed("transport-observer", [
+            {
+              ...route(),
+              sent: false,
+              transport: "not-sent",
+              decision: { allowed: false, refusal },
+              store: unavailable,
+              cacheTtls: unavailable,
+            },
+          ]),
+        },
+        outcome(),
+      )
+      expect(refused.routes).toMatchObject({ state: "observed", value: [{ decision: { allowed: false, refusal } }] })
+    }
   })
 
   test("canonicalizes unordered observation sets without mutating input and rejects duplicate evidence", () => {

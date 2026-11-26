@@ -500,7 +500,40 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
                 ))
             const bridge = yield* EffectBridge.make()
             const out: string[] = []
+            // Check 1 again: nothing may have edited the settings while connect asked or loaded.
+            const before = yield* settings()
+            if (before.edited.length > 0) return settingsResult(target, before.edited)
+            // A result from another head, base or read authority cannot answer this request.
+            const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
+            const authority = statePath
+              ? createHash("sha256")
+                  .update(
+                    JSON.stringify([
+                      reads.readRoot,
+                      [...reads.readDenies].sort(),
+                      scope.head,
+                      scope.base,
+                      request.security,
+                      planned.selected,
+                      models.map((model) => model.sendsTo),
+                    ]),
+                  )
+                  .digest("hex")
+              : undefined
+            const previous = statePath ? states.get(statePath) : undefined
+            const fingerprint = previous && previous.authority === authority ? previous.fingerprint : undefined
+            let written: string | undefined
             const local: LocalReviewDeps = {
+              ...(statePath
+                ? {
+                    branchCache: {
+                      fingerprint,
+                      written: (fingerprint) => {
+                        written = fingerprint
+                      },
+                    },
+                  }
+                : {}),
               runReview: (input) =>
                 // Collection can happen after model consent. Recheck the actual diff, including both sides of
                 // renames, before any of its text reaches the provider; a late file cannot bypass admission.
@@ -547,20 +580,6 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
               posting: async () => [],
               requirements: (input) => requirements({ files: input.files, personal: personal && !input.shared }),
             }
-            // Check 1 again: nothing may have edited the settings while connect asked or loaded.
-            const before = yield* settings()
-            if (before.edited.length > 0) return settingsResult(target, before.edited)
-            // A branch review reads VectorScope's state file only when connect saw VectorScope write it as it is now.
-            const statePath = request.target.kind === "branch" ? yield* stateFile(git, scope.root) : undefined
-            const stateBefore = statePath ? yield* Effect.promise(() => fingerprint(statePath)) : undefined
-            const authority = createHash("sha256")
-              .update(JSON.stringify({ root: reads.readRoot, denies: [...reads.readDenies].sort() }))
-              .digest("hex")
-            const trusted =
-              statePath !== undefined &&
-              stateBefore !== undefined &&
-              states.get(statePath)?.fingerprint === stateBefore &&
-              states.get(statePath)?.authority === authority
             // Every question is behind it: a background run's caller stops waiting here.
             if (context.working) yield* context.working(cap.value !== undefined ? { maxCostUsd: cap.value } : {})
             yield* say("review", "Reviewing")
@@ -589,20 +608,11 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
                   ...(request.security === undefined ? {} : { security: request.security }),
                   maxComments: ConnectPolicy.MAX_COMMENTS,
                   environment: env,
-                  ...(request.target.kind === "branch" ? { cache: { full: !!context.fullReview || !trusted } } : {}),
+                  ...(request.target.kind === "branch" ? { cache: { full: !!context.fullReview || !fingerprint } } : {}),
                 },
               )
               .pipe(Effect.provideService(Git.Service, git))
 
-            if (statePath) {
-              const stateAfter = yield* Effect.promise(() => fingerprint(statePath))
-              states.delete(statePath)
-              // Trusted from here: what VectorScope wrote in this run, or the trusted file it left as it was.
-              if (stateAfter !== undefined && (stateAfter !== stateBefore || trusted)) {
-                states.set(statePath, { fingerprint: stateAfter, authority })
-                for (const key of states.keys()) if (states.size > MAX_TRUSTED_STATES) states.delete(key)
-              }
-            }
             const shown = printed(out)
             // Check 1 once more: a review whose settings changed while it ran is never shown as VectorScope's result. Its
             // sessions and cost stay on the result, since they were made and spent.
@@ -616,6 +626,11 @@ export const make = (deps: Deps = {}): ConnectAdapter.Factory<Services> =>
             )
             if (after.length > 0)
               return settingsResult(target, after, spentOf({ local: result, printed: shown, plan: planned }))
+            if (statePath && authority && written) {
+              states.delete(statePath)
+              states.set(statePath, { fingerprint: written, authority })
+              for (const key of states.keys()) if (states.size > MAX_TRUSTED_STATES) states.delete(key)
+            }
             return resultOf({
               request,
               target,
@@ -1143,12 +1158,6 @@ export const stateFile = Effect.fnUntraced(function* (git: Git.Interface, root: 
   const dir = result.exitCode === 0 ? result.text().trim() : ""
   return dir ? path.join(dir, "vector", "review", `${encodeURIComponent(branch)}.json`) : undefined
 })
-
-/** A hash of a file's bytes; undefined when it cannot be read. */
-export async function fingerprint(file: string): Promise<string | undefined> {
-  const bytes = await readFile(file).catch(() => undefined)
-  return bytes ? createHash("sha256").update(bytes).digest("hex") : undefined
-}
 
 const commitOf = Effect.fnUntraced(function* (git: Git.Interface, root: string, ref: string) {
   if (!ref || ref.startsWith("-")) return undefined

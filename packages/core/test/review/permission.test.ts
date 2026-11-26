@@ -3,7 +3,10 @@ import { fnv1a64 } from "@vectordevai/core/review/fingerprint"
 import {
   CHECK_COMMANDS,
   COVERAGE_COMMANDS,
+  CREDENTIAL_FILES,
   ENV_FILES,
+  holdbackSpelling,
+  holdsBack,
   isCoverageCommand,
   reviewPermissionRules,
   SECRET_FILES,
@@ -289,5 +292,171 @@ describe("the executor's command lists (VS-30)", () => {
     }
     for (const command of [...CHECK_COMMANDS, "bun test test/x.test.ts", "bun test --coverage", ""])
       expect([command, isCoverageCommand(command)]).toEqual([command, false])
+  })
+})
+
+// VS-34's tool half (SF-14): under holdback "secrets", and only then, the read tool is denied the payload-only
+// credential list and the paths Review.run held back. grep reads each file through the same rules and has no rule of
+// its own keyed on a path, so a search for process.env stays allowed.
+describe("holdback's read rules (VS-34, SF-14)", () => {
+  const read = (pattern: string): Rule => ({ permission: "read", pattern, action: "deny" })
+  const secrets = reviewPermissionRules({ truncateGlob, holdback: "secrets" })
+
+  test("unset or off, the rules are byte-identical to before, held paths or not", () => {
+    const digest = (input: Parameters<typeof reviewPermissionRules>[0]) =>
+      fnv1a64(JSON.stringify(reviewPermissionRules(input)))
+    // The goldens printed at 213aabe9 (VS-30c's test above), with holdback off and with held paths it ignores.
+    expect(digest({ truncateGlob, holdback: "off" })).toBe("03ee3c8b157dfcba")
+    expect(digest({ truncateGlob, holdback: "off", held: ["notes.txt"] })).toBe("03ee3c8b157dfcba")
+    expect(digest({ truncateGlob, held: ["notes.txt"] })).toBe("03ee3c8b157dfcba")
+    expect(digest({ checks: true, truncateGlob, holdback: "off" })).toBe("907b31028ef0edd2")
+    expect(digest({ holdback: "off" })).toBe("10537fa7f8acdd1d")
+  })
+
+  test("secrets adds exactly the credential denies, after the secret files and before the MCP deny", () => {
+    const at = plain.findIndex((rule) => rule.permission === "read" && rule.pattern === "mcp:*")
+    expect(secrets).toEqual([...plain.slice(0, at), ...CREDENTIAL_FILES.map(read), ...plain.slice(at)])
+    expect(secrets.length - plain.length).toBe(CREDENTIAL_FILES.length)
+    // With checks, directories and requester denials too: only the added denies differ, and the requester's stay last.
+    const input = { allowDirs: ["/tmp/review-head"], checks: true, truncateGlob, readDenies: ["private/*"] }
+    const unset = reviewPermissionRules(input)
+    const set = reviewPermissionRules({ ...input, holdback: "secrets" })
+    expect(set.filter((rule) => !CREDENTIAL_FILES.map(read).some((added) => Bun.deepEquals(added, rule)))).toEqual(
+      unset,
+    )
+    expect(set.at(-1)).toEqual(read("private/*"))
+  })
+
+  test("exports the payload-only list frozen, each basename in a root and a nested form", () => {
+    expect(Object.isFrozen(CREDENTIAL_FILES)).toBe(true)
+    const names = [".envrc", ".netrc", ".pypirc", ".pgpass", ".htpasswd", "credentials"]
+    const keys = ["id_rsa", "id_dsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk"]
+    expect([...CREDENTIAL_FILES]).toEqual([
+      ...[...names, ...keys].flatMap((name) => [name, `*/${name}`]),
+      "*.ppk",
+      "*.pfx",
+      "*.jks",
+      "*.keystore",
+    ])
+    // None was already denied: SECRET_FILES is unchanged, and the lists share no pattern.
+    expect(CREDENTIAL_FILES.some((pattern) => (SECRET_FILES as readonly string[]).includes(pattern))).toBe(false)
+  })
+
+  test("denies the credential files at the root and nested under secrets, and only then", () => {
+    for (const file of [
+      ".envrc",
+      "config/prod/.envrc",
+      "config/.envrc",
+      ".netrc",
+      "deploy/.netrc",
+      "home/user/.pypirc",
+      ".pgpass",
+      "web/.htpasswd",
+      "credentials",
+      "gcloud/credentials",
+      "id_rsa",
+      "keys/id_ed25519_sk",
+      "putty.ppk",
+      "certs/app.pfx",
+      "android/release.jks",
+      "release.keystore",
+    ]) {
+      expect([file, evaluate("read", file, agent, secrets)]).toEqual([file, "deny"])
+      expect([file, evaluate("read", file, agent, plain)]).toEqual([file, "allow"])
+    }
+    // Look-alikes stay readable, and so does the .env.example exemption.
+    for (const file of ["src/envrc.ts", "credentials.ts", "docs/credentials.md", "id_rsa.pub", ".env.example"])
+      expect([file, evaluate("read", file, agent, secrets)]).toEqual([file, "allow"])
+  })
+
+  test("grep keeps its own allow, so a search for process.env stays allowed", () => {
+    for (const pattern of ["process.env", "process\\.env\\.[A-Z_]+", ".envrc", "id_rsa"])
+      expect([pattern, evaluate("grep", pattern, agent, secrets)]).toEqual([pattern, "allow"])
+    expect(secrets.filter((rule) => rule.permission === "grep")).toEqual(
+      plain.filter((rule) => rule.permission === "grep"),
+    )
+  })
+
+  test("denies every held path, as written and folded, after the .env.example allow", () => {
+    const held = reviewPermissionRules({
+      truncateGlob,
+      holdback: "secrets",
+      held: ["notes.txt", "Docs/Keys.TXT", "config/x.env.example", ".envrc"],
+    })
+    for (const file of ["notes.txt", "Docs/Keys.TXT", "docs/keys.txt", "config/x.env.example"])
+      expect([file, evaluate("read", file, agent, held)]).toEqual([file, "deny"])
+    expect(evaluate("read", "src/notes.txt", agent, held)).toBe("allow")
+    // A held path already on the list adds no second rule, and the rest add one per spelling.
+    expect(held.length - secrets.length).toBe(4)
+    // A held path's `*` becomes `?`: the real name is denied, and the deny widens only to names of its length.
+    const starred = reviewPermissionRules({ holdback: "secrets", held: ["data/*.txt", "Data/* *"] })
+    expect(evaluate("read", "data/*.txt", agent, starred)).toBe("deny")
+    expect(evaluate("read", "data/x.txt", agent, starred)).toBe("deny")
+    expect(evaluate("read", "data/other.txt", agent, starred)).toBe("allow")
+    expect(evaluate("read", "Data/* *", agent, starred)).toBe("deny")
+    // No trailing " *" form is left, which Wildcard would read as "this, or this and any arguments".
+    expect(evaluate("read", "Data/*", agent, starred)).toBe("allow")
+    expect(starred.filter((rule) => rule.pattern.includes("*") && !CREDENTIAL_FILES.includes(rule.pattern))).toEqual(
+      reviewPermissionRules({ holdback: "secrets" }).filter(
+        (rule) => rule.pattern.includes("*") && !CREDENTIAL_FILES.includes(rule.pattern),
+      ),
+    )
+  })
+
+  // A held path is named by the change. With `*` as Wildcard's `.*`, a committed name such as this one compiled to a
+  // pattern that backtracked for 1.6 s on one 40-character read and 50 s on a 48-character one; as `?` it cannot.
+  test("a starred held path cannot make a read deny backtrack", () => {
+    const name = "a*a*a*a*a*a*a*a*a*a*a*a*a*/.envrc"
+    const starred = reviewPermissionRules({ holdback: "secrets", held: [name] })
+    const start = performance.now()
+    for (const input of ["a".repeat(64), `${"a".repeat(58)}/.envr`, "a/".repeat(32)])
+      expect([input, evaluate("read", input, agent, starred)]).toEqual([input, "allow"])
+    expect(performance.now() - start).toBeLessThan(50)
+    expect(evaluate("read", name, agent, starred)).toBe("deny")
+  })
+
+  // The tools check a path again folded as holdbackSpelling folds it, so a held non-ASCII name is refused in either
+  // Unicode normal form (macOS HFS+ hands back NFD, a model may type either) and in any case.
+  test("denies a held non-ASCII path in either normal form, as the tools fold it", () => {
+    const nfc = "Docs/\u00c9-Notes.txt"
+    const nfd = "Docs/E\u0301-Notes.txt"
+    expect(nfc).not.toBe(nfd)
+    for (const held of [nfc, nfd]) {
+      const rules = reviewPermissionRules({ holdback: "secrets", held: [held] })
+      // As written and in NFC, for the ask; folded, for the tools' second check.
+      for (const spelled of [held, nfc])
+        expect([held, spelled, evaluate("read", spelled, agent, rules)]).toEqual([held, spelled, "deny"])
+      for (const spelled of [nfc, nfd, nfc.toLowerCase(), nfd.toUpperCase(), "DOCS\\\u00c9-NOTES.TXT"])
+        expect([held, spelled, evaluate("read", holdbackSpelling(spelled), agent, rules)]).toEqual([
+          held,
+          spelled,
+          "deny",
+        ])
+      expect(evaluate("read", holdbackSpelling("Docs/E-Notes.txt"), agent, rules)).toBe("allow")
+    }
+    expect(holdbackSpelling("Config\\.ENVRC")).toBe("config/.envrc")
+  })
+
+  test("holdsBack tells holdback's rules from every other set, the finalizer's included", () => {
+    expect(holdsBack(secrets)).toBe(true)
+    expect(holdsBack(reviewPermissionRules({ holdback: "secrets", held: ["notes.txt"], checks: true }))).toBe(true)
+    // The finalizer appends a deny-all and the StructuredOutput allow (run.ts), which keep the denies.
+    expect(
+      holdsBack([
+        ...secrets,
+        { permission: "*", pattern: "*", action: "deny" },
+        { permission: "StructuredOutput", pattern: "*", action: "allow" },
+      ]),
+    ).toBe(true)
+    for (const rules of [plain, checks, reviewPermissionRules({ holdback: "off" }), [], undefined])
+      expect(holdsBack(rules)).toBe(false)
+    // Every pattern counts: one missing, or allowed instead, and the rules do not hold back.
+    expect(holdsBack(secrets.filter((rule) => rule.pattern !== "*/id_rsa"))).toBe(false)
+    expect(
+      holdsBack(secrets.map((rule) => (rule.pattern === "*.keystore" ? { ...rule, action: "allow" as const } : rule))),
+    ).toBe(false)
+    expect(holdsBack(secrets.map((rule) => (rule.pattern === ".envrc" ? { ...rule, permission: "edit" } : rule)))).toBe(
+      false,
+    )
   })
 })

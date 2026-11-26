@@ -40,8 +40,10 @@ type PrepareInput = {
   readonly purpose?: ModelPlanStatus.Purpose
   readonly pinnedContext?: true
   readonly provider: Provider.Info
-  readonly auth: Auth.Info | undefined
-  readonly plugin: Plugin.Interface
+  readonly auth: Auth.Info | Pick<Auth.Info, "type"> | undefined
+  readonly plugin: Pick<Plugin.Interface, "trigger"> & Partial<Omit<Plugin.Interface, "trigger">>
+  /** Prepare model input only: do not inspect transport headers, key presence, or invoke credential/header hooks. */
+  readonly modelInputOnly?: true
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
   // Sent as promptCacheKey or prompt_cache_key, where the options carry one, instead of the session ID.
@@ -117,7 +119,7 @@ function pinnedOptions(value: unknown): unknown {
   )
 }
 
-export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
+export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput): Effect.fn.Return<Prepared> {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
   const responses = ["@ai-sdk/openai", "@ai-sdk/azure", "@ai-sdk/amazon-bedrock/mantle"].includes(input.model.api.npm)
   const prompt = [
@@ -153,16 +155,18 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system.push(header, rest.join("\n"))
   }
 
-  const breakpoints = ProviderTransform.promptCacheBreakpointsEnabled({
-    setting: input.provider.options.promptCacheBreakpoints,
-    providerID: input.provider.id,
-    npm: input.model.api.npm,
-    modelID: input.model.api.id,
-    apiKey:
-      input.auth?.type === "api" ||
-      (!input.auth && (typeof input.provider.options.apiKey === "string" || typeof input.provider.key === "string")),
-    url: input.provider.options.baseURL ?? input.model.api.url,
-  })
+  const breakpoints =
+    !input.modelInputOnly &&
+    ProviderTransform.promptCacheBreakpointsEnabled({
+      setting: input.provider.options.promptCacheBreakpoints,
+      providerID: input.provider.id,
+      npm: input.model.api.npm,
+      modelID: input.model.api.id,
+      apiKey:
+        input.auth?.type === "api" ||
+        (!input.auth && (typeof input.provider.options.apiKey === "string" || typeof input.provider.key === "string")),
+      url: input.provider.options.baseURL ?? input.model.api.url,
+    })
   const stablePrefix = breakpoints ? prompt.filter(Boolean).join("\n") : undefined
   const cachePrefix =
     breakpoints &&
@@ -284,19 +288,21 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       ),
     )
 
-  const { headers } = yield* input.plugin.trigger(
-    "chat.headers",
-    {
-      sessionID: input.sessionID,
-      agent: input.agent.name,
-      model: input.model,
-      provider: input.provider,
-      message: input.user,
-    },
-    {
-      headers: {},
-    },
-  )
+  const { headers } = input.modelInputOnly
+    ? { headers: {} }
+    : yield* input.plugin.trigger(
+        "chat.headers",
+        {
+          sessionID: input.sessionID,
+          agent: input.agent.name,
+          model: input.model,
+          provider: input.provider,
+          message: input.user,
+        },
+        {
+          headers: {},
+        },
+      )
 
   const tools = resolveTools(input)
   // Codex parity: OpenAI Responses-family providers hardcode `strict: false`
@@ -332,29 +338,31 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     // The session header goes last and in one spelling: the free-model fetch reads it to apply the guest rule
     // (FreeModelGuests), so model configuration and plugins can neither replace it nor join a second value to it. A
     // Codium request's purpose is fixed the same way and is sent to Codium only.
-    headers: Object.assign(
-      Object.fromEntries(
-        Object.entries({
-          "x-session-affinity": input.sessionID,
-          ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
-          "User-Agent": USER_AGENT,
-          ...input.model.headers,
-          ...headers,
-        }).filter(
-          ([key]) =>
-            !["x-session-id", "x-vector-purpose", ProviderTransform.PROMPT_CACHE_PREFIX_HEADER].includes(
-              key.toLowerCase(),
+    headers: input.modelInputOnly
+      ? {}
+      : Object.assign(
+          Object.fromEntries(
+            Object.entries({
+              "x-session-affinity": input.sessionID,
+              ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
+              "User-Agent": USER_AGENT,
+              ...input.model.headers,
+              ...headers,
+            }).filter(
+              ([key]) =>
+                !["x-session-id", "x-vector-purpose", ProviderTransform.PROMPT_CACHE_PREFIX_HEADER].includes(
+                  key.toLowerCase(),
+                ),
             ),
+          ),
+          {
+            "X-Session-Id": input.sessionID,
+            ...(cachePrefix ? { [ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]: cachePrefix } : {}),
+          },
+          input.model.providerID === ModelPlanStatus.PROVIDER_ID
+            ? { "X-Vector-Purpose": input.purpose ?? (input.agent.name === "judge" ? "judge" : "chat") }
+            : {},
         ),
-      ),
-      {
-        "X-Session-Id": input.sessionID,
-        ...(cachePrefix ? { [ProviderTransform.PROMPT_CACHE_PREFIX_HEADER]: cachePrefix } : {}),
-      },
-      input.model.providerID === ModelPlanStatus.PROVIDER_ID
-        ? { "X-Vector-Purpose": input.purpose ?? (input.agent.name === "judge" ? "judge" : "chat") }
-        : {},
-    ),
   }
 })
 

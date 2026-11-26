@@ -99,7 +99,20 @@ describe("the flags", () => {
       { name: "engine" },
       { name: "engine:shared-verify", record: { name: "engine:shared-verify", keys: { verifyPolicy: "shared" } } },
     ])
-    expect(parseReplayArgs([...base, "--variant", "engine:privacy-zdr"])).toContain("VS-23c")
+    expect(flags([...base, "--variant", "engine:impact-graph"]).variants).toEqual([
+      { name: "engine:impact-graph", record: { name: "engine:impact-graph", keys: { impact: "graph" } } },
+    ])
+    expect(flags([...base, "--variant", "engine:guardrail-strict"]).variants).toEqual([
+      { name: "engine:guardrail-strict", record: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } } },
+    ])
+    expect(flags([...base, "--variant", "engine:cards-brain"]).variants).toEqual([
+      { name: "engine:cards-brain", record: { name: "engine:cards-brain", keys: { cards: "brain" } } },
+    ])
+    // VS-23c (SF-12b): privacy-zdr's engine half is built.
+    expect(flags([...base, "--variant", "engine:privacy-zdr"]).variants).toEqual([
+      { name: "engine:privacy-zdr", record: { name: "engine:privacy-zdr", keys: { privacy: "zdr" } } },
+    ])
+    expect(parseReplayArgs([...base, "--variant", "engine:verify-isolated"])).toContain("VS-44c wiring (R3)")
     expect(parseReplayArgs([...base, "--variant", "desktop"])).toContain("runs on the desktop runner")
     expect(parseReplayArgs([...base, "--variant", "engine:nothing"])).toContain("not a registered variant")
     expect(parseReplayArgs([...base, "--variant", "Engine"])).toContain("is not a variant name")
@@ -235,6 +248,11 @@ describe("the send decision", () => {
       expect(await main([...argv, "--ledger", ledger, "--out", out, `--dry-run=${value}`], io(PROTECTED))).toBe(2)
     expect(err.join("")).toContain("--dry-run takes no value")
     expect(await main(["--help=x"], io(PROTECTED))).toBe(2)
+    // A pending variant (VS-44c's) is refused as a flag too, with every send rule holding.
+    expect(
+      await main([...argv, "--ledger", ledger, "--out", out, "--variant", "engine:verify-isolated"], io(PROTECTED)),
+    ).toBe(2)
+    expect(err.join("")).toContain("VS-44c wiring (R3)")
     for (const made of [work, out, ledger]) expect(existsSync(made)).toBe(false)
   })
 
