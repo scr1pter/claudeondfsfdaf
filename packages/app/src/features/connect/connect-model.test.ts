@@ -58,12 +58,51 @@ describe("Connected tools presentation", () => {
     expect(() => parseReviewSettings({ ...draft, after_run: "always" })).toThrow()
   })
 
+  test("unavailable automatic repair cannot be selected from off or report", () => {
+    const draft = { after_run: "repair", before_commit: "offer", max_rounds: "2", max_cost_usd: "0.5" }
+    for (const after_run of ["off", "report"] as const) {
+      const saved = readReviewSettings({ connect: { review: { after_run } } })
+      expect(() => parseReviewSettings(draft, saved)).toThrow("Automatic repair is unavailable.")
+    }
+    expect(() => parseReviewSettings(draft)).toThrow("Automatic repair is unavailable.")
+  })
+
+  test("an existing saved repair setting survives an unrelated save and can be turned off", () => {
+    const saved = readReviewSettings({
+      connect: { review: { after_run: "repair", before_commit: "offer", max_rounds: 1, max_cost_usd: 2 } },
+    })
+    const draft = { after_run: saved.after_run, before_commit: "run", max_rounds: "2", max_cost_usd: "0.5" }
+    expect(reviewSettingsPatch(parseReviewSettings(draft, saved))).toEqual({
+      connect: { review: { after_run: "repair", before_commit: "run", max_rounds: 2, max_cost_usd: 0.5 } },
+    })
+    for (const after_run of ["off", "report"] as const)
+      expect(parseReviewSettings({ ...draft, after_run }, saved).after_run).toBe(after_run)
+  })
+
   test("separates where code runs from where the review model sends it", () => {
     const row = memberRows([member])[0]!
     expect(row.placeLabel).toBe("This computer")
     expect(row.destinationLabel).toBe("Your provider: configured-model")
     expect(destinationLabel("model-server:localhost:8080")).toBe("Your model server: localhost:8080")
     expect(destinationLabel("vector-codium")).toBe("Vector Codium")
+  })
+
+  test("a cloud workspace's member destination names that environment instead of this computer", () => {
+    const cloud = memberRows([{ ...member, place: "vector-cloud", sendsTo: "this-computer" }])[0]!
+    expect(cloud.placeLabel).toBe("Vector's servers")
+    expect(cloud.destinationLabel).toBe("This Vector cloud workspace")
+    expect(cloud.destinationLabel).not.toBe("This computer")
+  })
+
+  test("destination wording keeps local and unknown execution locations and other model destinations unchanged", () => {
+    expect(memberRows([{ ...member, place: "local", sendsTo: "this-computer" }])[0]?.destinationLabel).toBe(
+      "This computer",
+    )
+    expect(destinationLabel("this-computer")).toBe("This computer")
+    expect(destinationLabel("vector-codium", "vector-cloud")).toBe("Vector Codium")
+    expect(destinationLabel("model-server:localhost:8080", "vector-cloud")).toBe("Your model server: localhost:8080")
+    expect(destinationLabel("provider:configured-model", "vector-cloud")).toBe("Your provider: configured-model")
+    expect(destinationLabel(undefined, "vector-cloud")).toBe("No destination reported")
   })
 
   test("desktop discovery cannot replace engine members or add a connect action", () => {

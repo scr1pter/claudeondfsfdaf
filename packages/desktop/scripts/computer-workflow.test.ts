@@ -87,6 +87,7 @@ function expression(
       },
       format: (template: string, ...args: unknown[]) =>
         template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)])),
+      fromJSON: (value: string) => JSON.parse(value),
     },
     { timeout: 100 },
   ) as unknown
@@ -137,7 +138,15 @@ const booleanSelectors = [
   "production_benchmark",
   "offline_footprint",
 ] as const
-const ordinaryJobs = ["computer-helper", "unit", "desktop-engine-node", "engine-linux", "engine-windows", "e2e"]
+const ordinaryJobs = [
+  "computer-helper",
+  "unit",
+  "desktop-engine-node",
+  "engine-linux",
+  "windows-holder-build",
+  "engine-windows",
+  "e2e",
+]
 const targetJobs = {
   all: "computer-helper",
   linux: "computer-helper",
@@ -224,11 +233,13 @@ test("native jobs and privileged checks have independent deadlines with explicit
 })
 
 test("native scenario isolation is explicit and confined to opt-in native steps", () => {
+  const measurement = "Measure repeated isolated Windows overlay Stop"
   const isolated = [
     "Run explicitly isolated Windows scenarios",
     "Run explicitly isolated ARM64 scenarios",
     "Run actual isolated macOS overlay Stop and capture",
     "Run actual isolated medium-token Windows overlay Stop",
+    measurement,
   ]
   const found: string[] = []
   for (const value of Object.values(jobs)) {
@@ -237,7 +248,12 @@ test("native scenario isolation is explicit and confined to opt-in native steps"
       expect(isolated).toContain(step.name)
       expect(record(step.env).VECTOR_COMPUTER_TEST_ISOLATED).toBe("1")
       expect(String(step.if)).toContain("isolated-desktop")
-      if (String(step.name).startsWith("Run actual isolated")) expect(String(step.run)).toContain("--native-stage")
+      if (step.name === measurement) {
+        expect(String(step.if)).toContain("inputs.stop_repeat > 1")
+        expect(String(step.run)).toContain("computer-overlay-smoke-repeat.ts")
+        expect(record(step.env).VECTOR_COMPUTER_SMOKE_MOVE_PROBE).toBe("0")
+      } else if (String(step.name).startsWith("Run actual isolated"))
+        expect(String(step.run)).toContain("--native-stage")
       else expect(String(step.run)).toContain("--platform win32")
       found.push(String(step.name))
     }
@@ -328,9 +344,9 @@ test("Mac measurement is a separate grant-free manual caller with no secret or n
 test("dispatch selectors stay within GitHub's input limit and every expensive job waits for validation", () => {
   const inputs = record(record(record(main.document.on).workflow_dispatch).inputs)
   expect(Object.keys(inputs).toSorted()).toEqual(
-    [...booleanSelectors, "computer_helper_target", "production_source_sha"].toSorted(),
+    [...booleanSelectors, "computer_helper_target", "production_source_sha", "stop_repeat"].toSorted(),
   )
-  expect(Object.keys(inputs)).toHaveLength(9)
+  expect(Object.keys(inputs)).toHaveLength(10)
   expect(Object.keys(inputs).length).toBeLessThanOrEqual(10)
   expect(inputs.computer_helper_target).toMatchObject({ type: "choice", default: "all", options: [...targets] })
   expect(inputs.production_source_sha).toMatchObject({ type: "string", default: "" })
@@ -359,6 +375,7 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
       ...booleanSelectors.map((name) => name.toUpperCase()),
       "COMPUTER_HELPER_TARGET",
       "PRODUCTION_SOURCE_SHA",
+      "STOP_REPEAT",
     ].toSorted(),
   )
   for (const [name, value] of Object.entries(all)) {
@@ -366,6 +383,97 @@ test("dispatch selectors stay within GitHub's input limit and every expensive jo
     const needs = record(value).needs
     expect(typeof needs === "string" ? [needs] : needs, name).toContain("validate-dispatch")
     expect(String(record(value).if), name).not.toMatch(/always\(\)|failure\(\)/)
+  }
+})
+
+test("Stop repetitions are opt-in, bounded, and cannot hide or cancel ordinary Windows coverage", () => {
+  expect(inputDefaults(main).stop_repeat).toBe(1)
+  expect(inputDefaults(helper).stop_repeat).toBe(1)
+  const helperDispatch = record(record(record(helper.document.on).workflow_dispatch).inputs)
+  expect(helperDispatch.stop_repeat).toMatchObject({ type: "number", default: 1 })
+  const helperCall = record(record(record(helper.document.on).workflow_call).inputs)
+  expect(helperCall.stop_repeat).toMatchObject({ type: "number", default: 1 })
+  const focused = { computer_helper: true, computer_helper_target: "windows" }
+  for (const stop_repeat of [1, 2, 50, "1", "2", "50"])
+    expect(validateDispatch({ ...focused, stop_repeat }).status).toBe(0)
+  for (const stop_repeat of [0, -1, 1.5, 51, "0", "-1", "1.5", "51", "2x"])
+    expect(validateDispatch({ ...focused, stop_repeat }).stdout).toContain("integer")
+  for (const inputs of [{}, { ...focused, computer_helper_target: "all" }, { hands_ui: true }])
+    expect(validateDispatch({ ...inputs, stop_repeat: 50 }).stdout).toContain("Windows computer-helper")
+
+  const call = record(record(record(main.document.jobs)["computer-helper"]).with)
+  expect(mainExpression(String(call.stop_repeat), focused)).toBe(1)
+  for (const stop_repeat of ["50", "2", "1", 1, 2, 50])
+    expect(mainExpression(String(call.stop_repeat), { ...focused, stop_repeat })).toBe(Number(stop_repeat))
+  for (const event of ["push", "pull_request"])
+    expect(mainExpression(String(call.stop_repeat), { ...focused, stop_repeat: 50 }, event)).toBe(1)
+  const current = steps(job("windows-build"))
+  const original = current.findIndex((step) => step.name === "Run actual isolated medium-token Windows overlay Stop")
+  expect(current[original]!["continue-on-error"]).toBeUndefined()
+  expect(current[original]!["timeout-minutes"]).toBe(3)
+  expect(job("windows-build")["timeout-minutes"]).toBe(75)
+  const diagnostic = current[original + 1]!
+  expect(diagnostic.name).toBe("Measure repeated isolated Windows overlay Stop")
+  expect(diagnostic["continue-on-error"]).toBe(true)
+  expect(diagnostic["timeout-minutes"]).toBe(35)
+  const needs = { plan: { outputs: { desktop: "true" } } }
+  const inputs = { "isolated-desktop": true, stop_repeat: 50 }
+  const matches = (input: Record<string, unknown>, event = "workflow_dispatch", cancelled = false) =>
+    expression(String(diagnostic.if), input, event, "refs/heads/main", needs, {
+      cancelled,
+      failure: true,
+      success: false,
+    })
+  expect(matches(inputs)).toBe(true)
+  expect(matches({ ...inputs, stop_repeat: 1 })).toBe(false)
+  expect(matches({ ...inputs, "isolated-desktop": false })).toBe(false)
+  expect(matches(inputs, "workflow_dispatch", true)).toBe(false)
+  for (const event of ["push", "pull_request"]) expect(matches(inputs, event)).toBe(false)
+
+  const dispatchGroup = record(main.document.concurrency).group
+  expect(group(dispatchGroup, focused)).not.toBe(group(dispatchGroup, { ...focused, stop_repeat: 50 }))
+  const reusableGroup = record(helper.document.concurrency).group
+  expect(helperGroup(reusableGroup, { ...inputs, stop_repeat: 1 })).not.toBe(helperGroup(reusableGroup, inputs))
+
+  const plan = steps(job("plan")).find((step) => step.id === "plan")!
+  const defaults = {
+    EVENT_NAME: "workflow_dispatch",
+    STOP_REPEAT: "50",
+    FULL_DESKTOP_E2E: "true",
+    ISOLATED_DESKTOP: "true",
+    LINUX_ONLY: "false",
+    WINDOWS_ONLY: "true",
+    PRIVILEGED_REQUIRED: "false",
+    VECTOR_CHANNEL: "prod",
+    ARTIFACT_SUFFIX: "stop-repeat-fixture",
+  }
+  const output = mkdtempSync(path.join(tmpdir(), "vector-stop-repeat-plan-"))
+  const planFor = (overrides: Partial<typeof defaults>) =>
+    spawnSync(bash, ["--noprofile", "--norc", "-c", String(plan.run)], {
+      env: {
+        ...process.env,
+        ...defaults,
+        ...overrides,
+        GITHUB_OUTPUT: path.join(output, "outputs"),
+        GITHUB_STEP_SUMMARY: path.join(output, "summary"),
+      },
+      encoding: "utf8",
+      timeout: 5000,
+    })
+  try {
+    expect(planFor({}).status).toBe(0)
+    expect(planFor({ STOP_REPEAT: "1", ISOLATED_DESKTOP: "false" }).status).toBe(0)
+    expect(planFor({ STOP_REPEAT: "", EVENT_NAME: "push" }).status).toBe(0)
+    for (const STOP_REPEAT of ["", "0", "02", "2.5", "51"]) expect(planFor({ STOP_REPEAT }).stdout).toContain("integer")
+    for (const overrides of [
+      { EVENT_NAME: "push" },
+      { ISOLATED_DESKTOP: "false" },
+      { LINUX_ONLY: "true", WINDOWS_ONLY: "false" },
+      { FULL_DESKTOP_E2E: "false" },
+    ])
+      expect(planFor(overrides).stdout).toContain("full isolated Windows desktop lane")
+  } finally {
+    rmSync(output, { recursive: true, force: true })
   }
 })
 
@@ -623,6 +731,7 @@ test("the plan's changed-path check needs no ripgrep and fails closed when the f
       FULL_DESKTOP_E2E: "true",
       LINUX_ONLY: "false",
       WINDOWS_ONLY: "false",
+      STOP_REPEAT: "1",
       BASE_SHA: base,
       HEAD_SHA: head,
     }
@@ -1193,6 +1302,12 @@ test("the macOS matrix can diagnose admitted artifacts after later fixture failu
   const helperRelease = record(release["computer-helper"])
   expect(helperRelease.uses).toBe("./.github/workflows/computer-helper.yml")
   expect(helperRelease["continue-on-error"]).toBeUndefined()
+})
+
+test("ordinary desktop unit jobs run the Stop repeat collector regression test", () => {
+  const unit = record(record(main.document.jobs).unit)
+  const desktop = steps(unit).find((step) => step.name === "Run desktop computer-use tests")!
+  expect(String(desktop.run)).toMatch(/for file in [^\n]*\.\/scripts\/computer-overlay-smoke-repeat\.test\.ts(?: |;)/)
 })
 
 test("Windows unit and diagnostic lanes exercise the packed Main pin reader before native builds", () => {

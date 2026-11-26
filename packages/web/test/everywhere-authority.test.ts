@@ -74,7 +74,7 @@ test("the account tombstone is checked inside Lua after a slow authority lookup"
 
 test("native intake cannot spend an old link after unlink and relink during repository resolution", async () => {
   const f = await ready(), barrier = pause(), other = randomUUID()
-  f.ports.repository = async (fullName) => { await barrier.stop(); return { id: 101, fullName, shared: false } }
+  f.ports.repository = async ({ fullName }) => { await barrier.stop(); return { id: 101, fullName, shared: false } }
   const jid = createJobId(f.fake.clock.now)
   const pending = f.intake().process(f.parsed, { jid, platform: "slack", installation: f.trigger.installation, shared: false, reply: f.parsed.reply })
   await barrier.wait
@@ -91,7 +91,7 @@ test("native intake cannot spend an old link after unlink and relink during repo
 test("account deletion on a foreign installation fences a slow sponsored admission", async () => {
   const f = await ready(), sponsor = randomUUID(), barrier = pause()
   expect((await f.link(sponsor)).ok).toBe(true)
-  f.ports.repository = async (fullName) => { await barrier.stop(); return { id: 101, fullName, shared: false } }
+  f.ports.repository = async ({ fullName }) => { await barrier.stop(); return { id: 101, fullName, shared: false } }
   const jid = createJobId(f.fake.clock.now)
   const pending = f.intake().process(f.parsed, { jid, platform: "slack", installation: f.trigger.installation, shared: false, reply: f.parsed.reply }).catch((error: unknown) => error)
   await barrier.wait
@@ -372,7 +372,7 @@ test("an absent mapping snapshot cannot borrow a later mapping to admit a job", 
   const f = await ready(), key = everywhereKeys.repo(f.trigger.installation, f.parsed.place), barrier = pause()
   await f.store(["DEL", key])
   let once = true, repositoryCalls = 0
-  f.ports.repository = async (fullName) => { repositoryCalls++; return { id: 101, fullName, shared: false } }
+  f.ports.repository = async ({ fullName }) => { repositoryCalls++; return { id: 101, fullName, shared: false } }
   const store: Store = async (command) => {
     const result = await f.store(command)
     if (once && command[0] === "GET" && command[1] === key) { once = false; await barrier.stop() }

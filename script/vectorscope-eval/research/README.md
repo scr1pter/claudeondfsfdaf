@@ -14,7 +14,9 @@ rows of committed timing scripts that were measured on gated repositories.
   report and the notes.
 - **Status.** Addendum A is a proposal pending owner question Q18, and VS-21
   is pending Q15. Committing these scripts decides neither, and no runner,
-  package, test or workflow reads this folder.
+  package or workflow reads this folder. One test does: core's
+  `test/review/instruction-count-script.test.ts` imports VS-48a's
+  `instructions.ts`.
 
 ## Rules
 
@@ -31,11 +33,12 @@ rows of committed timing scripts that were measured on gated repositories.
 - **No script calls a model or a paid API.** The only network use is the
   `git` fetches, the two `raw.githubusercontent.com` downloads and the npm
   install named under "Inputs".
-- **Not part of the eval tooling.** No TypeScript lives here. The eval
-  tsconfig's `include` (`*.ts`) does not recurse, `test.yml` runs only
-  `script/vectorscope-eval/*.test.ts`, `vectorscope-eval.yml` runs only
-  `ci.ts` and `dataset.ts`, and prettier and oxlint skip this folder
-  (`.prettierignore`, `.oxlintrc.json`).
+- **Not part of the eval tooling.** The one TypeScript file,
+  `instructions.ts` (VS-48a), runs only under that core test, which core's
+  typecheck and unit job cover. The eval tsconfig's `include` (`*.ts`) does
+  not recurse, `test.yml` runs only `script/vectorscope-eval/*.test.ts`,
+  `vectorscope-eval.yml` runs only `ci.ts` and `dataset.ts`, and prettier and
+  oxlint skip this folder (`.prettierignore`, `.oxlintrc.json`).
 - **Copies stay close to the session originals**, so each number traces to
   the code that printed it. Each file's header names its origin and lists its
   changes. Changes are limited to I/O (explicit arguments in place of

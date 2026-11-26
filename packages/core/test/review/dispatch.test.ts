@@ -666,3 +666,22 @@ describe("VS-40a: long-context tiers and effort", () => {
     ])
   })
 })
+
+test("prices certificate evidence once per checker response in both bands and calibration models", () => {
+  const plan = { pass: "verify", model: "test/model", maxSteps: 10, promptTokens: 1000, price: SONNET }
+  const extraOutputTokens = 4000
+  for (const maxSteps of [1, 5, 10]) {
+    const plain = estimateDispatch([{ ...plan, maxSteps }])
+    const estimated = estimateDispatch([{ ...plan, maxSteps, extraOutputTokens }])
+    expect(estimated.firstTurnTokens).toEqual(plain.firstTurnTokens)
+    for (const side of ["low", "high"] as const) {
+      for (const [before, after] of [
+        [plain, estimated],
+        [plain.v2, estimated.v2],
+      ] as const) {
+        expect(after.outputTokens[side] - before.outputTokens[side]).toBe(extraOutputTokens)
+        expect(after.usd![side] - before.usd![side]).toBeCloseTo((extraOutputTokens * SONNET.output) / 1_000_000, 12)
+      }
+    }
+  }
+})

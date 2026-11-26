@@ -1756,3 +1756,25 @@ Branch `hands-stop-guardian`, item HF-7-2-catch-teardown-followup, the second fo
 ### Identity
 
 `helperVersion` stays **1.0.15**. Windows identity is the embedded source digest, which changes with this source.
+
+## HF-7 first Windows Stop root recovery (24 November 2026)
+
+The required isolated Stop in the [measured Windows run](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/45417064400/job/138845513055) failed on `uia-root-element` with `core_failure:no_ui_tree`, `first/root/retired`, `caller-wait` and an unobserved HRESULT. The independent 50-sample step completed with 45 passes, two refresh failures, and three failures after the interface changed. It recorded zero HF-7 samples.
+
+The owned first-root path in the Windows UIA backend can now open a fresh actor and ticket after one eligible `no_ui_tree` refusal. The first actor must be retired at `root-element`, `runtime-id` or `prepare-connection`, with an immutable caller-wait snapshot and no observed HRESULT. The isolated Stop driver revalidates its source, parent and window before accepting a retry and before using the result. A replacement refused before its ticket queues preserves the first refusal. Once a replacement returns a root, hit testing and refresh use the actor that produced it. A failed replacement ends the observation.
+
+Both the caller ticket and COM cancellation use at most their existing 50 ms and are capped by the original 15-second Stop watchdog. The refresh and posting checks retain their original budgets. The production banner routes Stop through trusted Electron IPC. Physical input routes Stop directly to the dispatcher. The isolated driver is the caller that exercises this recovery in the shared native UIA code.
+
+The Windows source digest changes and `helperVersion` stays **1.0.15** under the existing Windows-only identity practice. Hands remains flag-off. Qualification requires the x64 and ARM64 Windows native builds and units, a passing required isolated Stop, and a complete 50-sample repeat at the new source digest. Linux fake-backed checks cover the recovery decision. Windows CI supplies the native integration evidence.
+
+## HF-7 worker-observed runtime ID expiry (25 November 2026)
+
+The required Stop on landed `327fbc11` failed at `uia-runtime-id` with `core_failure:no_ui_tree`, a first-root retired actor, `worker-current`, and no observed HRESULT. The worker records this snapshot when the ticket expires just before `GetRuntimeId`. The same first-root recovery now covers this observed phase and expiry. The fresh actor still needs current source, parent and window evidence and time within the original Stop deadline. [Landed Windows test](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/45675088518/job/139420656987)
+
+The same run gave 47 passes out of 50 usable Stop samples. The three refusals occurred at the final pre-input check and reported `post` with `core_failure:changed`. Those samples report no narrower authority or deadline predicate. The worker-expiry recovery applies only to the first root observation. [Measured run](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/45675088518)
+
+## HF-7 expiry between the native handle and runtime ID (25 November 2026)
+
+The required Stop on `f6c4d097` reported `uia-root-wrap`, `core_failure:no_ui_tree`, a retired actor, caller-wait expiry and no observed HRESULT. The native window handle had matched, but the caller received no completed root. The same run's separate 50 samples all passed. The original receipt identifies the first root observation without distinguishing the actor that reported it. [Windows measurement](https://github.com/scr1pter/claudeondfsfdaf/actions/runs/45681833656/job/139446303811)
+
+The first actor can use its existing recovery when the caller's wait expires at this transition. The worker-side allowance stays limited to the runtime ID check. The replacement still runs the entire root observation against current authority within the original deadline. A failed replacement ends the observation. The additional phase changes the Windows source digest. [Prior recovery](#hf-7-worker-observed-runtime-id-expiry-25-november-2026)

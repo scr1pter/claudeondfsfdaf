@@ -608,6 +608,8 @@ export interface Interface {
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
+  /** The durable audience of a contributor, including its fork family and deleted session ids. */
+  readonly isOwnerOnly: SessionAudience.Interface["isPrivate"]
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
   readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
   readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
@@ -1273,6 +1275,7 @@ const layer: Layer.Layer<
       fork,
       touch,
       get,
+      isOwnerOnly: audience.isPrivate,
       setTitle,
       setArchived,
       setMetadata,
