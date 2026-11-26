@@ -61,7 +61,7 @@ export function bindingStore(answer: () => Record<string, string> | undefined | 
   return { store, commands }
 }
 
-/** A stand-in for attachmentRepository; `visibility` is the field EV-29 asks github-app.ts to add (no package yet). */
+/** A stand-in for attachmentRepository, including its optional live visibility field. */
 export function stubApp(answer: () => Promise<{ publicRepository: boolean; visibility?: string }>) {
   const calls: RepoBinding[] = []
   return {

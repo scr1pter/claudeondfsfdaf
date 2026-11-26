@@ -17,6 +17,7 @@ import {
   incidentTitle,
   intervalLine,
   manualReason,
+  monitorStatusLine,
   opsErrorText,
   opsParts,
   opsSections,
@@ -362,6 +363,38 @@ describe("domains and URLs", () => {
     expect(intervalLine(300)).toBe("every 5 minutes")
     expect(intervalLine(60)).toBe("every minute")
     expect(decodeMonitors({ monitors: [], limits: null }).limits).toBeUndefined()
+  })
+
+  test("a resolver warning describes the last skipped check, without claiming an outage or current health", () => {
+    const monitor = {
+      id: "mon_aaaaaaaaaaaaaaaa",
+      url: "https://shop.example.com/health",
+      domainVerified: true,
+      checked: true,
+    }
+    const decoded = (resolverFailedAt: unknown) =>
+      decodeMonitors({ monitors: [{ ...monitor, resolverFailedAt }] }).monitors[0]!
+    expect(decoded(NOW).resolverFailedAt).toBe(NOW)
+    expect(monitorStatusLine(decoded(NOW))).toBe("Last check skipped: DNS lookup failed")
+    for (const invalid of [
+      undefined,
+      null,
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+      "123",
+      {},
+    ])
+      expect(decoded(invalid).resolverFailedAt).toBeUndefined()
+    expect(monitorStatusLine(decoded(undefined))).toBe("Checks configured")
+    for (const change of [{ domainVerified: false }, { checked: false }]) {
+      const value = decodeMonitors({ monitors: [{ ...monitor, ...change, resolverFailedAt: NOW }] }).monitors[0]!
+      expect(value.resolverFailedAt).toBeUndefined()
+      expect(monitorStatusLine(value)).toBe(change.checked === false ? "Past your plan's URLs" : "Domain not verified")
+    }
   })
 })
 
