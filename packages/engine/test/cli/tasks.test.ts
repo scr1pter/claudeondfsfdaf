@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { PassThrough } from "node:stream"
 import yargs from "yargs"
-import { createVectorClient } from "@vectordevai/sdk/v2"
+import { createVectorClient, type TaskListResult } from "@vectordevai/sdk/v2"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import type { Task } from "@vectordevai/schema/task"
 import {
@@ -175,7 +175,13 @@ function info(input: Partial<Task.Info> & { id: string }): Task.Info {
 
 function server(
   requests: Request[],
-  input: { capabilities?: () => Response; tasks?: Task.Info[]; shells?: Task.Shell[] } = {},
+  input: {
+    capabilities?: () => Response
+    tasks?: Task.Info[]
+    shells?: Task.Shell[]
+    truncated?: boolean
+    stop?: (taskIDs: string[]) => Response
+  } = {},
 ) {
   return createVectorClient({
     baseUrl: "http://fixture.invalid",
@@ -186,10 +192,10 @@ function server(
       const url = new URL(request.url)
       const path = url.pathname
       if (path === "/experimental/capabilities") return input.capabilities?.() ?? Response.json(ALL_FLAGS)
-      if (path.endsWith("/stop") && path.includes("/tasks/"))
-        return Response.json({
-          tasks: ((await request.clone().json()).taskIDs ?? []).map((id: string) => info({ id })),
-        })
+      if (path.endsWith("/stop") && path.includes("/tasks/")) {
+        const { taskIDs = [] } = (await request.clone().json()) as { taskIDs?: string[] }
+        return input.stop?.(taskIDs) ?? Response.json({ tasks: taskIDs.map((id) => info({ id, status: "stopped" })) })
+      }
       if (path.endsWith("/session/parent/stop"))
         return Response.json({ aborted: true, tasks: [info({ id: "ses_a" })], shells: 1, excluded: 1, skipped: 0 })
       if (path.endsWith("/tasks/resume"))
@@ -210,7 +216,7 @@ function server(
       if (path.endsWith("/tasks"))
         return Response.json({
           tasks: input.tasks ?? [],
-          truncated: false,
+          truncated: input.truncated ?? false,
           ...(input.shells ? { shells: input.shells } : {}),
         })
       return Response.json({}, { status: 404 })
@@ -226,6 +232,26 @@ function operations(requests: Request[]) {
       return [request.method, url.pathname, url.search.replace(/[?&]directory=[^&]*/, "")]
     })
 }
+
+test("tasks list --shells distinguishes an unavailable command list from an empty list", async () => {
+  const options = { action: "list", session: "parent", shells: true }
+  const requests: Request[] = []
+  const unavailable = await executeTaskCommand(server(requests), options)
+
+  expect(operations(requests)).toEqual([
+    ["GET", "/experimental/session/parent/tasks", "?descendants=false&shells=true"],
+  ])
+  expect(tasksForOutput(unavailable)).toEqual({ tasks: [], truncated: false })
+  expect(await formatTaskResult(options, unavailable)).toBe(
+    "No subagent tasks.\nCould not list background commands. Try again.",
+  )
+
+  const empty = await executeTaskCommand(server([], { shells: [] }), options)
+  const expectedEmpty: TaskListResult = { tasks: [], truncated: false, shells: [] }
+  expect(tasksForOutput(empty)).toEqual(expectedEmpty)
+  expect(await formatTaskResult(options, empty)).toBe("No subagent tasks.\nNo background commands.")
+  expect(await formatTaskResult({ action: "list" }, unavailable)).toBe("No subagent tasks.")
+})
 
 const yes = { confirm: async () => true }
 
@@ -362,11 +388,16 @@ test("missing flags and HTML capabilities print the update instruction before an
 
 test("stop --background stops only running background subagents, and refuses an engine that cannot tell", async () => {
   const requests: Request[] = []
+  const stopping = info({
+    id: "ses_stopping",
+    background: true,
+    controls: { inspect: true, message: false, stop: false },
+  })
   const tasks = [
     info({ id: "ses_bg", background: true }),
     info({ id: "ses_fg", background: false }),
     info({ id: "ses_done", status: "completed", background: true }),
-    info({ id: "ses_stopping", background: true, controls: { inspect: true, message: false, stop: false } }),
+    stopping,
     info({ id: "desk", source: "team" }),
   ]
   const client = server(requests, { tasks })
@@ -382,7 +413,7 @@ test("stop --background stops only running background subagents, and refuses an 
   ])
   expect(await requests[1].json()).toEqual({ taskIDs: ["ses_bg"], reason: "Enough" })
   expect(await formatTaskResult({ action: "stop", background: true }, result)).toStartWith(
-    "Stopped 1 background subagent.",
+    "The server reported 1 background subagent as stopped.",
   )
 
   const many: Request[] = []
@@ -404,17 +435,102 @@ test("stop --background stops only running background subagents, and refuses an 
   ).rejects.toThrow("This server's engine predates 1.99.113 and cannot stop only its background subagents; update it.")
   expect(operations(old)).toEqual([["GET", "/experimental/session/parent/tasks", "?active=true"]])
   const none: Request[] = []
-  const empty = await executeTaskCommand(server(none, { tasks: [info({ id: "desk", source: "swarm" })] }), {
+  const empty = await executeTaskCommand(server(none, { tasks: [stopping, info({ id: "desk", source: "swarm" })] }), {
     action: "stop",
     session: "parent",
     background: true,
   })
+  expect(operations(none)).toEqual([["GET", "/experimental/session/parent/tasks", "?active=true"]])
   expect(await formatTaskResult({ action: "stop", background: true }, empty)).toBe(
-    "No background subagents are running.",
+    "No background subagents were stopped.",
   )
   await expect(
     executeTaskCommand(server([]), { action: "stop", session: "parent", background: true, all: true }),
   ).rejects.toThrow("Choose --background, --all or specific task IDs")
+})
+
+test("stop --background reports a partial list and stops only listed background subagents", async () => {
+  const options = { action: "stop", session: "parent", background: true }
+  const warning = "The server returned an incomplete task list. More background subagents may still be running."
+  const requests: Request[] = []
+  const empty = await executeTaskCommand(server(requests, { tasks: [], truncated: true }), options)
+  expect(await formatTaskResult(options, empty)).toBe(`No listed background subagents were stopped.\n${warning}`)
+  expect(tasksForOutput(empty)).toEqual({ tasks: [], truncated: true })
+  expect(operations(requests)).toEqual([["GET", "/experimental/session/parent/tasks", "?active=true"]])
+
+  const mixed: Request[] = []
+  const tasks = [
+    info({ id: "ses_bg", background: true }),
+    info({ id: "ses_fg", background: false }),
+    info({ id: "desk", source: "team" }),
+  ]
+  const stopped = await executeTaskCommand(server(mixed, { tasks, truncated: true }), options)
+  expect(await mixed[1].json()).toEqual({ taskIDs: ["ses_bg"] })
+  expect(await formatTaskResult(options, stopped)).toStartWith("The server reported 1 background subagent as stopped.")
+  expect(await formatTaskResult(options, stopped)).toEndWith(warning)
+  expect(tasksForOutput(stopped)).toMatchObject({ truncated: true })
+})
+
+test("stop --background reports only returned stopped states and shows every outcome", async () => {
+  const options = { action: "stop", session: "parent", background: true }
+  const otherOutcomes = [
+    info({ id: "ses_completed", status: "completed" }),
+    info({ id: "ses_failed", status: "failed" }),
+    info({ id: "ses_running", status: "running" }),
+  ]
+  const returned = [
+    info({ id: "ses_stopped", status: "stopped" }),
+    info({ id: "ses_interrupted", status: "stopped", interrupted: { at: 1, cause: "crash" } }),
+    ...otherOutcomes,
+  ]
+  const result = await executeTaskCommand(
+    server([], {
+      tasks: returned.map(({ id }) => info({ id, background: true })),
+      stop: () => Response.json({ tasks: returned }),
+    }),
+    options,
+  )
+  const output = await formatTaskResult(options, result)
+  expect(output).toStartWith("The server reported 2 background subagents as stopped.")
+  for (const task of returned) expect(output).toContain(`${task.id}  ${task.status}`)
+  expect(tasksForOutput(result)).toEqual({ tasks: returned })
+
+  const noStops = await formatTaskResult(options, { tasks: otherOutcomes })
+  expect(noStops).toStartWith("The server reported no background subagents as stopped.")
+  for (const task of otherOutcomes) expect(noStops).toContain(`${task.id}  ${task.status}`)
+})
+
+test("stop --background reports successful requests before a failure and sends no later batch", async () => {
+  const options = { action: "stop", session: "parent", background: true }
+  const tasks = Array.from({ length: 401 }, (_, index) => info({ id: `ses_${index}`, background: true }))
+  const failure = new Error("Stop response unavailable")
+  const execute = (requests: Request[], failAt: string) =>
+    executeTaskCommand(
+      server(requests, {
+        tasks,
+        stop: (taskIDs) => {
+          if (taskIDs[0] === failAt) throw failure
+          return Response.json({ tasks: taskIDs.map((id) => info({ id, status: "stopped" })) })
+        },
+      }),
+      options,
+    )
+
+  const first: Request[] = []
+  await expect(execute(first, "ses_0")).rejects.toBe(failure)
+  expect(first).toHaveLength(2)
+
+  const later: Request[] = []
+  await expect(execute(later, "ses_200")).rejects.toMatchObject({
+    message:
+      "The server returned results for 200 background subagents from 1 successful Stop request. The next request failed. Stop response unavailable",
+    cause: failure,
+  })
+  expect(later).toHaveLength(3)
+  const batches = await Promise.all(later.slice(1).map((request) => request.json()))
+  expect(batches.map((batch) => batch.taskIDs)).toEqual(
+    [tasks.slice(0, 200), tasks.slice(200, 400)].map((batch) => batch.map((task) => task.id)),
+  )
 })
 
 test("merge and discard refuse under the agent marker before any request, and need a confirmation", async () => {

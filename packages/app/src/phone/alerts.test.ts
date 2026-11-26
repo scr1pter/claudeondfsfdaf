@@ -9,9 +9,44 @@ import {
   UNREADABLE_ALERT,
 } from "./alerts"
 import { base64url } from "./auth"
+import { PHONE_PUSH_CHANGED } from "./config"
 
 // WP A38: the service worker shows what A37's server sends (P7): a server alert's title only, or a desktop alert
 // opened on the phone with the alert key it paired with. Anything else shows a notification without content.
+
+test("a browser subscription change sends only an invalidation to controlled phone pages", async () => {
+  const messages: [string, unknown][] = []
+  const origin = "https://phone.fixture.invalid"
+  type WorkerListener = (event: { waitUntil(pending: Promise<unknown>): void }) => void
+  const listeners = new Map<string, WorkerListener>()
+  const self = Object.getOwnPropertyDescriptor(globalThis, "self")
+  Object.defineProperty(globalThis, "self", {
+    configurable: true,
+    value: {
+      location: { origin },
+      addEventListener: (name: string, listener: WorkerListener) => listeners.set(name, listener),
+      clients: {
+        async matchAll(options: unknown) {
+          expect(options).toEqual({ type: "window", includeUncontrolled: false })
+          return [`${origin}/phone/notifications`, `${origin}/account`, "https://other.fixture.invalid/phone/"].map(
+            (url) => ({ url, postMessage: (message: unknown) => messages.push([url, message]) }),
+          )
+        },
+      },
+    },
+  })
+  try {
+    await import("./sw")
+    let pending: Promise<unknown> | undefined
+    listeners.get("pushsubscriptionchange")?.({ waitUntil: (work) => (pending = work) })
+    expect(pending).toBeDefined()
+    await pending
+    expect(messages).toEqual([[`${origin}/phone/notifications`, PHONE_PUSH_CHANGED]])
+  } finally {
+    if (self) Object.defineProperty(globalThis, "self", self)
+    else Reflect.deleteProperty(globalThis, "self")
+  }
+})
 
 async function alertKey(raw = crypto.getRandomValues(new Uint8Array(32))) {
   return {
