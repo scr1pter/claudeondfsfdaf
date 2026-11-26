@@ -36,7 +36,9 @@ export async function receipt(executable = process.execPath): Promise<Receipt | 
   const raw = await readFile(file, "utf8")
   if (!raw.endsWith("\n") || raw.slice(0, -1).includes("\n") || raw.includes("\r")) return
   const fields = raw.slice(0, -1).split("\t")
-  if (fields.length !== 8 || fields[0] !== "vector-standalone" || fields[1] !== "1" || fields[5] !== binary) return
+  const legacy = fields[1] === "1" && fields.length === 8
+  const withHolder = fields[1] === "2" && fields.length === 9
+  if ((!legacy && !withHolder) || fields[0] !== "vector-standalone" || fields[5] !== binary) return
   if (
     !Schema.is(CliRelease.Version)(fields[2]) ||
     !Schema.is(CliRelease.Target)(fields[3]) ||
@@ -44,6 +46,16 @@ export async function receipt(executable = process.execPath): Promise<Receipt | 
   )
     return
   if (!Schema.is(CliRelease.Digest)(fields[6]) || !Schema.is(CliRelease.Digest)(fields[7])) return
+  if (withHolder) {
+    const arch =
+      fields[3] === "windows-arm64"
+        ? "arm64"
+        : fields[3] === "windows-x64" || fields[3] === "windows-x64-baseline"
+          ? "x64"
+          : undefined
+    const holder = /^vector-holder-(x64|arm64)-[a-f0-9]{64}\.exe$/.exec(fields[8]!)
+    if (!binary.endsWith(".exe") || !arch || holder?.[1] !== arch) return
+  }
   const owned = await Promise.all(notices.map((name) => lstat(path.join(metadata, name)))).catch(() => undefined)
   if (!owned?.every((stat) => stat.isFile() && !stat.isSymbolicLink())) return
   if (
@@ -199,6 +211,7 @@ export async function uninstall(value: Receipt, run: Run): Promise<Result> {
       statusFile,
       temporaryDirectory: directory,
       binarySha256: value.binarySha256,
+      // Holder files can be in use by another standalone binary in this directory.
       files: [
         value.executable,
         ...notices.map((name) => path.join(value.metadata, name)),

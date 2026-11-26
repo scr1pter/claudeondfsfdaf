@@ -11,7 +11,7 @@ import {
   type AlertSender,
   type Incident,
 } from "../api/_lib/ops-incidents"
-import { newOpsSettings, updateOpsSettings } from "../api/_lib/ops-settings"
+import { newOpsSettings, syncOpsConfig, updateOpsSettings } from "../api/_lib/ops-settings"
 import { environmentKey, releaseIndexKey, releaseRecordKey, type ReleaseRecord } from "../api/_lib/release-guard"
 import { cardIndexKey, cardKey, imageObjectKey, SHIP_DESK_LIMITS, type Card } from "../api/_lib/ship-desk"
 import { handleOpsCards } from "../api/ops/cards"
@@ -366,6 +366,108 @@ describe("the screens read the API's real answers", () => {
       monitors: [{ id: MONITOR, url: `https://${HOST}/health`, domainVerified: true, checked: true }],
       limits: { urls: 5, intervalSec: 300 },
     })
+  })
+
+  test("a resolver failure reaches the monitor screen without probing the site or opening an incident", async () => {
+    await ready()
+    expect(await syncOpsConfig(MAX, world.fetcher(), world.now)).toBe("synced")
+    world.worker.net.dns.set(HOST, { fail: true })
+    await world.worker.runFor(10 * 60_000, (at) => world.advance(at - world.now))
+    expect(world.worker.net.dnsQueries).toBeGreaterThanOrEqual(4)
+
+    const listed = await send({ kind: "monitors" })
+    expect(listed.status).toBe(200)
+    const failedAt = listed.body.monitors[0].resolverFailedAt
+    expect(Number.isSafeInteger(failedAt) && failedAt > 0 && failedAt <= world.now).toBe(true)
+    expect(listed.body.monitors[0]).toMatchObject({
+      id: MONITOR,
+      checked: true,
+      resolverFailedAt: failedAt,
+    })
+    expect(decodeMonitors(listed.body).monitors[0]?.resolverFailedAt).toBe(failedAt)
+    expect(world.worker.net.probes(`https://${HOST}/health`)).toBe(0)
+    expect(world.worker.net.events()).toEqual([])
+    expect(decodeIncidents((await send({ kind: "incidents" })).body)).toEqual([])
+
+    // A state read failure never prevents reading or removing configured URLs.
+    world.worker.down = true
+    const unreadable = await send({ kind: "monitors" })
+    expect(unreadable.status).toBe(200)
+    expect(unreadable.body.monitors[0].resolverFailedAt).toBeUndefined()
+    world.worker.down = false
+
+    // Failed resolutions are retried; a later public answer clears the display warning.
+    world.worker.net.dns.delete(HOST)
+    await world.worker.runFor(5 * 60_000, (at) => world.advance(at - world.now))
+    expect((await send({ kind: "monitors" })).body.monitors[0].resolverFailedAt).toBeUndefined()
+    expect(world.worker.net.probes(`https://${HOST}/health`)).toBe(1)
+    expect(world.worker.net.events()).toEqual([])
+  })
+
+  test("malformed, ambiguous or unrelated Worker observations never become resolver warnings", async () => {
+    await ready()
+    await syncOpsConfig(MAX, world.fetcher(), world.now)
+    const row = { id: MONITOR, probed: true, verified: true, reason: "resolver", checkedAt: world.now }
+    const invalid = [
+      { active: false, monitors: [row] },
+      { active: true, monitors: null },
+      { active: true, monitors: [row, row] },
+      ...[
+        { id: "another-monitor" },
+        { probed: false },
+        { verified: false },
+        { reason: "address" },
+        { reason: "dns" },
+        { reason: "status" },
+        { checkedAt: 0 },
+        { checkedAt: -1 },
+        { checkedAt: 1.5 },
+        { checkedAt: world.now + 1 },
+        { checkedAt: "123" },
+      ].map((change) => ({ active: true, monitors: [{ ...row, ...change }] })),
+    ]
+    for (const state of invalid) {
+      const base = world.fetcher()
+      const fetcher: typeof fetch = (input, init) =>
+        String(input).endsWith("/internal/v1/state") ? Promise.resolve(Response.json(state)) : base(input, init)
+      const listed = await invoke(
+        (request, response) => handleOpsMonitors(request, response, fetcher, () => world.now),
+        { method: "GET", authorization: world.token(MAX) },
+      )
+      expect(listed.status).toBe(200)
+      expect(listed.body.monitors[0].resolverFailedAt).toBeUndefined()
+    }
+  })
+
+  test("a slow Worker read leaves the configured monitors available", async () => {
+    await ready()
+    await syncOpsConfig(MAX, world.fetcher(), world.now)
+    const base = world.fetcher()
+    let aborted = false
+    const fetcher: typeof fetch = (input, init) => {
+      if (!String(input).endsWith("/internal/v1/state")) return base(input, init)
+      return new Promise((resolve, reject) => {
+        // Complete the old full-budget read too, so the timeout regression fails without hanging the test.
+        const fallback = setTimeout(() => resolve(new Response(null, { status: 503 })), 3_000)
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(fallback)
+            aborted = true
+            reject(init.signal?.reason)
+          },
+          { once: true },
+        )
+      })
+    }
+    const listed = await invoke((request, response) => handleOpsMonitors(request, response, fetcher, () => world.now), {
+      method: "GET",
+      authorization: world.token(MAX),
+    })
+    expect(listed.status).toBe(200)
+    expect(listed.body.monitors[0]).toMatchObject({ id: MONITOR, checked: true })
+    expect(listed.body.monitors[0].resolverFailedAt).toBeUndefined()
+    expect(aborted).toBe(true)
   })
 })
 

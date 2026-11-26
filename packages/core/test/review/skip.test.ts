@@ -168,3 +168,14 @@ describe("the trivial reason", () => {
     }
   })
 })
+
+test("pending batch coverage survives a pruned unreviewed list and never skips as already reviewed", () => {
+  const batch = { version: 1 as const, head, plan: "d".repeat(64), completed: 0, covered: 0 }
+  expect(decideSkip(input({ state: state({ head, unreviewed: [], batch }) }))).toEqual(run)
+  expect(decideSkip(input({ state: state({ head, unreviewed: [] }) }))).toMatchObject({
+    skip: true,
+    reason: "already-reviewed",
+  })
+  const config = { ...DEFAULT_REVIEW_CONFIG, largeChanges: "batch" as const, maxFiles: 1 }
+  expect(decideSkip(input({ config }))).toMatchObject({ skip: true, reason: "too-large" })
+})

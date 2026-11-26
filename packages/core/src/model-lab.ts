@@ -99,12 +99,12 @@ export function labOf(name: string, hint?: string): Lab | undefined {
   const [provider, ...rest] = segments
   // A vendor segment inside the model id ("openrouter/anthropic/claude-…", "vector-plan/deepseek/…").
   for (const segment of rest.slice(0, -1)) {
-    const vendor = VENDORS[segment]
-    if (vendor) return vendor
+    if (Object.hasOwn(VENDORS, segment)) return VENDORS[segment]
   }
   const model = rest.at(-1) ?? provider!
   for (const [pattern, lab] of FAMILIES) if (pattern.test(model)) return lab
-  return rest.length ? FIRST_PARTY[provider!] : undefined
+  if (!rest.length || !Object.hasOwn(FIRST_PARTY, provider!)) return undefined
+  return FIRST_PARTY[provider!]
 }
 
 /** A lab's name as copy shows it. */

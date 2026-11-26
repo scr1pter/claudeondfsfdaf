@@ -66,7 +66,13 @@ export function decideSkip(input: SkipInput): SkipDecision {
     // A command on a fork runs instead, in untrusted mode.
     if (pr.fork) return skip("fork")
   }
-  if (!input.full && state?.head === input.head && state.unreviewed.length === 0 && !state.failed)
+  if (
+    !input.full &&
+    state?.head === input.head &&
+    state.unreviewed.length === 0 &&
+    !state.failed &&
+    state.batch?.head !== input.head
+  )
     return skip("already-reviewed", auto ? "none" : "reply")
   if (auto && config.maxCostUsdPerPr > 0 && (state?.costUsd ?? 0) >= config.maxCostUsdPerPr)
     return skip("pr-budget", once)

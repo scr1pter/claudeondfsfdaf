@@ -22,7 +22,12 @@ import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { UnattendedShell } from "@/session/unattended-shell"
 import { ModelV2 } from "@vectordevai/core/model"
+import { ModelCatalog } from "@vectordevai/core/model-catalog"
+import { scopeOf } from "@vectordevai/core/review/prompt"
+import { ReviewSessionAdmission } from "@vectordevai/core/review/session-admission"
 import { Provider } from "@/provider/provider"
+import { ReviewRoutes } from "@/review/route"
+import { storedZdr } from "@/review/session-admission"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { freeModelMayTrain, FREE_MODEL_TRAINING_OWNER_ONLY } from "@vectordevai/core/free-model-choice"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -73,6 +78,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const shareSvc = yield* SessionShare.Service
     const publicSharing = yield* PublicSessionShare.Service
     const config = yield* Config.Service
+    const database = yield* Database.Service
     const promptSvc = yield* SessionPrompt.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
@@ -451,14 +457,77 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const admitted = (sessionID: SessionID) =>
       promptSvc.admit(sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
 
+    const recordReviewHold = (sessionID: SessionID) =>
+      database.db
+        .transaction(
+          () =>
+            Effect.gen(function* () {
+              const { metadata } = yield* session.get(sessionID)
+              if (metadata?.[ReviewSessionAdmission.ZDR_METADATA] === true) return
+              yield* session.setMetadata({
+                sessionID,
+                metadata: { ...metadata, [ReviewSessionAdmission.ZDR_METADATA]: true },
+              })
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+
+    // VS-23d (SF-15): the desktop creates and prompts its review sessions over HTTP, so no Review.run holds them. The
+    // prompt of a `vectorscope.*` session records a hold when the server's policy, the prompt's review scope, or a
+    // prior prompt requires "zdr". It adopts a fresh hold using the user config's attestations alone, for the prompt's
+    // agent and model. The transport and session runtime refuse an unattested route before anything is sent.
+    const holdReview = Effect.fn("SessionHttpApi.holdReview")(function* (
+      info: Session.Info,
+      payload: typeof PromptPayload.Type,
+    ) {
+      if (!ReviewSessionAdmission.isReviewSession(info.internal)) return
+      if (ReviewRoutes.zdr(info.id)) {
+        yield* recordReviewHold(info.id)
+        return
+      }
+      const server = ReviewRoutes.serverPolicy((yield* config.getGlobal()).review)
+      const asked = payload.parts.some((part) => part.type === "text" && scopeOf(part.metadata)?.privacy === "zdr")
+      if (server.privacy !== "zdr" && !asked && !(yield* storedZdr(database, info.id).pipe(Effect.orDie))) return
+      yield* recordReviewHold(info.id)
+      const model = payload.model
+      // Where the catalog ships the provider, which an attestation of the provider ID covers, as model.ts reads it.
+      // Without the catalog service it is unknown, so an attestation of the provider ID covers no host.
+      const catalog = yield* Effect.serviceOption(ModelCatalog.Service)
+      const catalogOrigins =
+        model && Option.isSome(catalog)
+          ? ReviewRoutes.shippedOrigins({
+              catalog: yield* catalog.value.get(),
+              configured: Object.hasOwn((yield* config.get()).provider ?? {}, model.providerID),
+              providerID: model.providerID,
+              modelID: model.modelID,
+            })
+          : undefined
+      yield* ReviewRoutes.adopt(provider, {
+        sessionID: info.id,
+        policy: { privacy: "zdr", attested: server.attested },
+        ...(payload.agent ? { agent: payload.agent } : {}),
+        ...(model
+          ? {
+              subject: {
+                providerID: model.providerID,
+                modelID: model.modelID,
+                ...(catalogOrigins ? { catalogOrigins } : {}),
+              },
+            }
+          : {}),
+      })
+    })
+
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      const info = yield* requireSession(ctx.params.sessionID)
       yield* requireOwnerToAllow({ tools: ctx.payload.tools })
       yield* admitted(ctx.params.sessionID)
       yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
+      yield* holdReview(info, ctx.payload)
       const message = yield* promptSvc
         .prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }, yield* promptOptions)
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
@@ -471,10 +540,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      const info = yield* requireSession(ctx.params.sessionID)
       yield* requireOwnerToAllow({ tools: ctx.payload.tools })
       yield* admitted(ctx.params.sessionID)
       yield* SessionAudienceHttp.admit(ctx.params.sessionID, yield* RequestOwner.owner)
+      yield* holdReview(info, ctx.payload)
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }, yield* promptOptions).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -604,7 +674,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // Step usage and its Codium flag are the engine's record (its processor writes through Session.updatePart, not
       // this route). The projector keeps a stored part's message and session, so a part is edited where it is stored,
       // and an edit never moves a step's figures between the own and Codium totals or certifies Codium tokens as own.
-      const database = yield* Database.Service
       const row = yield* database.db
         .select()
         .from(PartTable)

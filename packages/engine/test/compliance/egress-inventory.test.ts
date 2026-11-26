@@ -154,7 +154,7 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/core/src/research/export.ts":
     "The Office Open XML namespace names a .docx export writes into the file; nothing connects to them.",
   "packages/core/src/review/fix-proposal.ts":
-    "The canonical GitHub remote accepted by the proposal validator; it connects to nothing and grants no execution.",
+    "The canonical GitHub remote accepted by the proposal validator (a local fix may also name a file:/// remote); it connects to nothing and grants no execution.",
   "packages/core/src/review/format.ts": SHOWN,
   "packages/core/src/review/workflow.ts":
     "The GitHub App installation address used to validate a configured handle; nothing here connects to it.",
@@ -183,6 +183,8 @@ const ADDRESSES: Readonly<Record<string, string>> = {
   "packages/engine/src/plugin/xai.ts": MODEL_API,
   "packages/engine/src/provider/transform.ts":
     "OpenAI's API address, compared with a model's configured address to decide whether prompt cache boundaries apply; nothing here connects to it.",
+  "packages/engine/src/review/route.ts":
+    "The privacy check compares SDK origins with the user's attestations. The provider transport makes the model request.",
   "packages/engine/src/server/routes/instance/httpapi/handlers/teams.ts": SHOWN,
   "packages/engine/src/util/repository.ts": GIT,
   "packages/llm/src/protocols/anthropic-messages.ts": MODEL_API,
@@ -386,6 +388,19 @@ describe("Vector Local's connection inventory", () => {
     // An excuse names a file that still writes an address and has not become a call site.
     const all = new Map(writing.map((item) => [item.file, item.text]))
     expect(Object.keys(ADDRESSES).filter((file) => !all.has(file) || listed.has(file))).toEqual([])
+  })
+
+  test("the review privacy check only compares its known origins", async () => {
+    const source = strip(await Bun.file(path.join(ROOT, "packages/engine/src/review/route.ts")).text())
+    expect(connects(source)).toBe(false)
+    // Include the scheme and port in the pin, as well as the sentinel used when a model has no shipped origin.
+    const origins = [...source.matchAll(/["'`](https?:\/\/[^"'`\s]+)/g)].map((match) => match[1])
+    expect([...new Set(origins)].sort()).toEqual([
+      "https://api.anthropic.com",
+      "https://api.openai.com",
+      "https://generativelanguage.googleapis.com",
+      "https://unknown-shipped-origin.invalid",
+    ])
   })
 
   test("every connection a call site makes is labelled or decided where it is made, or excused one by one", async () => {

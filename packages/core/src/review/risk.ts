@@ -260,3 +260,24 @@ function plural(value: number, one: string, many: string) {
 function dirname(path: string) {
   return path.slice(0, Math.max(0, path.lastIndexOf("/")))
 }
+
+// VS-39/VS-19: rank likelihood per changed line, weighted by the assessed band (low 1, medium 2, high 3).
+// The final path comparison uses code-unit order rather than the machine's locale.
+export function orderByRiskDensity<T extends Pick<DiffFile, "path" | "oldPath" | "additions" | "deletions">>(
+  files: readonly T[],
+  dependents?: ReadonlyMap<string, number>,
+): T[] {
+  return files
+    .map((file) => {
+      const reach = dependents?.get(file.path)
+      const risk = riskOf(riskFeatures([file], { dependents: reach }))
+      return {
+        file,
+        density:
+          ((RISK_BANDS.indexOf(risk.band) + 1) * risk.likelihood.score) /
+          Math.max(1, count(file.additions) + count(file.deletions)),
+      }
+    })
+    .sort((a, b) => b.density - a.density || (a.file.path < b.file.path ? -1 : Number(a.file.path > b.file.path)))
+    .map(({ file }) => file)
+}

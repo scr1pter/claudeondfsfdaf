@@ -5,6 +5,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpRouter, HttpServer 
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { createVectorClient } from "@vectordevai/sdk/v2"
+import { BrainRunProposals } from "@vectordevai/core/brain/run-proposals"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { GUEST_REQUEST_HEADER, FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { SessionAudience } from "@vectordevai/core/session/audience"
@@ -26,6 +27,7 @@ import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { httpApiLayer } from "./httpapi-layer"
+import { createGithubAgentsBrain } from "../../../desktop/src/main/github-agents-brain"
 
 const allowedID = SessionID.make("ses_workflow_http_authorized")
 const auth = (username: string, password: string) =>
@@ -105,6 +107,50 @@ afterEach(async () => {
   await resetDatabase()
 })
 
+it.live("desktop Brain preview uses the real owner route and returns the exact local attachment", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const server = yield* HttpServer.HttpServer
+    const origin = HttpServer.formatAddress(server.address)
+    const text = "Run the parser fixtures before publishing a release."
+    const created = yield* f.raw("/memory", owner, { kind: "lesson", scope: "repository", text })
+    expect(created.status, yield* call(() => created.text())).toBe(200)
+    const desktop = createGithubAgentsBrain({
+      token: async () => "fixture-desktop-account",
+      context: async (cwd) => {
+        expect(cwd).toBe(f.directory)
+        return {
+          authority: "fixture-authority",
+          access: { token: "fixture-github-account", source: "vector" },
+          info: { id: 41, full_name: "fixture/repository", private: true, permissions: { push: true } },
+        }
+      },
+      engine: async () => ({ url: origin, username: "vector", password: "owner-secret" }),
+      vector: async () => {
+        throw new Error("Preview must stay on the local Engine")
+      },
+      fetch: Object.assign(
+        async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          expect(new URL(String(input)).origin).toBe(origin)
+          return fetch(input, init)
+        },
+        {
+          preconnect: () => {
+            throw new Error("Unexpected connection during local preview")
+          },
+        },
+      ),
+    })
+    yield* Effect.addFinalizer(() => Effect.sync(desktop.clear))
+
+    const preview = yield* call(() => desktop.preview(f.directory))
+    expect(preview).toMatchObject({ repositoryId: "41", publicRepository: false, entries: 1, skills: 0 })
+    expect(JSON.parse(preview.text)).toMatchObject({ memory: { entries: [{ text }] } })
+    expect(preview.bytes).toBe(Buffer.byteLength(preview.text))
+    expect(preview.sha256).toBe(new Bun.CryptoHasher("sha256").update(preview.text).digest("hex"))
+  }),
+)
+
 it.live("owner preview validates without writes; guests and forwarded guests cannot preview or mutate", () =>
   Effect.gen(function* () {
     const f = yield* fixture()
@@ -142,6 +188,68 @@ it.live("owner preview validates without writes; guests and forwarded guests can
     expect((yield* call(() => f.sdk.session.children({ sessionID: allowedID }))).data).toHaveLength(0)
     expect(yield* f.llm.inputs).toHaveLength(0)
   }),
+)
+
+it.live(
+  "the owner import handler stages a valid returned Brain draft for review",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const text = "Run the local parser fixture after changing token delimiters."
+      const packed = yield* call(() =>
+        BrainRunProposals.pack({
+          memory: {
+            format: "vector-memory",
+            version: 1,
+            scope: "repository",
+            exportedAt: 30,
+            documents: [],
+            entries: [
+              {
+                id: "returned-parser-fixture",
+                kind: "lesson",
+                scope: "repository",
+                status: "proposed",
+                pinned: false,
+                text,
+                paths: [],
+                evidence: [],
+                createdAt: 20,
+              },
+            ],
+          },
+          startedAt: 10,
+          publicRepository: false,
+          maxBytes: BrainRunProposals.MAX_BYTES,
+          screen: async () => [true],
+        }),
+      )
+      if (!packed) throw new Error("Could not encode the returned draft fixture")
+      const post = (sha256: string) =>
+        f.raw("/experimental/brain/run-proposals/import", owner, {
+          path: packed.path,
+          base64url: packed.bytes.toString("base64url"),
+          sha256,
+          publicRepository: false,
+        })
+      const rejected = yield* post("0".repeat(64))
+      expect(rejected.status).toBe(400)
+      const rejectedRows = yield* f.raw("/memory?scope=repository&filter=all")
+      expect(rejectedRows.status).toBe(200)
+      expect(yield* call(() => rejectedRows.json())).toMatchObject({ entries: [] })
+
+      const accepted = yield* post(packed.sha256)
+      expect(accepted.status).toBe(200)
+      expect(yield* call(() => accepted.json())).toEqual({ proposed: 1, known: 0, refused: 0, over: 0 })
+      const review = yield* f.raw("/memory?scope=repository&filter=review")
+      expect(review.status).toBe(200)
+      expect(yield* call(() => review.json())).toMatchObject({
+        entries: [{ text, scope: "repository", status: "proposed", pinned: false, origin: "import" }],
+      })
+      const active = yield* f.raw("/memory?scope=repository&filter=active")
+      expect(active.status).toBe(200)
+      expect(yield* call(() => active.json())).toMatchObject({ entries: [] })
+    }),
 )
 
 it.live(

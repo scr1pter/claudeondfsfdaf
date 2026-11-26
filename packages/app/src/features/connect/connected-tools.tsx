@@ -173,7 +173,7 @@ export function ConnectedTools(props: {
     if (disposed) return
     setState("error", "")
     try {
-      const settings = parseReviewSettings(state)
+      const settings = parseReviewSettings(state, saved())
       const active = client()
       const directory = props.directory
       const epoch = state.epoch
@@ -296,7 +296,9 @@ export function ConnectedTools(props: {
                   >
                     <option value="off">Off</option>
                     <option value="report">Review and report</option>
-                    <option value="repair">Review and ask the agent to repair blocking findings</option>
+                    <option value="repair" disabled>
+                      Automatic repair (unavailable)
+                    </option>
                   </select>
                   <span class="settings-v2-row-description">Applying a fix still asks for your approval.</span>
                 </label>

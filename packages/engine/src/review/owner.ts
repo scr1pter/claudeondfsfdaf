@@ -70,9 +70,13 @@ const make = Effect.gen(function* () {
       return yield* new Error({ code: "placement", message: "Commit a base before reviewing local changes." })
     return decoded.value
   })
-  const start = Effect.fn("ReviewOwner.start")(function* (sessionID: SessionID, input: unknown) {
+  // Only the owner's GLOBAL settings turn VectorScope's owner operations on; a project config cannot.
+  const enabled = Effect.fn("ReviewOwner.enabled")(function* () {
     const global = yield* settings.getGlobal()
-    if (global.experimental?.vectorscope !== true || global.agent?.vectorscope?.disable)
+    return global.experimental?.vectorscope === true && !global.agent?.vectorscope?.disable
+  })
+  const start = Effect.fn("ReviewOwner.start")(function* (sessionID: SessionID, input: unknown) {
+    if (!(yield* enabled()))
       return yield* new Error({
         code: "disabled",
         message: "VectorScope local reviews are disabled in the owner's settings.",
@@ -171,7 +175,7 @@ const make = Effect.gen(function* () {
       ...(rows.length > limit ? { next: SessionID.make(shown[shown.length - 1]!.id) } : {}),
     } satisfies ReviewRun.List
   })
-  return { target, start, get, stop, list }
+  return { target, start, get, stop, list, placement, enabled }
 })
 
 export type Interface = Effect.Success<typeof make>

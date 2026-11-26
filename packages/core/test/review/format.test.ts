@@ -15,10 +15,14 @@ import {
   inlineLeads,
   MAX_BODY_CHARS,
   noteAlreadyReviewed,
+  noteBudgetEstimate,
   noteFailed,
   noteForcePush,
   noteGeneratedHeader,
   noteGeneratedHeaders,
+  noteHeldBack,
+  noteIgnoreUnchecked,
+  noteIgnoredCommitted,
   noteInlineCap,
   noteLowConfidence,
   noteMonthBudget,
@@ -28,6 +32,7 @@ import {
   notePrBudget,
   notePrivacyRefused,
   noteRebase,
+  noteRedacted,
   noteSuperseded,
   noteTooLarge,
   sanitizeModelMarkdown,
@@ -311,6 +316,45 @@ function followsWordingRule(body: string) {
 }
 
 describe("the summary comment", () => {
+  test("a diff that did not fit lists its omissions without publishing a clean summary", () => {
+    const input: SummaryInput = {
+      ...FULL,
+      selection: selection({ diffIncomplete: true }),
+      report: { summary: "No issues found", files: [] },
+      notes: ["Diffs outside the context budget: `large.ts`."],
+    }
+    const body = buildSummaryBody(input)
+    expect(body).toContain("## Vectorscope review · Partial review")
+    expect(body).toContain("No findings on the reviewed lines.")
+    expect(body).toContain("`large.ts`")
+    expect(body).not.toContain("No issues found")
+    expect(body).not.toContain("Risk: Low")
+    expect(
+      buildSummaryBody({ ...input, selection: selection({ diffIncomplete: true, inline: [blocking] }) }),
+    ).toContain("**1 blocking**")
+  })
+
+  test("a trivial policy skip states that no review ran and retains earlier open findings", () => {
+    const input: SummaryInput = {
+      ...FULL,
+      trivial: true,
+      selection: selection(),
+      notes: ["stale"],
+      report: { summary: "No issues found", files: [] },
+    }
+    expect(buildSummaryBody(input)).toBe(
+      "## Vectorscope review\n\nNot reviewed. The change met the configured policy for skipping trivial changes.\n\n<!-- vector-review:summary -->",
+    )
+    const body = buildSummaryBody({
+      ...input,
+      selection: selection({ stillOpen: [prior({ title: "Unresolved earlier finding", severity: "blocking" })] }),
+    })
+    expect(body).toContain("Still open from earlier reviews (1)")
+    expect(body).toContain("**Blocking**")
+    expect(body).toContain("Unresolved earlier finding")
+    expect(body).not.toContain("No issues found")
+  })
+
   test("a full review", async () => {
     const body = buildSummaryBody(FULL)
     await golden("full", body)
@@ -357,6 +401,66 @@ describe("the summary comment", () => {
     const body = buildSummaryBody({ ...FULL, banners: [banner] })
     await golden("partial", body)
     expect(body).toContain(`## Vectorscope review · Risk: High\n\n> ${banner}\n\n`)
+  })
+
+  test("a first-request budget stop keeps earlier findings and lists what still needs checking", async () => {
+    const banner = notePartial({
+      reason: "budget",
+      detail: "first-request-budget",
+      maxCostUsd: 0,
+      unreviewed: ["src/auth/refresh.ts"],
+    })
+    const input: SummaryInput = {
+      head: HEAD,
+      baseRef: "main",
+      mode: "full",
+      form: "desktop",
+      incomplete: true,
+      banners: [banner],
+      report: { summary: "No issues found", files: [] },
+      selection: selection({
+        stillOpen: [prior({ where: "summary", title: "Earlier concern" })],
+        outsideDiff: [outside],
+        nits: nits.slice(0, 1),
+      }),
+    }
+    await golden("first-request-budget", buildSummaryBody(input))
+    const stillOpen = buildSummaryBody({
+      ...INCREMENTAL,
+      incomplete: true,
+      banners: [banner],
+      form: "desktop",
+    })
+    for (const label of [
+      blocking.title,
+      concern.title,
+      "src/auth/refresh.ts:52",
+      "Fixed since last review",
+      "Dismissed",
+      "Retry delay is not capped",
+      "Why it matters",
+    ])
+      expect(stillOpen).toContain(label)
+    expect(buildSummaryBody({ ...input, strict: { complete: true, findings: [], dropped: [] } })).not.toContain(
+      "No verified production-breaking issues",
+    )
+    expect(notePartial({ reason: "budget", detail: "first-request-budget", unreviewed: [] })).toBe(
+      "**Partial review.** A follow-up check could not confirm that its first request fit the configured budget.",
+    )
+  })
+
+  // VS-34 (SF-13a): the label only. No runner records a held-back skip before VS-34 wiring (SF-13b).
+  test("a held-back file is listed as not reviewed (VS-34)", async () => {
+    const body = buildSummaryBody({
+      ...FULL,
+      skipped: [
+        { path: "config/prod/.envrc", reason: "held-back" },
+        { path: "package-lock.json", reason: "lockfile" },
+      ],
+    })
+    await golden("held-back", body)
+    expect(body).toContain("<details><summary>Not reviewed (2 files)</summary>")
+    expect(body).toContain("`config/prod/.envrc` held back · `package-lock.json` lockfile")
   })
 
   test("no findings, with a known zero-dollar cost", async () => {
@@ -457,6 +561,33 @@ describe("the count line under the strict guardrail", () => {
   test("without a strict result the body is unchanged", () => {
     expect(buildSummaryBody({ ...FULL, strict: undefined })).toBe(buildSummaryBody(FULL))
     expect(buildSummaryBody(base)).toContain("**No issues found** on the changed lines.")
+  })
+
+  test("the strict summary accounts for every omitted candidate and keeps their reasons distinct", () => {
+    const dropped = [
+      { reason: "pre-existing" as const, count: 2 },
+      { reason: "not-blocking" as const, count: 5 },
+      { reason: "quote-mismatch" as const, count: 3 },
+    ]
+    const selectionOnly = { ...base, selection: selection({ strict: { complete: true, findingCount: 0, dropped } }) }
+    const withoutRawReport = buildSummaryBody(selectionOnly)
+    expect(strict({ ...empty, dropped })).toBe(withoutRawReport)
+    expect(withoutRawReport).toContain(
+      "Strict review omitted 10 findings (2 pre-existing, 5 non-blocking and 3 without matching evidence).",
+    )
+    expect(withoutRawReport).toContain("No verified production-breaking issues")
+    const incomplete = buildSummaryBody({
+      ...base,
+      report: { summary: "No issues found", files: [] },
+      selection: selection({ strict: { complete: false, findingCount: 0, dropped: [] } }),
+    })
+    expect(incomplete).toContain("**Review incomplete**")
+    expect(incomplete).not.toMatch(/No issues found|Risk: Low/)
+    expect(strict({ ...empty, dropped: [{ reason: "cap", count: 1 }] })).toContain(
+      "omitted 1 finding (1 over the comment limit)",
+    )
+    expect(strict(empty)).not.toContain("Strict review omitted")
+    expect(buildSummaryBody(base)).not.toContain("Strict review omitted")
   })
 
   test("an empty, complete result is no verified production-breaking issue, never 'No issues found'", () => {
@@ -645,6 +776,18 @@ describe("notes", () => {
     expect(notePartial({ reason: "model-error", unreviewed: [], detail: "security: timed out" })).toBe(
       "**Partial review.** One reviewer could not finish: security: timed out. Comment `/vector review` to try again.",
     )
+    expect(notePartial({ reason: "budget-estimate", unreviewed: ["x.ts"] })).toBe(
+      "Not reviewed. The estimated review exceeded the configured budget before any model request.",
+    )
+    const unavailable = "Not reviewed. VectorScope could not estimate the complete first request before dispatch."
+    expect(noteBudgetEstimate([unavailable])).toBe(unavailable)
+    const changed =
+      "Not reviewed. The prepared model request could no longer be confirmed to fit the configured budget."
+    expect(noteBudgetEstimate([changed])).toBe(changed)
+    expect(notePartial({ reason: "budget", detail: "first-request-changed", unreviewed: ["a.ts"] })).toBe(
+      "**Partial review.** A prepared model request could no longer be confirmed to fit the configured budget. Checks remain for `a.ts`.",
+    )
+    expect(noteBudgetEstimate(["No issues found"])).toBe(noteBudgetEstimate())
   })
 
   test("a route refusal is never shown as clean, and says what was sent (VS-23a)", () => {
@@ -667,6 +810,12 @@ describe("notes", () => {
     // VS-33: OpenAI keeps the cache, and the route may be attested by text or by several entries.
     expect(notePrivacyRefused({ model: "openai/gpt-5.5", refusal: "extended-cache-unattested", attempts: 0 })).toBe(
       '**Not reviewed.** `openai/gpt-5.5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: OpenAI keeps this model\'s prompt cache for up to 24 hours, and not every `zdrAttested` entry for its route accepts that (`extendedCache`). Nothing was sent. Vector does not retry the review on another model.',
+    )
+    // VS-23b: admission refuses a route whose attestation asks Vector to check the account, which it cannot yet.
+    expect(
+      notePrivacyRefused({ model: "anthropic/claude-sonnet-5", refusal: "attestation-unverified", attempts: 0 }),
+    ).toBe(
+      '**Not reviewed.** `anthropic/claude-sonnet-5` has no zero data retention route Vector may use while `privacy` is `"zdr"`: its `zdrAttested` entry asks Vector to check the account itself (`verify: "api"`), and Vector cannot check accounts yet. Nothing was sent. Vector does not retry the review on another model.',
     )
     // The model's name comes from configuration, so it cannot close the code span.
     expect(notePrivacyRefused({ model: "acme/odd`name", refusal: "free-model", attempts: 0 })).toContain(
@@ -929,6 +1078,63 @@ describe("capBody", () => {
     expect(body).toMatch(/- …and \d+ more\n<\/details>/)
     expect(body).toContain("Elsewhere 49")
     expect(readState(body)).toEqual(STATE)
+  })
+
+  // VS-34 (SF-13b, SF-14): one line each for any number of files, and none says a deleted file's credential "is
+  // committed". Since SF-14 denies the held paths to the reviewer's tools, the held note says the value was not sent
+  // (design item 6), except where the caller says something else could show the file (`promptOnly`: the local
+  // --checks, a trusted review's saved outputs): then it says only what left the review prompt, as SF-13b's did.
+  test("holdback's notes name at most three files, and the held note claims the value unsent only when not promptOnly", () => {
+    const paths = ["deploy/.netrc", ".env", "id_rsa", "config/prod/.envrc", "a.pem"]
+    expect(noteHeldBack([])).toBeUndefined()
+    expect(noteHeldBack([], { promptOnly: true })).toBeUndefined()
+    expect(noteHeldBack(paths.slice(0, 1))).toBe(
+      "`deploy/.netrc` may hold credentials, so Vector held it back from the model (its value was not sent).",
+    )
+    expect(noteHeldBack(paths.slice(0, 3))).toBe(
+      "`deploy/.netrc`, `.env` and `id_rsa` may hold credentials, so Vector held them back from the model (their values were not sent).",
+    )
+    expect(noteHeldBack(paths)).toBe(
+      "`deploy/.netrc`, `.env`, `id_rsa` and 2 more may hold credentials, so Vector held them back from the model (their values were not sent).",
+    )
+    expect(noteHeldBack(paths, { promptOnly: false })).toBe(noteHeldBack(paths))
+    expect(noteHeldBack(paths.slice(0, 1), { promptOnly: true })).toBe(
+      "`deploy/.netrc` may hold credentials, so Vector left it out of the review prompt.",
+    )
+    expect(noteHeldBack(paths, { promptOnly: true })).toBe(
+      "`deploy/.netrc`, `.env`, `id_rsa` and 2 more may hold credentials, so Vector left them out of the review prompt.",
+    )
+    expect(noteRedacted([])).toBeUndefined()
+    expect(noteRedacted(["src/client.ts"])).toBe(
+      "Vector redacted secret-shaped values in `src/client.ts` from the review prompt.",
+    )
+    expect(noteRedacted(["a.ts", "b.ts", "c.ts"])).toBe(
+      "Vector redacted secret-shaped values in `a.ts`, `b.ts` and `c.ts` from the review prompt.",
+    )
+    expect(noteRedacted(paths)).toBe(
+      "Vector redacted secret-shaped values in `deploy/.netrc`, `.env`, `id_rsa` and 2 more from the review prompt.",
+    )
+    expect(noteIgnoredCommitted([])).toBeUndefined()
+    expect(noteIgnoredCommitted(["config.local.json"])).toBe(
+      "`config.local.json` is committed although the repository's ignore rules exclude it.",
+    )
+    expect(noteIgnoredCommitted(["a.log", "b.log", "c.log"])).toBe(
+      "`a.log`, `b.log` and `c.log` are committed although the repository's ignore rules exclude them.",
+    )
+    expect(noteIgnoredCommitted(paths)).toBe(
+      "`deploy/.netrc`, `.env`, `id_rsa` and 2 more are committed although the repository's ignore rules exclude them.",
+    )
+    expect(noteIgnoreUnchecked()).toBe(
+      "Vector could not check which changed files the repository's ignore rules exclude, so none is listed as committed although ignored.",
+    )
+    for (const note of [
+      noteHeldBack(paths, { promptOnly: true }),
+      noteRedacted(paths),
+      noteHeldBack([".env"], { promptOnly: true }),
+    ])
+      expect(note).not.toMatch(/not sent|never left|is committed in/)
+    for (const note of [noteHeldBack(paths), noteHeldBack([".env"])])
+      expect(note).not.toMatch(/never left|is committed/)
   })
 
   test("many generated-header notes are one line, and notes are trimmed before the file table", () => {

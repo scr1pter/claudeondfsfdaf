@@ -8,6 +8,7 @@ import type { Configuration } from "electron-builder"
 import { APP_IDS, EXECUTABLE_NAMES } from "./scripts/channel-ids"
 import { verifyNativeModules } from "./scripts/verify-native"
 import { computerHelperPaths } from "./scripts/computer-helper-package"
+import { copyWindowsHolderResource } from "./scripts/windows-holder-resource"
 import {
   computerHelperSkipRequested,
   loadComputerHelperSigningNode,
@@ -102,6 +103,9 @@ const getBase = (appId: string, executableName: string): Configuration => ({
     const arch = Arch[context.arch]
     for (const target of arch === "universal" ? ["x64", "arm64"] : [arch])
       await verifyNativeModules(resources, platform, target, { skipComputerHelper })
+    // Electron Builder's extraResources directory copy automatically signs executables. Copy the pinned bytes here,
+    // outside the paths its later signing pass walks, so the digest compiled into the utility can still match.
+    if (platform === "win32") await copyWindowsHolderResource(packageDir, resources, arch, process.env)
     if (platform !== "darwin" || skipComputerHelper) return
     if (!helper || helper.manifests.length !== 1 || helper.manifests[0]?.platform !== "darwin")
       throw new Error("The verified macOS computer helper manifest is missing.")

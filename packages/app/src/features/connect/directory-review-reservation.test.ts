@@ -11,6 +11,8 @@ const body = { target: { kind: "branch" as const, base: "a".repeat(40) }, backgr
 const first = "0196aa50-50d0-4f17-9c1d-85eff018e829"
 const second = "0196aa50-50d0-4f17-9c1d-85eff018e830"
 const target = { workspaceID: "workspace", directory: "/workspace/fixture", base: body.target.base }
+const NOW = Date.UTC(2026, 10, 22, 12)
+const DAY = 24 * 60 * 60_000
 const consumed = {
   code: "consumed" as const,
   message: "This review start did not complete and no review ran. Start a new review.",
@@ -98,10 +100,116 @@ function fixture() {
     removeItem: (name: string) => void values.delete(name),
   }
   let minted = 0
+  const clock = { now: NOW }
   const make = () =>
-    createDirectoryReviewReservation({ storage, key, body, requestKey: () => (++minted === 1 ? first : second) })
-  return { storage, make, minted: () => minted }
+    createDirectoryReviewReservation({
+      storage,
+      key,
+      body,
+      requestKey: () => (++minted === 1 ? first : second),
+      now: () => clock.now,
+    })
+  return { storage, make, clock, minted: () => minted }
 }
+
+test("savedAt is local metadata fixed before the first POST and never refreshed by retry or remount", () => {
+  const f = fixture()
+  const original = f.make()
+  original.hold(false)
+  const request = { requestKey: first, ...body }
+  const raw = f.storage.getItem(key)
+  expect(JSON.parse(raw!)).toEqual({ ...request, savedAt: NOW })
+  expect(original.request()).toEqual(request)
+  expect(original.retryWarning()).toContain("can start a new review")
+  f.clock.now += DAY
+  original.hold(true)
+  const remounted = f.make()
+  remounted.hold(true)
+  expect(remounted.retryWarning()).toContain("at least 24 hours old")
+  expect(remounted.request()).toEqual(request)
+  expect(f.storage.getItem(key)).toBe(raw)
+  expect(f.minted()).toBe(1)
+})
+
+test("legacy markers keep their exact wire request and warn of unknown replay age without migration", () => {
+  const f = fixture()
+  const request = { requestKey: first, ...body }
+  const raw = JSON.stringify(request)
+  f.storage.setItem(key, raw)
+  const saved = f.make()
+  expect(saved.retryWarning()).toContain("age is unknown")
+  saved.hold(true)
+  expect(saved.request()).toEqual(request)
+  expect(f.storage.getItem(key)).toBe(raw)
+  expect(f.minted()).toBe(0)
+})
+
+test("another view cannot refresh only savedAt to replace this view's captured marker", () => {
+  const f = fixture()
+  const original = f.make()
+  original.hold(false)
+  const replacement = JSON.stringify({ requestKey: first, ...body, savedAt: NOW + 1 })
+  f.storage.setItem(key, replacement)
+  expect(() => original.hold(true)).toThrow("original review request")
+  expect(() => original.confirm()).toThrow("saved review request changed")
+  expect(f.storage.getItem(key)).toBe(replacement)
+  expect(f.minted()).toBe(1)
+})
+
+test("invalid timestamps refuse without changing storage; future time remains uncertain rather than fresh", () => {
+  const f = fixture()
+  for (const savedAt of ["123", null, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const raw = JSON.stringify({ requestKey: first, ...body, savedAt })
+    f.storage.setItem(key, raw)
+    expect(() => f.make()).toThrow("does not match this workspace")
+    expect(f.storage.getItem(key)).toBe(raw)
+  }
+  const raw = JSON.stringify({ requestKey: first, ...body, savedAt: NOW + 1 })
+  f.storage.setItem(key, raw)
+  const future = f.make()
+  expect(future.retryWarning()).toContain("timestamp is in the future")
+  future.hold(true)
+  expect(future.request()).toEqual({ requestKey: first, ...body })
+  expect(f.storage.getItem(key)).toBe(raw)
+  expect(f.minted()).toBe(0)
+})
+
+test("a missing local timestamp is not inferred from now and an invalid new clock saves no request", () => {
+  const f = fixture()
+  f.clock.now = Number.NaN
+  const unsaved = f.make()
+  expect(() => unsaved.hold(false)).toThrow("timestamp")
+  expect(f.storage.getItem(key)).toBeNull()
+})
+
+for (const version of ["legacy", "aged"] as const)
+  test(`${version} markers warn before explicit retry while the actual SDK sends the same UUID/body only`, async () => {
+    const f = fixture()
+    f.storage.setItem(
+      key,
+      JSON.stringify({ requestKey: first, ...body, ...(version === "aged" ? { savedAt: NOW - DAY } : {}) }),
+    )
+    const reservation = f.make()
+    const e = engine([{ status: 400, body: pending }, "run"])
+    const view = review(reservation, e.client)
+    try {
+      await view.controller.refresh()
+      expect(e.bodies).toEqual([])
+      expect(reservation.retryWarning()).toContain("can start a new review")
+      await view.controller.start(true)
+      expect(view.controller.state.admissionAnswer).toEqual(pending)
+      expect(reservation.retryWarning()).toContain("can start a new review")
+      await view.controller.start(true)
+      expect(e.bodies).toEqual([
+        { requestKey: first, ...body },
+        { requestKey: first, ...body },
+      ])
+      expect(f.minted()).toBe(0)
+      expect(reservation.pending()).toBe(false)
+    } finally {
+      view.controller.dispose()
+    }
+  })
 
 for (const mutation of ["remove", "replace"] as const)
   test(`an uncertain actual controller refuses retry when its saved request is ${mutation}d`, async () => {
@@ -122,7 +230,7 @@ for (const mutation of ["remove", "replace"] as const)
         },
         start: async () => {
           const request = reservation.request()
-          expect(JSON.parse(f.storage.getItem(key)!)).toEqual(request)
+          expect(JSON.parse(f.storage.getItem(key)!)).toEqual({ ...request, savedAt: NOW })
           posts.push(request)
           throw new TypeError("The successful POST response was lost")
         },

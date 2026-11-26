@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { evidenceScope } from "@vectordevai/core/review/model-evidence"
 import {
   MAX_RULES_BYTES,
   mergeReviewConfig,
@@ -9,8 +10,12 @@ import {
   rulePartsForPaths,
   rulesForPaths,
   SOURCED_REVIEW_KEYS,
+  strictReviewConfig,
 } from "@vectordevai/core/review/config"
 import { DEFAULT_REVIEW_CONFIG, OPTIONAL_REVIEW_DEFAULTS, UNAPPLIED_REVIEW_KEYS } from "@vectordevai/core/review/types"
+
+const GITHUB_TRIVIAL_WARNING =
+  'GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.'
 
 describe("parseReviewConfig", () => {
   test("returns the defaults in new arrays", () => {
@@ -21,7 +26,8 @@ describe("parseReviewConfig", () => {
     config.ignore.push("mutated")
     expect(DEFAULT_REVIEW_CONFIG.skipLabels).toEqual(["vector:skip", "no-review"])
     expect(DEFAULT_REVIEW_CONFIG.ignore).toEqual([])
-    // The route settings (VS-23a) have no default entry, so the defaults and every digest of them stay as they were.
+    // The sourced keys (VS-23a's route settings, VS-30's runtime, VS-34's holdback) are never in the defaults, so the
+    // defaults and every digest of them stay as they were.
     for (const key of SOURCED_REVIEW_KEYS) {
       expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
       expect(Object.hasOwn(config, key)).toBe(false)
@@ -286,9 +292,8 @@ describe("parseReviewConfig", () => {
     ])
   })
 
-  // VS-32a: the value lands with the GitHub job's wiring, after vector-at-mention. Until then it is an unknown value,
-  // so it warns and keeps what the other sources say, exactly as today, and exit codes cannot change.
-  test("VS-32: blocking-or-incomplete is not a failOn value before the wiring", () => {
+  // The legacy entry points have no trusted base provenance.
+  test("VS-32: blocking-or-incomplete stays unknown to the untagged decoder", () => {
     const json = '{"failOn":"blocking-or-incomplete"}'
     const fromJson = parseReviewConfig({ json })
     expect(fromJson.config.failOn).toBe("never")
@@ -304,7 +309,7 @@ describe("parseReviewConfig", () => {
     })
     expect(kept.config.failOn).toBe("blocking")
     expect(kept.warnings).toEqual(['REVIEW_FAIL_ON must be "never", "blocking"; using "blocking".'])
-    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text: json } })).toEqual(fromJson)
+    expect(mergeReviewConfig({ surface: "github", json: { at: "working-tree", text: json } })).toEqual(fromJson)
   })
 
   // VS-35a: guarded team memory's rules land uncalled (team.ts); the key and its parse wait for runner-wiring. Until
@@ -369,6 +374,90 @@ describe("mergeReviewConfig", () => {
         trigger: "desktop",
       }).config,
     ).toEqual(parseReviewConfig({ trigger: "desktop" }).config)
+  })
+
+  // VS-23b (SF-11): `vector review`, the local review service and the eval's replay read review.json through
+  // mergeReviewConfig on the "local" surface, with no global config until SF-15. With no sourced key named, and no
+  // unreadable review.json that mentions privacy, each reads what parseReviewConfig read: every config and warning.
+  test("VS-23b: the local surfaces' calls are parseReviewConfig while no sourced key is named", () => {
+    const texts = [
+      undefined,
+      "",
+      "{}",
+      JSON_TEXT,
+      '{"verify": "off", "security": "always", "maxSteps": 7, "maxCostUsd": 0}',
+      '{"verifyPolicy": "shared"}',
+      '{"triageModel": "acme/small", "verify": "off", "panel": true, "judgeModel": "other/judge"}',
+      '{"auto": true, "drafts": false, "bogus": 1}',
+      '{"trivial": "skip", "guardrail": "strict", "depth": "auto", "lenses": "high"}',
+      "{",
+      "[1, 2]",
+      "null",
+      '﻿{"minConfidence": 0.5}',
+    ]
+    const envs = [
+      {},
+      ENV,
+      { REVIEW_VERIFY_POLICY: "shared", REVIEW_SECURITY: "off", REVIEW_MAX_COST_USD: "2" },
+      { REVIEW_AUTO_MODEL: "acme/auto", MODEL: "acme/env", REVIEW_TIMEOUT_MINUTES: "500" },
+    ]
+    for (const text of texts)
+      for (const env of envs)
+        for (const trigger of ["local", "command", "auto", "desktop"] as const)
+          for (const at of ["base", "working-tree"] as const) {
+            const parsed = parseReviewConfig({ json: text, env, trigger })
+            const local = mergeReviewConfig({ surface: "local", json: { at, text }, env, trigger })
+            // The direct GitHub entry refuses the trivial key for automatic and command jobs. The local surface
+            // preserves it for these same replay triggers, with every other setting and warning unchanged.
+            if (parsed.warnings.includes(GITHUB_TRIVIAL_WARNING)) {
+              expect(parsed.config.trivial).toBeUndefined()
+              expect(local).toEqual({
+                config: { ...parsed.config, trivial: "skip" },
+                warnings: parsed.warnings.filter((line) => line !== GITHUB_TRIVIAL_WARNING),
+              })
+              continue
+            }
+            expect(local).toEqual(parsed)
+          }
+  })
+
+  // What those surfaces now read differently. None is a default change: each is a sourced key named in review.json or
+  // the environment, or an unreadable review.json that mentions privacy.
+  test("VS-23b: on the local surfaces a sourced key is read, not unknown, and an unreadable mention fails closed", () => {
+    const local = (text: string | undefined, env: Record<string, string> = {}) =>
+      mergeReviewConfig({ surface: "local", json: { at: "working-tree", text }, env, trigger: "local" })
+    // "privacy": "standard" was an unknown key; it is the default now, and says nothing.
+    expect(parseReviewConfig({ json: '{"privacy": "standard"}' }).warnings).toEqual([
+      `${REVIEW_CONFIG_PATH}: unknown key "privacy" is ignored.`,
+    ])
+    expect(local('{"privacy": "standard"}')).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
+    // "zdr" raises it from review.json or REVIEW_PRIVACY, and "standard" never lowers it.
+    expect(local('{"privacy": "zdr"}')).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, privacy: "zdr" }, warnings: [] })
+    expect(local(undefined, { REVIEW_PRIVACY: "zdr" }).config.privacy).toBe("zdr")
+    expect(local('{"privacy": "zdr"}', { REVIEW_PRIVACY: "standard" }).config.privacy).toBe("zdr")
+    expect(local('{"privacy": "standard"}', { REVIEW_PRIVACY: "zdr" }).config.privacy).toBe("zdr")
+    // zdrAttested and runtime were unknown keys; they are ignored as trusted-only, read from the global config alone.
+    for (const [key, value] of [
+      ["zdrAttested", ["openrouter"]],
+      ["runtime", "ask"],
+    ] as const) {
+      const text = JSON.stringify({ [key]: value })
+      expect(parseReviewConfig({ json: text }).warnings).toEqual([
+        `${REVIEW_CONFIG_PATH}: unknown key "${key}" is ignored.`,
+      ])
+      for (const at of ["base", "working-tree"] as const)
+        expect(mergeReviewConfig({ surface: "local", json: { at, text }, trigger: "local" })).toEqual({
+          config: DEFAULT_REVIEW_CONFIG,
+          warnings: [`${REVIEW_CONFIG_PATH}: "${key}" is ignored: "${key}" is read only from the global config.`],
+        })
+    }
+    // A review.json that cannot be read and mentions privacy may have meant "zdr", so it reads as "zdr".
+    const unreadable = local('{"privacy": "zdr",')
+    expect(unreadable.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, privacy: "zdr" })
+    expect(unreadable.warnings).toContain(
+      `${REVIEW_CONFIG_PATH} could not be read and mentions "privacy"; using "zdr", the stricter setting.`,
+    )
+    expect(parseReviewConfig({ json: '{"privacy": "zdr",' }).config).toEqual(DEFAULT_REVIEW_CONFIG)
   })
 
   test("parseReviewConfig itself still ignores both, so no surface takes zdr before it enforces it", () => {
@@ -795,12 +884,8 @@ describe("review.md rules", () => {
   })
 })
 
-// VS-24c: `trivial` and `maxInputTokens` are parsed, and no runner reads them before VS-24 wiring. With neither set,
-// nothing changes (I-1); with a value that would change a review, the parser says it is not applied yet.
+// The engine's VS-24 policy and pre-dispatch budget are both opt-in.
 describe("VS-24's keys", () => {
-  const SKIP = '"trivial": "skip" is not applied yet: every change is still reviewed.'
-  const CAP = '"maxInputTokens" is not applied yet: no input-token cap is enforced.'
-
   test("neither has a default entry, so the defaults and their digests stay as they were", () => {
     const { config, warnings } = parseReviewConfig()
     for (const key of ["trivial", "maxInputTokens"] as const) {
@@ -809,22 +894,27 @@ describe("VS-24's keys", () => {
     }
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS).toEqual({
+      largeChanges: "skip",
       trivial: "review",
       maxInputTokens: 0,
       impact: "grep",
+      ruleCheck: "off",
       guardrail: "off",
       scopeGate: "off",
       verifyEvidence: "off",
       depth: "fixed",
       lenses: "off",
+      cards: "off",
       runtime: "off",
+      diagnostics: "off",
+      holdback: "off",
     })
   })
 
-  test("review.json sets them, and a value that would change a review says it is not applied", () => {
+  test("review.json accepts both opt-ins", () => {
     const set = parseReviewConfig({ json: JSON.stringify({ trivial: "skip", maxInputTokens: 200_000 }) })
     expect(set.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "skip", maxInputTokens: 200_000 })
-    expect(set.warnings).toEqual([SKIP, CAP])
+    expect(set.warnings).toEqual([])
     // Their defaults, written out, change nothing a runner would do, so they warn about nothing.
     const defaults = parseReviewConfig({ json: JSON.stringify({ trivial: "review", maxInputTokens: 0 }) })
     expect(defaults.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, trivial: "review", maxInputTokens: 0 })
@@ -838,7 +928,40 @@ describe("VS-24's keys", () => {
     })
     expect(config.trivial).toBe("skip")
     expect(config.maxInputTokens).toBe(100_000)
-    expect(warnings).toEqual([SKIP, CAP])
+    expect(warnings).toEqual([])
+  })
+
+  test("automatic and command GitHub jobs keep reviewing, while local replays can apply the opt-in", () => {
+    for (const trigger of ["auto", "command"] as const) {
+      for (const input of [{ json: '{"trivial":"skip"}' }, { env: { REVIEW_TRIVIAL: "skip" } }]) {
+        const github = { config: DEFAULT_REVIEW_CONFIG, warnings: [GITHUB_TRIVIAL_WARNING] }
+        expect(parseReviewConfig({ trigger, ...input })).toEqual(github)
+        const sources = { trigger, json: { at: "base" as const, text: input.json }, env: input.env }
+        expect(mergeReviewConfig({ surface: "github", ...sources })).toEqual(github)
+        expect(mergeReviewConfig({ surface: "local", ...sources })).toEqual({
+          config: { ...DEFAULT_REVIEW_CONFIG, trivial: "skip" },
+          warnings: [],
+        })
+      }
+    }
+  })
+
+  test("every surface preserves a positive input-token cap and only the desktop documents its dollar limit", () => {
+    const config = { ...DEFAULT_REVIEW_CONFIG, maxInputTokens: 250 }
+    for (const trigger of ["auto", "command", "local", "desktop"] as const) {
+      const warnings =
+        trigger === "desktop"
+          ? ["Desktop reviews with a token cap require a first-request estimate from the local engine."]
+          : []
+      const env = { REVIEW_MAX_INPUT_TOKENS: "250" }
+      expect(parseReviewConfig({ trigger, env })).toEqual({ config, warnings })
+      expect(
+        mergeReviewConfig({ surface: "local", trigger, json: { at: "base", text: '{"maxInputTokens":250}' } }),
+      ).toEqual({ config, warnings })
+      if (trigger === "auto" || trigger === "command")
+        expect(mergeReviewConfig({ surface: "github", trigger, env })).toEqual({ config, warnings })
+    }
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_MAX_INPUT_TOKENS: "0" } }).warnings).toEqual([])
   })
 
   test("a bad value warns naming the value in use, which for an unset key is its default", () => {
@@ -859,7 +982,7 @@ describe("VS-24's keys", () => {
     // A set value is the one named.
     expect(
       parseReviewConfig({ json: JSON.stringify({ trivial: "skip" }), env: { REVIEW_TRIVIAL: "x" } }).warnings,
-    ).toEqual(['REVIEW_TRIVIAL must be "review", "skip"; using "skip".', SKIP])
+    ).toEqual(['REVIEW_TRIVIAL must be "review", "skip"; using "skip".'])
     // A key with no default keeps today's text, which names nothing.
     expect(parseReviewConfig({ json: JSON.stringify({ model: "nope" }) }).warnings).toEqual([
       `${REVIEW_CONFIG_PATH}: "model" must be a "provider/model" string; using undefined.`,
@@ -873,7 +996,7 @@ describe("VS-24's keys", () => {
     })
     expect(parseReviewConfig({ json: JSON.stringify({ maxInputTokens: 1_000.6 }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, maxInputTokens: 1_001 },
-      warnings: [`${REVIEW_CONFIG_PATH}: "maxInputTokens": 1000.6 is out of range; using 1001.`, CAP],
+      warnings: [`${REVIEW_CONFIG_PATH}: "maxInputTokens": 1000.6 is out of range; using 1001.`],
     })
   })
 
@@ -889,23 +1012,20 @@ describe("VS-24's keys", () => {
   })
 })
 
-// VS-25b: `impact` is parsed, and no runner reads it before VS-25b wiring. Unset, nothing changes (I-1); "graph" says it
-// is not applied yet. A plain key: every surface reads it from review.json and REVIEW_IMPACT, as parseReviewConfig does.
 describe("VS-25b's impact key", () => {
-  const GRAPH = '"impact": "graph" is not applied yet: related code still comes from git grep.'
-
   test("has no default entry, so the defaults and their digests stay as they were", () => {
     const { config, warnings } = parseReviewConfig()
     expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "impact")).toBe(false)
     expect(Object.hasOwn(config, "impact")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.impact).toBe("grep")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("impact")).toBe(false)
   })
 
-  test("review.json and REVIEW_IMPACT set it; graph says it is not applied, grep says nothing", () => {
+  test("the engine accepts graph from review.json and the environment; desktop reports its grep behavior", () => {
     expect(parseReviewConfig({ json: JSON.stringify({ impact: "graph" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, impact: "graph" },
-      warnings: [GRAPH],
+      warnings: [],
     })
     expect(parseReviewConfig({ json: JSON.stringify({ impact: "grep" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, impact: "grep" },
@@ -913,7 +1033,11 @@ describe("VS-25b's impact key", () => {
     })
     const env = parseReviewConfig({ json: JSON.stringify({ impact: "grep" }), env: { REVIEW_IMPACT: " Graph " } })
     expect(env.config.impact).toBe("graph")
-    expect(env.warnings).toEqual([GRAPH])
+    expect(env.warnings).toEqual([])
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_IMPACT: "graph" } }).warnings).toEqual([
+      'Desktop reviews use grep for related code. The engine review supports "impact": "graph".',
+    ])
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_IMPACT: "grep" } }).warnings).toEqual([])
   })
 
   test("a bad value warns naming the value in use", () => {
@@ -923,7 +1047,7 @@ describe("VS-25b's impact key", () => {
     })
     expect(
       parseReviewConfig({ json: JSON.stringify({ impact: "graph" }), env: { REVIEW_IMPACT: "x" } }).warnings,
-    ).toEqual(['REVIEW_IMPACT must be "grep", "graph"; using "graph".', GRAPH])
+    ).toEqual(['REVIEW_IMPACT must be "grep", "graph"; using "graph".'])
   })
 
   test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
@@ -938,25 +1062,22 @@ describe("VS-25b's impact key", () => {
   })
 })
 
-// VS-27a: `guardrail` is parsed, and no runner reads it before VS-27c. Unset, nothing changes (I-1); "strict" says it is
-// not applied yet. A plain key: every surface reads it from review.json and REVIEW_GUARDRAIL, as parseReviewConfig does.
+// Every surface reads this opt-in from review.json or REVIEW_GUARDRAIL. Only the engine applies the strict settings.
 describe("VS-27's guardrail key", () => {
-  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
-
   test("has no default entry, so the defaults and their digests stay as they were", () => {
     const { config, warnings } = parseReviewConfig()
     expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "guardrail")).toBe(false)
     expect(Object.hasOwn(config, "guardrail")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.guardrail).toBe("off")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("guardrail")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("guardrail")).toBe(false)
     expect(SOURCED_REVIEW_KEYS).not.toContain("guardrail")
   })
 
-  test("review.json and REVIEW_GUARDRAIL set it; strict says it is not applied, off says nothing", () => {
+  test("review.json and REVIEW_GUARDRAIL opt into strict verification on the engine", () => {
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
-      warnings: [STRICT],
+      warnings: [],
     })
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "off" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "off" },
@@ -964,12 +1085,37 @@ describe("VS-27's guardrail key", () => {
     })
     const env = parseReviewConfig({ json: JSON.stringify({ guardrail: "off" }), env: { REVIEW_GUARDRAIL: " Strict " } })
     expect(env.config.guardrail).toBe("strict")
-    expect(env.warnings).toEqual([STRICT])
+    expect(env.warnings).toEqual([])
     const lowered = parseReviewConfig({
       json: JSON.stringify({ guardrail: "strict" }),
       env: { REVIEW_GUARDRAIL: "off" },
     })
     expect(lowered).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "off" }, warnings: [] })
+  })
+
+  test("only the engine projects strict verification, severity and nit policy; user settings are preserved", () => {
+    const original = {
+      ...DEFAULT_REVIEW_CONFIG,
+      nits: true,
+      minSeverity: "nit",
+      verify: "off",
+      verifyPolicy: "legacy",
+    } as const
+    expect(strictReviewConfig(original)).toBe(original)
+    const off = { ...original, guardrail: "off" } as const
+    expect(strictReviewConfig(off)).toBe(off)
+    const strict = { ...original, guardrail: "strict" } as const
+    expect(strictReviewConfig(strict)).toEqual({
+      ...strict,
+      verifyPolicy: "shared",
+      verify: "all",
+      minSeverity: "blocking",
+      nits: false,
+    })
+    expect(strict.verify).toBe("off")
+    expect(parseReviewConfig({ trigger: "desktop", env: { REVIEW_GUARDRAIL: "strict" } }).warnings).toEqual([
+      'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".',
+    ])
   })
 
   test("a bad value warns naming the value in use", () => {
@@ -982,7 +1128,7 @@ describe("VS-27's guardrail key", () => {
     ])
     expect(
       parseReviewConfig({ json: JSON.stringify({ guardrail: "strict" }), env: { REVIEW_GUARDRAIL: "x" } }).warnings,
-    ).toEqual(['REVIEW_GUARDRAIL must be "off", "strict"; using "strict".', STRICT])
+    ).toEqual(['REVIEW_GUARDRAIL must be "off", "strict"; using "strict".'])
   })
 
   test("mergeReviewConfig reads it as parseReviewConfig does, on every surface", () => {
@@ -997,13 +1143,8 @@ describe("VS-27's guardrail key", () => {
   })
 })
 
-// VS-42a: `scopeGate` is parsed, and no runner reads it before VS-42 wiring. It acts inside the strict guardrail, so it
-// is effective only with `guardrail: "strict"`: with it, the value says it is not applied yet; without it, it is ignored
-// with a note, and the two warnings never appear together. A plain key with no environment variable.
+// The introduced-by-change check runs inside the strict engine review.
 describe("VS-42's scopeGate key", () => {
-  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
-  const UNAPPLIED =
-    '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
   const IGNORED =
     '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
 
@@ -1013,25 +1154,25 @@ describe("VS-42's scopeGate key", () => {
     expect(Object.hasOwn(config, "scopeGate")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.scopeGate).toBe("off")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("scopeGate")
+    expect(UNAPPLIED_REVIEW_KEYS).not.toContain("scopeGate")
     expect(SOURCED_REVIEW_KEYS).not.toContain("scopeGate")
   })
 
-  test("under strict it says it is not applied; without strict it is ignored with a note, its value kept", () => {
+  test("runs under strict and explains why the key is ignored when strict is off", () => {
     const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
     expect(json({ guardrail: "strict", scopeGate: "introduced" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", scopeGate: "introduced" },
-      warnings: [STRICT, UNAPPLIED],
+      warnings: [],
     })
     for (const value of [{ scopeGate: "introduced" }, { guardrail: "off", scopeGate: "introduced" }] as const)
       expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
     expect(json({ scopeGate: "off" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, scopeGate: "off" }, warnings: [] })
-    expect(json({ guardrail: "strict", scopeGate: "off" }).warnings).toEqual([STRICT])
+    expect(json({ guardrail: "strict", scopeGate: "off" }).warnings).toEqual([])
     // REVIEW_GUARDRAIL decides which warning a review.json scopeGate gets.
     expect(
       parseReviewConfig({ json: JSON.stringify({ scopeGate: "introduced" }), env: { REVIEW_GUARDRAIL: "strict" } })
         .warnings,
-    ).toEqual([STRICT, UNAPPLIED])
+    ).toEqual([])
     expect(
       parseReviewConfig({
         json: JSON.stringify({ guardrail: "strict", scopeGate: "introduced" }),
@@ -1047,7 +1188,7 @@ describe("VS-42's scopeGate key", () => {
     })
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict", scopeGate: "on" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
-      warnings: [`${REVIEW_CONFIG_PATH}: "scopeGate" must be "off", "introduced"; using "off".`, STRICT],
+      warnings: [`${REVIEW_CONFIG_PATH}: "scopeGate" must be "off", "introduced"; using "off".`],
     })
   })
 
@@ -1066,17 +1207,9 @@ describe("VS-42's scopeGate key", () => {
   })
 })
 
-// VS-44a: `verifyEvidence` is parsed as scopeGate is, and no runner reads it before VS-44 wiring. It acts inside the
-// strict guardrail (S1's certificate check), so it is effective only with `guardrail: "strict"`: with it, the value says
-// it is not applied yet; without it, it is ignored with a note. A plain key with no environment variable.
 describe("VS-44's verifyEvidence key", () => {
-  const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
-  const UNAPPLIED =
-    '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
   const IGNORED =
     '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
-  const GATE_UNAPPLIED =
-    '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
   const GATE_IGNORED =
     '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
 
@@ -1086,7 +1219,7 @@ describe("VS-44's verifyEvidence key", () => {
     expect(Object.hasOwn(config, "verifyEvidence")).toBe(false)
     expect(warnings).toEqual([])
     expect(OPTIONAL_REVIEW_DEFAULTS.verifyEvidence).toBe("off")
-    expect(UNAPPLIED_REVIEW_KEYS).toContain("verifyEvidence")
+    expect(UNAPPLIED_REVIEW_KEYS).not.toContain("verifyEvidence")
     expect(SOURCED_REVIEW_KEYS).not.toContain("verifyEvidence")
   })
 
@@ -1094,7 +1227,7 @@ describe("VS-44's verifyEvidence key", () => {
     const json = (value: Record<string, unknown>) => parseReviewConfig({ json: JSON.stringify(value) })
     expect(json({ guardrail: "strict", verifyEvidence: "certificate" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict", verifyEvidence: "certificate" },
-      warnings: [STRICT, UNAPPLIED],
+      warnings: [],
     })
     for (const value of [
       { verifyEvidence: "certificate" },
@@ -1105,26 +1238,22 @@ describe("VS-44's verifyEvidence key", () => {
       config: { ...DEFAULT_REVIEW_CONFIG, verifyEvidence: "off" },
       warnings: [],
     })
-    expect(json({ guardrail: "strict", verifyEvidence: "off" }).warnings).toEqual([STRICT])
+    expect(json({ guardrail: "strict", verifyEvidence: "off" }).warnings).toEqual([])
     // REVIEW_GUARDRAIL decides which warning a review.json verifyEvidence gets.
     expect(
       parseReviewConfig({
         json: JSON.stringify({ verifyEvidence: "certificate" }),
         env: { REVIEW_GUARDRAIL: "strict" },
       }).warnings,
-    ).toEqual([STRICT, UNAPPLIED])
+    ).toEqual([])
     expect(
       parseReviewConfig({
         json: JSON.stringify({ guardrail: "strict", verifyEvidence: "certificate" }),
         env: { REVIEW_GUARDRAIL: "off" },
       }).warnings,
     ).toEqual([IGNORED])
-    // Beside VS-42's key, each gets its own warning, in the keys' order.
-    expect(json({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([
-      STRICT,
-      GATE_UNAPPLIED,
-      UNAPPLIED,
-    ])
+    // Both checks run under strict. Without strict, each inactive key has a warning.
+    expect(json({ guardrail: "strict", scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([])
     expect(json({ scopeGate: "introduced", verifyEvidence: "certificate" }).warnings).toEqual([GATE_IGNORED, IGNORED])
   })
 
@@ -1134,7 +1263,7 @@ describe("VS-44's verifyEvidence key", () => {
     ).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
     expect(parseReviewConfig({ json: JSON.stringify({ guardrail: "strict", verifyEvidence: "cert" }) })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, guardrail: "strict" },
-      warnings: [`${REVIEW_CONFIG_PATH}: "verifyEvidence" must be "off", "certificate"; using "off".`, STRICT],
+      warnings: [`${REVIEW_CONFIG_PATH}: "verifyEvidence" must be "off", "certificate"; using "off".`],
     })
   })
 
@@ -1153,12 +1282,8 @@ describe("VS-44's verifyEvidence key", () => {
   })
 })
 
-// VS-28c: `depth` and `lenses` are parsed, and no runner reads them before VS-28 wiring. `lenses` acts only under
-// `depth: "auto"`, so without it the key is ignored with a note; under "auto", an explicit `security: "off"` is said,
-// since no band then adds the security pass (gap-6 G6-2: a depth that cannot run in full says so).
+// SF-24 applies automatic depth on the engine. SF-25 wires the lens sessions.
 describe("VS-28's depth and lenses keys", () => {
-  const DEPTH = '"depth": "auto" is not applied yet: every review still runs its usual passes.'
-  const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
   const IGNORED =
     '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
   const OFF = '"depth": "auto" keeps "security": "off": no band adds the security pass.'
@@ -1171,7 +1296,7 @@ describe("VS-28's depth and lenses keys", () => {
     for (const key of ["depth", "lenses"] as const) {
       expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, key)).toBe(false)
       expect(Object.hasOwn(config, key)).toBe(false)
-      expect(UNAPPLIED_REVIEW_KEYS).toContain(key)
+      expect(UNAPPLIED_REVIEW_KEYS).not.toContain(key)
       expect(SOURCED_REVIEW_KEYS).not.toContain(key)
     }
     expect(warnings).toEqual([])
@@ -1179,11 +1304,11 @@ describe("VS-28's depth and lenses keys", () => {
     expect(OPTIONAL_REVIEW_DEFAULTS.lenses).toBe("off")
   })
 
-  test("under auto each says it is not applied; lenses without auto is ignored with a note, its value kept", () => {
-    expect(json({ depth: "auto" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto" }, warnings: [DEPTH] })
+  test("high lenses are active under automatic depth and explain their prerequisite under fixed depth", () => {
+    expect(json({ depth: "auto" })).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto" }, warnings: [] })
     expect(json({ depth: "auto", lenses: "high" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
-      warnings: [DEPTH, LENSES],
+      warnings: [],
     })
     for (const value of [{ lenses: "high" }, { depth: "fixed", lenses: "high" }] as const)
       expect(json(value)).toEqual({ config: { ...DEFAULT_REVIEW_CONFIG, ...value }, warnings: [IGNORED] })
@@ -1192,26 +1317,26 @@ describe("VS-28's depth and lenses keys", () => {
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "fixed", lenses: "off" },
       warnings: [],
     })
-    expect(json({ depth: "auto", lenses: "off" }).warnings).toEqual([DEPTH])
+    expect(json({ depth: "auto", lenses: "off" }).warnings).toEqual([])
   })
 
   test("REVIEW_DEPTH and REVIEW_LENSES override review.json, read without case or surrounding space", () => {
     expect(json({ lenses: "high" }, { REVIEW_DEPTH: " Auto " })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", lenses: "high" },
-      warnings: [DEPTH, LENSES],
+      warnings: [],
     })
     expect(json({ depth: "auto", lenses: "high" }, { REVIEW_DEPTH: "fixed" }).warnings).toEqual([IGNORED])
     expect(json({ depth: "auto" }, { REVIEW_LENSES: "HIGH" }).config.lenses).toBe("high")
-    expect(json({ depth: "auto", lenses: "high" }, { REVIEW_LENSES: "off" }).warnings).toEqual([DEPTH])
+    expect(json({ depth: "auto", lenses: "high" }, { REVIEW_LENSES: "off" }).warnings).toEqual([])
   })
 
   test("an explicit security off under auto is said, never silently less", () => {
     expect(json({ depth: "auto", security: "off" })).toEqual({
       config: { ...DEFAULT_REVIEW_CONFIG, depth: "auto", security: "off" },
-      warnings: [OFF, DEPTH],
+      warnings: [OFF],
     })
-    expect(json({ depth: "auto", lenses: "high", security: "off" }).warnings).toEqual([OFF_LENSES, DEPTH, LENSES])
-    expect(json({ depth: "auto" }, { REVIEW_SECURITY: "off" }).warnings).toEqual([OFF, DEPTH])
+    expect(json({ depth: "auto", lenses: "high", security: "off" }).warnings).toEqual([OFF_LENSES])
+    expect(json({ depth: "auto" }, { REVIEW_SECURITY: "off" }).warnings).toEqual([OFF])
     // Without auto, or with security on, there is nothing to say.
     for (const value of [
       { security: "off" },
@@ -1362,5 +1487,255 @@ describe("VS-30's runtime key", () => {
     expect(result.config).toEqual(DEFAULT_REVIEW_CONFIG)
     expect(result.warnings).toHaveLength(1)
     expect(result.warnings[0]).toStartWith(`${REVIEW_CONFIG_PATH} is not valid JSON`)
+  })
+})
+
+// VS-34 (SF-13a): `holdback` is raise-only, as `privacy` is (addendum A §1): the strictest of the global config (SF-15
+// adds its hidden source), review.json and REVIEW_HOLDBACK. Review.run applies its payload half since SF-13b and its
+// tool half since SF-14, so no mergeReviewConfig surface warns about it (SF-13b's HOLDBACK_TOOLS warning is gone), and
+// parseReviewConfig's surfaces ignore it.
+describe("VS-34's holdback key", () => {
+  const ASK = '"runtime": "ask" is not applied yet: no runtime checks run, and --checks works as before.'
+  const SECRETS = '{"holdback": "secrets"}'
+  const invalid = (label: string) => `${label} must be "off" or "secrets"; using "secrets", the stricter setting.`
+
+  test("is sourced, raise-only and applied, with no default entry", () => {
+    expect(SOURCED_REVIEW_KEYS).toContain("holdback")
+    expect((UNAPPLIED_REVIEW_KEYS as readonly string[]).includes("holdback")).toBe(false)
+    // Applied to the prompt and the reviewer's tools, so it gives no warning at all.
+    expect(mergeReviewConfig({ surface: "local", json: { at: "base", text: SECRETS } }).warnings).toEqual([])
+    expect(OPTIONAL_REVIEW_DEFAULTS.holdback).toBe("off")
+    expect(Object.hasOwn(DEFAULT_REVIEW_CONFIG, "holdback")).toBe(false)
+    expect(Object.hasOwn(parseReviewConfig().config, "holdback")).toBe(false)
+  })
+
+  // The GitHub job (SF-37), the desktop (SF-13b, SF-15) and connect's consent preview still read parseReviewConfig, so
+  // this is what they do with the key: a review.json copy gets the generic unknown-key warning, and REVIEW_HOLDBACK is
+  // not read at all, without a word.
+  test("parseReviewConfig ignores it in review.json, as before, and reads no environment variable", () => {
+    expect(parseReviewConfig({ json: SECRETS })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [`${REVIEW_CONFIG_PATH}: unknown key "holdback" is ignored.`],
+    })
+    expect(parseReviewConfig({ env: { REVIEW_HOLDBACK: "secrets" } })).toEqual({
+      config: DEFAULT_REVIEW_CONFIG,
+      warnings: [],
+    })
+    expect(parseReviewConfig({ json: '{"holdback": "secrets",' }).config).toEqual(DEFAULT_REVIEW_CONFIG)
+  })
+
+  test("review.json raises it on every surface, the desktop's base blob included", () => {
+    const raised = { config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" as const }, warnings: [] }
+    for (const surface of ["local", "github"] as const)
+      for (const at of ["base", "working-tree"] as const)
+        expect(mergeReviewConfig({ surface, json: { at, text: SECRETS } })).toEqual(raised)
+    // The desktop's base blob, when a pull request changes review.json, raises it and changes nothing else.
+    const blob = mergeReviewConfig({
+      surface: "local",
+      json: { at: "base", text: '{"holdback": "secrets", "maxComments": 1, "nits": true}', privacyOnly: true },
+      trigger: "desktop",
+    })
+    expect(blob).toEqual({
+      config: { ...parseReviewConfig({ trigger: "desktop" }).config, holdback: "secrets" },
+      warnings: [],
+    })
+  })
+
+  test("REVIEW_HOLDBACK raises it, without case or surrounding space", () => {
+    for (const value of ["secrets", " Secrets\n", "SECRETS"])
+      for (const surface of ["local", "github"] as const)
+        expect(mergeReviewConfig({ surface, env: { REVIEW_HOLDBACK: value } })).toEqual({
+          config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+          warnings: [],
+        })
+    // A blank value is unset, as for every other variable.
+    expect(mergeReviewConfig({ surface: "local", env: { REVIEW_HOLDBACK: "  " } })).toEqual(
+      parseReviewConfig({ env: { REVIEW_HOLDBACK: "  " } }),
+    )
+  })
+
+  // I-2: a pull request's own review.json (the working tree locally, or any review.json a surface reads from the head)
+  // can only raise the key, so no source a pull request controls lowers one that another source set.
+  test("is raised by any source and lowered by none", () => {
+    const values = [undefined, "off", "secrets"] as const
+    for (const surface of ["local", "github"] as const)
+      for (const at of ["base", "working-tree"] as const)
+        for (const global of values)
+          for (const json of values)
+            for (const env of values) {
+              const result = mergeReviewConfig({
+                surface,
+                ...(global === undefined ? {} : { global: { holdback: global } }),
+                json: { at, text: json === undefined ? undefined : JSON.stringify({ holdback: json }) },
+                env: env === undefined ? {} : { REVIEW_HOLDBACK: env },
+              })
+              const secrets = [global, json, env].includes("secrets")
+              expect(result.config.holdback).toBe(secrets ? "secrets" : undefined)
+              expect(result.warnings).toEqual([])
+            }
+  })
+
+  test("an explicit off from every source is left out, like its default, so the result is the defaults", () => {
+    for (const surface of ["local", "github"] as const)
+      expect(
+        mergeReviewConfig({
+          surface,
+          global: { holdback: "off" },
+          json: { at: "base", text: '{"holdback": "off"}' },
+          env: { REVIEW_HOLDBACK: "off" },
+        }),
+      ).toEqual({ config: DEFAULT_REVIEW_CONFIG, warnings: [] })
+  })
+
+  test("a value that is not off or secrets fails closed to secrets, with a warning", () => {
+    for (const value of ["on", true, 1, null, "", ["secrets"]])
+      expect(
+        mergeReviewConfig({ surface: "github", json: { at: "base", text: JSON.stringify({ holdback: value }) } }),
+      ).toEqual({
+        config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+        warnings: [invalid(`${REVIEW_CONFIG_PATH}: "holdback"`)],
+      })
+    expect(mergeReviewConfig({ surface: "local", env: { REVIEW_HOLDBACK: "maybe" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+      warnings: [invalid("REVIEW_HOLDBACK")],
+    })
+    expect(mergeReviewConfig({ surface: "local", global: { holdback: 3 } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+      warnings: [invalid("review.holdback in the global config")],
+    })
+  })
+
+  test("a review.json that cannot be read fails closed only when it mentions holdback", () => {
+    const result = mergeReviewConfig({
+      surface: "local",
+      json: { at: "working-tree", text: '{"holdback": "secrets",' },
+    })
+    expect(result.config).toEqual({ ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" })
+    expect(result.warnings).toHaveLength(2)
+    expect(result.warnings[0]).toStartWith(`${REVIEW_CONFIG_PATH} is not valid JSON`)
+    expect(result.warnings.slice(1)).toEqual([
+      `${REVIEW_CONFIG_PATH} could not be read and mentions "holdback"; using "secrets", the stricter setting.`,
+    ])
+    const text = '{"maxComments": 4,}'
+    expect(mergeReviewConfig({ surface: "github", json: { at: "base", text } })).toEqual(
+      parseReviewConfig({ json: text }),
+    )
+  })
+
+  test("beside the other sourced keys and the unapplied ones, each keeps its own rule", () => {
+    // privacy raises nothing here but itself: "zdr" does not imply "secrets" (Q23 is open), nor the reverse.
+    expect(mergeReviewConfig({ surface: "local", global: { privacy: "zdr", holdback: "secrets" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, privacy: "zdr", holdback: "secrets" },
+      warnings: [],
+    })
+    expect(mergeReviewConfig({ surface: "local", global: { privacy: "zdr" } }).config.holdback).toBeUndefined()
+    expect(mergeReviewConfig({ surface: "local", env: { REVIEW_HOLDBACK: "secrets" } }).config.privacy).toBeUndefined()
+    expect(mergeReviewConfig({ surface: "local", global: { runtime: "ask", holdback: "secrets" } })).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, runtime: "ask", holdback: "secrets" },
+      warnings: [ASK],
+    })
+    // settle's own "not applied" warnings come first, then the sourced keys'.
+    expect(
+      mergeReviewConfig({
+        surface: "github",
+        json: { at: "base", text: '{"trivial": "skip", "holdback": "secrets"}' },
+      }),
+    ).toEqual({
+      config: { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" },
+      warnings: [GITHUB_TRIVIAL_WARNING],
+    })
+  })
+})
+
+test("SF-26 cards honor ordinary local JSON and environment precedence and keep other surfaces unapplied", () => {
+  const json = JSON.stringify({ cards: "brain" })
+  expect(DEFAULT_REVIEW_CONFIG.cards).toBeUndefined()
+  expect(OPTIONAL_REVIEW_DEFAULTS.cards).toBe("off")
+  const scope = (adapter: "desktop" | "engine", cards?: "off" | "brain") =>
+    evidenceScope({ adapter, config: { ...DEFAULT_REVIEW_CONFIG, ...(cards ? { cards } : {}) } })
+  expect(scope("engine", "off")).toEqual(scope("engine"))
+  expect(scope("engine", "brain").prompts).not.toBe(scope("engine").prompts)
+  expect(scope("engine", "brain").policy).not.toBe(scope("engine").policy)
+  expect(scope("desktop", "brain")).toEqual(scope("desktop"))
+  expect(parseReviewConfig({ json, trigger: "local" }).config.cards).toBe("brain")
+  expect(parseReviewConfig({ json, env: { REVIEW_CARDS: " Off " }, trigger: "local" }).config.cards).toBe("off")
+  expect(parseReviewConfig({ env: { REVIEW_CARDS: "brain" }, trigger: "local" }).config.cards).toBe("brain")
+  expect(
+    parseReviewConfig({ json: JSON.stringify({ cards: true }), trigger: "local" }).warnings.length,
+  ).toBeGreaterThan(0)
+  for (const trigger of ["desktop", "command", "auto"] as const) {
+    const result = parseReviewConfig({ json, trigger })
+    expect(result.config.cards).toBeUndefined()
+    expect(result.warnings.join(" ")).toContain("reviews omit them")
+  }
+  expect(
+    mergeReviewConfig({ surface: "local", trigger: "command", json: { at: "base", text: json } }).config.cards,
+  ).toBe("brain")
+})
+
+test("largeChanges defaults to the existing size skip and opts into batches in the local CLI", () => {
+  const standard = parseReviewConfig({})
+  expect(parseReviewConfig({ json: '{"largeChanges":"skip"}' })).toEqual(standard)
+  expect(parseReviewConfig({ json: '{"largeChanges":"batch"}' })).toEqual({
+    config: { ...standard.config, largeChanges: "batch" },
+    warnings: [],
+  })
+  expect(UNAPPLIED_REVIEW_KEYS as readonly string[]).not.toContain("largeChanges")
+  expect(parseReviewConfig({ json: '{"largeChanges":"forever"}' }).config).toEqual(standard.config)
+})
+
+test("offline diagnostics accepts only a trusted owner setting or a complete base read", () => {
+  const text = '{"diagnostics":"offline","diagnosticRules":["repository-supplied"]}'
+  for (const surface of ["local", "github"] as const) {
+    const admitted = mergeReviewConfig({ surface, json: { at: "base", text } })
+    expect(admitted.config.diagnostics).toBe("offline")
+    expect(admitted.config).not.toHaveProperty("diagnosticRules")
+    for (const at of ["snapshot", "working-tree"] as const) {
+      const denied = mergeReviewConfig({ surface, json: { at, text }, env: { REVIEW_DIAGNOSTICS: "offline" } })
+      expect(denied.config).not.toHaveProperty("diagnostics")
+      expect(denied.warnings.join(" ")).toContain('"diagnostics" is read only')
+    }
+    expect(mergeReviewConfig({ surface, json: { at: "base", text, privacyOnly: true } }).config).not.toHaveProperty(
+      "diagnostics",
+    )
+    expect(mergeReviewConfig({ surface, json: { at: "base", text: '{"diagnostics":"off"}' } })).toEqual(
+      mergeReviewConfig({ surface }),
+    )
+  }
+  expect(mergeReviewConfig({ surface: "local", global: { diagnostics: "offline" } }).config.diagnostics).toBe("offline")
+  expect(mergeReviewConfig({ surface: "github", global: { diagnostics: "offline" } }).config).not.toHaveProperty(
+    "diagnostics",
+  )
+  expect(
+    mergeReviewConfig({ surface: "local", global: { diagnostics: { command: "anything" } } }).config,
+  ).not.toHaveProperty("diagnostics")
+})
+
+describe("base-only blocking-or-incomplete gate (SF-39)", () => {
+  test("only local and GitHub configs tagged as the base may select the gate, even with an overriding environment", () => {
+    const text = JSON.stringify({ failOn: "blocking-or-incomplete" })
+    for (const surface of ["local", "github"] as const) {
+      for (const env of [{}, { REVIEW_FAIL_ON: "never" }, { REVIEW_FAIL_ON: "blocking" }])
+        expect(mergeReviewConfig({ surface, json: { at: "base", text }, env }).config.failOn).toBe(
+          "blocking-or-incomplete",
+        )
+      for (const at of ["snapshot", "working-tree"] as const) {
+        const ignored = mergeReviewConfig({ surface, json: { at, text } })
+        expect(ignored.config.failOn).toBe("never")
+        expect(ignored.warnings.join(" ")).toContain("failOn")
+      }
+      expect(mergeReviewConfig({ surface, json: { at: "base", text, privacyOnly: true } }).config.failOn).toBe("never")
+      const ignoredEnv = mergeReviewConfig({ surface, env: { REVIEW_FAIL_ON: "blocking-or-incomplete" } })
+      expect(ignoredEnv.config.failOn).toBe("never")
+      expect(ignoredEnv.warnings.join(" ")).toContain("REVIEW_FAIL_ON")
+      expect(
+        mergeReviewConfig({
+          surface,
+          json: { at: "base", text: '{"failOn":"blocking"}' },
+          env: { REVIEW_FAIL_ON: "never" },
+        }).config.failOn,
+      ).toBe("never")
+    }
+    expect(parseReviewConfig({ json: text, trigger: "auto" }).config.failOn).toBe("never")
   })
 })

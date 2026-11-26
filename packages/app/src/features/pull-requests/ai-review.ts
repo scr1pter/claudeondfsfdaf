@@ -14,12 +14,17 @@ import { requestComposerPrompt } from "@/utils/composer-handoff"
 // each step is testable without a model.
 
 import {
-  parseReviewConfig,
+  DESKTOP_CARDS_NOTICE,
+  DESKTOP_STRICT_NOTICE,
+  DESKTOP_DIAGNOSTICS_NOTICE,
+  mergeReviewConfig,
   parseReviewRules,
   REVIEW_CONFIG_PATH,
   REVIEW_RULES_PATHS,
-  rulesForPaths,
+  rulePromptInput,
+  type SourcedReviewKey,
 } from "@vectordevai/core/review/config"
+import { trustedRules } from "@vectordevai/core/review/citation"
 import {
   anchorText,
   applyPatch,
@@ -31,23 +36,37 @@ import {
   parseUnifiedDiff,
   renderPatch,
   resolveAnchor,
+  revertPatch,
   type AnchorIndex,
   type DiffFile,
 } from "@vectordevai/core/review/diff"
 import { fingerprint, fnv1a64, normalizeCode, normalizeTitle } from "@vectordevai/core/review/fingerprint"
 import {
+  decideDispatch,
+  estimateDispatch,
+  type DispatchEstimate,
+  type PassPlan,
+} from "@vectordevai/core/review/dispatch"
+import {
+  BUDGET_ESTIMATE_UNAVAILABLE,
   buildSummaryBody,
   codeSpan,
   costWording,
   formatDuration,
   formatTokens,
   formatUsd,
+  noteHeldBack,
+  noteIgnoreUnchecked,
   noteNothingToReview,
+  noteBudgetEstimate,
+  notePrivacyRefused,
+  noteRedacted,
   noteTriageUnchecked,
   noteVerifyUnfinished,
   sanitizeModelMarkdown,
   type RepoRef,
 } from "@vectordevai/core/review/format"
+import { holdbackContext, holdbackFiles, holdbackText, safeRulePrompt } from "@vectordevai/core/review/holdback"
 import { classifyFiles, classifyPath, isSensitivePath, parseGitAttributes } from "@vectordevai/core/review/ignore"
 import {
   assessReview,
@@ -58,7 +77,8 @@ import {
 } from "@vectordevai/core/review/model-evidence"
 import { packChanges, verifyHeadFiles } from "@vectordevai/core/review/pack"
 import { reviewPermissionRules } from "@vectordevai/core/review/permission"
-import { redactSecrets } from "@vectordevai/core/review/redact"
+import { decideRoute, type RouteRefusal } from "@vectordevai/core/review/privacy"
+import { REDACTED, redactSecrets } from "@vectordevai/core/review/redact"
 import {
   combineCostKinds,
   contextRefusal,
@@ -89,12 +109,13 @@ import {
   decodeReport,
   decodeVerify,
   REVIEW_REPORT_JSON_SCHEMA,
+  strictReportJsonSchema,
   VERIFY_JSON_SCHEMA,
   type VerifyResult,
 } from "@vectordevai/core/review/schema"
 import { changedSymbols } from "@vectordevai/core/review/symbols"
 import { checkedLabs, checkedLine, noteJudgeUnfinished, reviewModels } from "@vectordevai/core/review/second-lab"
-import { selectFindings, wantsNits } from "@vectordevai/core/review/select"
+import { checkedRuleFindings, ruleCheckNotes, selectFindings, wantsNits } from "@vectordevai/core/review/select"
 import {
   SEVERITIES,
   type CostKind,
@@ -130,6 +151,11 @@ const CHARS_PER_TOKEN = 3.5
 const RISKS: Risk[] = ["low", "medium", "high"]
 const FORMAT = { type: "json_schema" as const, schema: REVIEW_REPORT_JSON_SCHEMA, retryCount: 0 }
 const VERIFY_FORMAT = { type: "json_schema" as const, schema: VERIFY_JSON_SCHEMA, retryCount: 0 }
+
+function reviewReportFormat(ruleCheck?: "strict") {
+  const schema = ruleCheck && strictReportJsonSchema({ ruleCheck })
+  return schema ? { ...FORMAT, schema } : FORMAT
+}
 // Call sites: up to 10 symbols the change declares, 15 hits each, as `vector review` gathers with git grep.
 const MAX_SYMBOLS = 10
 const MAX_HITS = 15
@@ -157,6 +183,7 @@ const SKIP_REASON: Record<SkippedFile["reason"], string> = {
   binary: "binary",
   deleted: "deleted",
   "size-limit": "too large",
+  "held-back": "held back",
 }
 
 // What the panel knows about a pull request, from GitHub's API.
@@ -257,6 +284,10 @@ export type ReviewOutcomeLite = {
   carried?: number
   // Nothing changed since the last review, so this is that review again and nothing was sent to a model.
   unchanged?: true
+  partial?: "budget-estimate" | "budget"
+  unreviewed?: string[]
+  dispatch?: DispatchEstimate
+  shrink?: { step: "diff"; estimate: DispatchEstimate }[]
   // What each pass spent: the reviewers on the triage model when there is one, the double-check on the review model.
   passes?: ReviewPass[]
   triage?: string // the first pass's model, when review.json names a cheaper one than the review model
@@ -309,6 +340,25 @@ export type ReviewRunInput = ReviewRequest & {
   // The certificates model evidence (VS-07) compares the models with under "modelEvidence": "warn"; MODEL_EVIDENCE
   // when absent. The eval and tests pass their own.
   certificates?: readonly ModelCertificate[]
+  // The settings the review runs under, once read (the eval's desktop replay records them).
+  onSettings?: (settings: { config: ReviewConfig; warnings: readonly string[] }) => void
+  // An estimate from request preparation, without creating a session or contacting a model. The current desktop
+  // session API has no such preview; its production caller leaves this absent.
+  // It must cover the complete first request, including system instructions, tools and provider additions.
+  // For a conditional checker, candidateLimit requests a reservation for that many future findings.
+  // Return undefined if any of the requested inputs cannot be estimated.
+  estimateFirstTurn?: (input: {
+    pass: Specialist | "verify" | "judge"
+    directory: string
+    parentID?: string
+    model: ReviewModel
+    scope: Scope
+    rules: PermissionRule[]
+    text: string
+    format: ReturnType<typeof reviewReportFormat> | typeof VERIFY_FORMAT
+    candidateLimit?: number
+    signal: AbortSignal
+  }) => Promise<number | undefined>
 }
 
 type Tokens = { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
@@ -333,6 +383,9 @@ type Result<T> = Promise<{ data?: T }>
 
 // The part of the SDK client a review uses.
 export interface ReviewClient {
+  // The user config, for its hidden review block (VS-23d): the engine's GET /global/config. A client without it reads
+  // none, as before.
+  global?: { config: { get(): Result<{ review?: Partial<Record<SourcedReviewKey, unknown>> }> } }
   session: {
     create(input: {
       directory?: string
@@ -478,7 +531,14 @@ export function workflowModel(
     assessReview({
       // A named model that is not connected here is described by its name alone.
       review: reviewed ? subjectOf(reviewed) : { model: named!, free: false },
-      scope: evidenceScope({ adapter: "engine", config, ...(triage ? { triage } : {}) }),
+      // The engine's scope, as Review.run makes it: under privacy "zdr" the engine enforces the route rules (VS-23c),
+      // so its scope is the zdr route's.
+      scope: evidenceScope({
+        adapter: "engine",
+        config,
+        ...(triage ? { triage } : {}),
+        ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
+      }),
       now: options.now ?? Date.now(),
       ...(options.certificates ? { certificates: options.certificates } : {}),
     }),
@@ -686,7 +746,17 @@ const NO_USAGE: Usage = { messages: [], complete: true }
 
 type SpecialistResult = SpecialistRun & { report?: ModelReport; usage: Usage }
 
+function withSurfaceNotes(text: string, config: ReviewConfig) {
+  return [
+    text,
+    ...(config.guardrail === "strict" ? [DESKTOP_STRICT_NOTICE] : []),
+    ...(config.diagnostics === "offline" ? [DESKTOP_DIAGNOSTICS_NOTICE] : []),
+  ].join(" ")
+}
+
 export async function runReview(input: ReviewRunInput, client: ReviewClient): Promise<ReviewOutcomeLite | undefined> {
+  const timeoutMs = input.timeoutMs ?? REVIEW_TIMEOUT_MS
+  const previewDeadline = Date.now() + timeoutMs
   const now = input.now ?? Date.now
   const started = now()
   const directory = input.directory
@@ -695,13 +765,26 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const checks = ("pr" in input ? input.checks : undefined) ?? []
   if (!pr) status("Reading your changes…")
   const files = parseUnifiedDiff("pr" in input ? input.diff : await uncommittedDiff(client, directory))
-  if (!files.length)
-    throw new Error(
-      pr ? `Pull request #${pr.number} has no changes to review.` : "There are no uncommitted changes to review.",
-    )
   const read = async (path: string) => {
     const result = await client.file.read({ directory, path }).catch(() => undefined)
     return result?.data?.type === "text" ? result.data.content : undefined
+  }
+
+  if (!files.length) {
+    const problem = pr
+      ? `Pull request #${pr.number} has no changes to review.`
+      : "There are no uncommitted changes to review."
+    // There is no changed settings file in an empty diff. Guardrail is set only by this checkout's review.json.
+    const json = await read(REVIEW_CONFIG_PATH)
+    // No review can run on an empty diff. Keep that reason even if an optional settings read fails.
+    const global = await userReviewSettings(client).catch(() => undefined)
+    const { config } = mergeReviewConfig({
+      surface: "local",
+      ...(global ? { global } : {}),
+      json: { at: "working-tree", text: json },
+      trigger: "desktop",
+    })
+    throw new Error(withSurfaceNotes(problem, config))
   }
 
   // Settings come from the user's checkout, as for `vector review`, unless a pull request changes them: a pull
@@ -717,13 +800,67 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     ...REVIEW_RULES_PATHS.map(setting),
   ])
   const instructions = await repositoryInstructions(setting)
-  const { config } = parseReviewConfig({ json: json?.trim() ? json : undefined, trigger: "desktop" })
+  // VS-23d (SF-15): review privacy and holdback are the strictest of the user config's hidden review block, which the
+  // engine server also enforces, and review.json, as mergeReviewConfig reads them for `vector review`. When the pull
+  // request changes review.json, its settings stay the defaults and only the base's copy may raise these two.
+  const global = await userReviewSettings(client)
+  const settings = pr
+    ? files.filter(
+        (file) =>
+          (file.oldPath ?? file.path).toLowerCase() === REVIEW_CONFIG_PATH.toLowerCase() ||
+          file.path.toLowerCase() === REVIEW_CONFIG_PATH.toLowerCase(),
+      )
+    : []
+  const merged = settings.length
+    ? strictest(
+        (await baseReviewSettings(settings, read)).map((text) =>
+          mergeReviewConfig({
+            surface: "local",
+            ...(global ? { global } : {}),
+            json: { at: "base", text, privacyOnly: true },
+            trigger: "desktop",
+          }),
+        ),
+      )
+    : mergeReviewConfig({
+        surface: "local",
+        ...(global ? { global } : {}),
+        json: { at: "working-tree", text: json?.trim() ? json : undefined },
+        trigger: "desktop",
+      })
+  const config = merged.config
+  const holdSecrets = config.holdback === "secrets"
+  const ruleCheck = config.ruleCheck === "strict" ? ("strict" as const) : undefined
+  input.onSettings?.({ config: structuredClone(config), warnings: [...merged.warnings] })
+  // The settings' warnings about privacy, holdback and attestations (a value read as the stricter setting, an
+  // attestation dropped) say why a review was raised to zdr or refused, so the outcome and a refusal carry them. The
+  // desktop strict notice also applies to an ordinary result reused from a previous desktop review.
+  const settingNotes = merged.warnings.filter(
+    (warning) =>
+      warning === DESKTOP_STRICT_NOTICE ||
+      warning === DESKTOP_CARDS_NOTICE ||
+      warning === DESKTOP_DIAGNOSTICS_NOTICE ||
+      /\breview\.(privacy|holdback|zdrAttested)\b|"(privacy|holdback|zdrAttested)"/.test(warning),
+  )
+  const withSettingNotes = (text: string) => [text, ...settingNotes].join(" ")
   const attributes = attributesText ? parseGitAttributes(attributesText) : undefined
   const { review, skipped } = classifyFiles(files, { config, attributes })
   const head = pr ? pr.headRefOid || pr.headRefName : "HEAD"
   const fileKeys = Object.fromEntries(review.map((file) => [file.path, fileKey(file)]))
   const settingsKey = fnv1a64(
-    [json, attributesText, ...rulesTexts, instructions, ...(input.preferredModels ?? [])]
+    [
+      json,
+      attributesText,
+      ...rulesTexts,
+      instructions,
+      ...(input.preferredModels ?? []),
+      ...(ruleCheck ? ["ruleCheck:strict"] : []),
+      ...(config.diagnostics === "offline" ? ["diagnostics:offline"] : []),
+      // Only when either is set, so the key is what it was for every review without them.
+      ...(config.privacy || config.holdback
+        ? [`privacy:${config.privacy ?? ""}`, `holdback:${config.holdback ?? ""}`]
+        : []),
+    ]
       .map((part) => part ?? "")
       .join("\0"),
   )
@@ -733,11 +870,16 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const previous =
     input.previous &&
     input.previous.pr === pr?.number &&
+    !input.previous.partial &&
+    // Saved reviews from before desktop token admission may have ignored this same configured limit.
+    (!(config.maxInputTokens && config.maxInputTokens > 0) || input.previous.dispatch) &&
     input.previous.settingsKey === settingsKey &&
     input.previous.specialists.length > 0 &&
     input.previous.specialists.every((specialist) => specialist.status === "ok") &&
     (input.previous.verification?.status ?? "ok") === "ok"
-      ? input.previous
+      ? holdSecrets
+        ? withoutRedactedEdits(input.previous)
+        : input.previous
       : undefined
   const unchanged = new Set(
     review.filter((file) => previous?.fileKeys?.[file.path] === fileKeys[file.path]).map((file) => file.path),
@@ -761,7 +903,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       specialists: [],
       sessions: [],
       banners: [],
-      notes: [noteNothingToReview()],
+      notes: [noteNothingToReview(), ...settingNotes],
     }
 
   // Uncommitted changes are the checkout itself, so they are always reviewed in place.
@@ -781,10 +923,126 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     : "Reviewing the uncommitted changes in your checkout"
   input.onProgress?.({ type: "checkout", checkout, label })
   if (input.signal?.aborted) return undefined
+  // VS-34's desktop half (SF-15), under holdback "secrets": the same core functions Review.run calls. Credential files
+  // are held back whole and recorded as `held-back` skips, secret-shaped values in the diff, the head files and every
+  // untrusted block the prompts quote are redacted, and the sessions' rules deny the read tool the credential files
+  // and every held path, so the engine's read, grep and glob tools redact what they return. The desktop cannot ask git
+  // which changed files are ignored, so its note says so. Unset, nothing here runs and the prompts are as before.
+  const hold = holdSecrets ? holdbackFiles(review, { headFiles: checkout.headFiles, ignored: [] }) : undefined
+  const heldPaths = new Set(hold?.held.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]))
+  const sent = hold?.files ?? review
+  const reviewed = hold?.held.length
+    ? {
+        ...summary,
+        skipped: [...skipped, ...hold.held.map((file) => ({ path: file.path, reason: "held-back" as const }))],
+        files: summary.files.filter((file) => !heldPaths.has(file.path)),
+      }
+    : summary
+  const holdNotes = hold
+    ? [
+        // The desktop's sessions run no check and read nothing outside the checkout, so the held value was not sent.
+        noteHeldBack(hold.held.map((file) => file.path)),
+        noteRedacted(hold.redactions.map((row) => row.path)),
+        noteIgnoreUnchecked(),
+      ].filter((note) => note !== undefined)
+    : []
+  // Everything to review was held back: nothing is sent, the held files are skipped and nothing is unreviewed.
+  if (hold && !sent.length)
+    return {
+      ...reviewed,
+      checkout,
+      label,
+      report: { summary: "", risk: "low", files: [], findings: [] },
+      selection: emptySelection(),
+      anchored: {},
+      durationMs: now() - started,
+      specialists: [],
+      sessions: [],
+      banners: [],
+      notes: [...settingNotes, ...holdNotes],
+    }
+
+  const maxInputTokens = config.maxInputTokens ?? 0
+  const authored = authorship(pr, "pr" in input ? input.viewer : undefined)
+  const budgetStop = (reason: string, details: string[]): ReviewOutcomeLite => ({
+    ...reviewed,
+    checkout,
+    authored,
+    label,
+    report: { summary: "Not reviewed.", risk: "low", files: [], findings: [] },
+    selection: emptySelection(),
+    partial: "budget-estimate",
+    unreviewed: [...new Set(files.map((file) => file.path))],
+    anchored: {},
+    durationMs: now() - started,
+    specialists: [],
+    sessions: [],
+    banners: [],
+    notes: [reason, ...settingNotes, ...holdNotes, ...details],
+  })
+  // Only the engine prepares provider instructions, tools and plugin additions. A count of the desktop's diff
+  // and messages cannot bound that request. Refuse before model selection or reuse of a previously admitted run.
+  if (maxInputTokens > 0 && !input.estimateFirstTurn)
+    return budgetStop(BUDGET_ESTIMATE_UNAVAILABLE, [
+      "The desktop session API does not provide this estimate for maxInputTokens. No model request was sent.",
+    ])
+
+  const rulesText = rulesTexts.find((text) => text?.trim())
+  const ruleInput = rulePromptInput(
+    parseReviewRules(rulesText ?? ""),
+    review.map((file) => file.path),
+    config,
+  )
+  const safeBlocks = safeRulePrompt({ ...ruleInput, instructions }, config)
+  const rulePrompt = {
+    rules: safeBlocks.rules,
+    rulesSource: "working tree" as const,
+    ...(safeBlocks.instructions
+      ? { instructions: safeBlocks.instructions, instructionsSource: "working tree" as const }
+      : {}),
+    ...(ruleCheck ? { ruleCheck, instructionsSource: "working tree" as const } : {}),
+  }
+  const trusted = ruleCheck ? trustedRules({ ...rulePrompt, parts: safeBlocks.ruleParts, anchors: sent }) : undefined
+  const sameDiff =
+    previous && unchanged.size === review.length && Object.keys(previous.fileKeys ?? {}).length === review.length
+  const oldFindings = previous ? previousFindings(previous.selection) : []
+  const carried = oldFindings.filter((finding) => (trusted && sameDiff) || unchanged.has(finding.path))
+  const carriedRules = trusted ? checkedRuleFindings(carried, trusted) : undefined
+  // A saved finding is displayed as-is on a cache hit. Re-review if its authority or held-file eligibility changed.
+  if (
+    carriedRules &&
+    (carriedRules.stripped ||
+      carriedRules.dropped ||
+      carried.some(
+        (finding, index) =>
+          heldPaths.has(finding.path) ||
+          finding.rule !== carriedRules.findings[index]?.rule ||
+          finding.rulesSource !== carriedRules.findings[index]?.rulesSource ||
+          finding.severity !== carriedRules.findings[index]?.severity,
+      ))
+  )
+    unchanged.clear()
   // Nothing changed since the last review, so its findings stand. The checkout is the one read just now: the user may
   // have switched branches since, and Apply fix and Ask the agent follow it.
-  if (previous && unchanged.size === review.length && Object.keys(previous.fileKeys ?? {}).length === review.length)
-    return { ...previous, head, checkout, label, unchanged: true }
+  if (previous && sameDiff && unchanged.size === review.length) {
+    const missingNotes = [
+      ...(config.guardrail === "strict" ? [DESKTOP_STRICT_NOTICE] : []),
+      ...(config.diagnostics === "offline" ? [DESKTOP_DIAGNOSTICS_NOTICE] : []),
+    ].filter((note) => !previous.notes.includes(note))
+    return {
+      ...previous,
+      ...(carriedRules ? { report: { ...previous.report, findings: carriedRules.findings } } : {}),
+      head,
+      checkout,
+      label,
+      unchanged: true,
+      notes: [
+        ...previous.notes.filter((note) => note !== DESKTOP_CARDS_NOTICE),
+        ...settingNotes.filter((note) => note === DESKTOP_CARDS_NOTICE),
+        ...missingNotes,
+      ],
+    }
+  }
 
   // An explicit model in review.json wins; otherwise the review runs on the agent's model (see preferredModels).
   // The resolved model is passed explicitly to every prompt.
@@ -797,9 +1055,12 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const named = config.triageModel ? pickReviewModel([config.triageModel], catalog) : undefined
   if (!chosen)
     throw new Error(
-      catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
-        ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
-        : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
+      withSurfaceNotes(
+        catalog.some((item) => item.providerID === ModelPlanStatus.PROVIDER_ID)
+          ? "Vectorscope runs on Vector Codium only when you choose it, since it uses your Codium month. Choose a Codium model for your agent, or set model in .vector/review.json."
+          : "Connect a provider in Settings → Providers, or configure a local provider and set model in .vector/review.json.",
+        config,
+      ),
     )
   // WP A35: on Vector Codium without a triageModel the review runs the plan's review pair, a same-lab pair runs one
   // pass, and the panel adds a judge from a third lab (review.json's judgeModel, or the plan's panel judge).
@@ -821,14 +1082,26 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
   const refusal = [model, ...(triage ? [triage] : []), ...(judge ? [judge] : [])]
     .map((item) => (item.context ? contextRefusal(modelName(item), item.context) : undefined))
     .find(Boolean)
-  if (refusal) throw new Error(refusal)
+  if (refusal) throw new Error(withSurfaceNotes(refusal, config))
+  // VS-23d (SF-15): under privacy "zdr" a model whose names alone the route rules refuse (Vector Codium, a free model,
+  // a router or preset, one whose provider requires retention) is refused before any session is created, as
+  // `vector review` refuses it. Where its requests go decides the rest, which the engine server holds each session to.
+  const privacyRefused =
+    config.privacy === "zdr"
+      ? [model, ...(triage ? [triage] : []), ...(judge ? [judge] : [])].flatMap((item) => {
+          const own = routeRefusalOf(item)
+          return own ? [{ model: modelName(item), refusal: own }] : []
+        })[0]
+      : undefined
+  if (privacyRefused)
+    throw new Error(withSettingNotes(notePrivacyRefused({ ...privacyRefused, attempts: 0 }).replaceAll("**", "")))
   const first = triage ?? model
 
   status("Finding the code that uses what changed…")
   const related = await relatedCode(
     client,
     directory,
-    review,
+    sent,
     (path) => classifyPath(path, { config, attributes }) !== undefined,
   )
   if (input.signal?.aborted) return undefined
@@ -837,28 +1110,40 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     config.maxDiffChars,
   )
   // A re-review looks at what changed since the last one: the other files are shown by their changed lines only.
-  const changedSince = review.filter((file) => !unchanged.has(file.path))
+  // Under holdback the files sent: the held ones left out, values redacted.
+  const changedSince = sent.filter((file) => !unchanged.has(file.path))
   const focus = unchanged.size
     ? focusOfFiles(
-        review,
+        sent,
         changedSince.map((file) => file.path),
       )
     : undefined
   const { inline, notInlined } = budgetDiff(
-    [...changedSince, ...review.filter((file) => unchanged.has(file.path))],
+    [...changedSince, ...sent.filter((file) => unchanged.has(file.path))],
     budget,
   )
-  const heads =
+  let heads =
     checkout.trust === "untrusted"
-      ? promptHeadFiles(checkout.headFiles, new Set(inline.map((file) => file.path)), budget)
+      ? promptHeadFiles(hold?.headFiles ?? checkout.headFiles, new Set(inline.map((file) => file.path)), budget)
       : undefined
   const packed = packChanges({
     inline,
-    changed: review,
+    changed: sent,
     ...(heads ? { headFiles: heads } : {}),
     ...(focus ? { focus } : {}),
   })
-  const rulesText = rulesTexts.find((text) => text?.trim())
+  const humanComments = (pr?.comments ?? []).map((comment) => ({ author: comment.author, body: comment.body }))
+  const quoted = hold
+    ? holdbackContext(
+        {
+          ...(pr ? { pr: { number: pr.number, title: pr.title, body: pr.body, author: pr.author } } : {}),
+          related,
+          checks,
+          humanComments,
+        },
+        { held: hold.held },
+      )
+    : undefined
   const prompt: PromptInput = {
     mode: focus ? "incremental" : "full",
     trust: checkout.trust,
@@ -867,7 +1152,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     ...(pr
       ? {
           baseRef: pr.baseRefName,
-          pr: { number: pr.number, title: pr.title, body: pr.body, author: pr.author },
+          pr: quoted?.pr ?? { number: pr.number, title: pr.title, body: pr.body, author: pr.author },
         }
       : { uncommitted: true }),
     diff: packed.diff,
@@ -875,20 +1160,200 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     headFiles: heads ? packed.headFiles : undefined,
     ...(focus ? { focus, settled: packed.settled } : {}),
     nits: wantsNits(config),
-    rules: rulesForPaths(
-      parseReviewRules(rulesText ?? ""),
-      review.map((file) => file.path),
-      config.paths,
-    ),
-    rulesSource: "working tree",
-    ...(instructions ? { instructions, instructionsSource: "working tree" as const } : {}),
-    ...(related.length ? { related } : {}),
-    ...(checks.length ? { checks } : {}),
-    humanComments: (pr?.comments ?? []).map((comment) => ({ author: comment.author, body: comment.body })),
+    ...rulePrompt,
+    ...((quoted?.related ?? related).length ? { related: quoted?.related ?? related } : {}),
+    ...(checks.length ? { checks: quoted?.checks ?? checks } : {}),
+    humanComments: quoted?.humanComments ?? humanComments,
+    ...(hold ? { inputsRedacted: true as const } : {}),
     maxComments: config.maxComments,
   }
   const plan = planSpecialists(review, config)
-  const texts: Record<Specialist, string> = { review: buildReviewPrompt(prompt), security: buildSecurityPrompt(prompt) }
+  const specialistTexts = (value: PromptInput) => ({
+    review: buildReviewPrompt(value),
+    security: buildSecurityPrompt(value),
+  })
+  let texts = specialistTexts(prompt)
+  const subject = pr ? `#${pr.number}` : "uncommitted changes"
+  // Which of the owner's memory lines the reviewers hear follows who wrote the change, never what the checkout holds.
+  const scope: Scope = {
+    paths: review.map((file) => file.path),
+    trust: authored,
+    ...(config.privacy === "zdr" ? { privacy: "zdr" as const } : {}),
+  }
+  const rules = reviewPermissionRules(hold ? { holdback: "secrets", held: [...heldPaths] } : {})
+  const verifyLimit = Math.max(4, config.maxComments * 2)
+  const verifyBase = { trust: checkout.trust, head, ...(pr ? {} : { uncommitted: true }) }
+  const dispatchNotes: string[] = []
+  let uncheckedPaths: string[] | undefined
+  const shrink: NonNullable<ReviewOutcomeLite["shrink"]> = []
+  let dispatch: DispatchEstimate | undefined
+  let remainingTokens = maxInputTokens
+
+  async function firstTurn(
+    pass: Specialist | "verify" | "judge",
+    target: ReviewModel,
+    text: string,
+    candidateLimit?: number,
+  ) {
+    const remainingMs = previewDeadline - Date.now()
+    if (!input.estimateFirstTurn || input.signal?.aborted || remainingMs <= 0) return undefined
+    const cancel = stopWhen(input.signal, remainingMs)
+    const controller = new AbortController()
+    try {
+      const estimate = input.estimateFirstTurn({
+        pass,
+        model: target,
+        text,
+        scope,
+        rules,
+        directory,
+        parentID: input.parentID,
+        format: pass === "verify" || pass === "judge" ? VERIFY_FORMAT : reviewReportFormat(ruleCheck),
+        signal: controller.signal,
+        ...(candidateLimit !== undefined ? { candidateLimit } : {}),
+      })
+      const tokens = await Promise.race([
+        estimate,
+        cancel.promise.then(() => {
+          controller.abort()
+          return undefined
+        }),
+      ])
+      if (input.signal?.aborted || Date.now() >= previewDeadline) return undefined
+      return tokens !== undefined && Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined
+    } catch {
+      return undefined
+    } finally {
+      cancel.dispose()
+    }
+  }
+  async function projectedTurns(projectedTexts: Record<Specialist, string>, projectedHeads: HeadFile[] | undefined) {
+    const passes: PassPlan[] = []
+    const add = async (
+      pass: Specialist | "verify" | "judge",
+      target: ReviewModel,
+      text: string,
+      steps: number,
+      limit?: number,
+    ) => {
+      const tokens = await firstTurn(pass, target, text, limit)
+      if (tokens === undefined) return false
+      passes.push({
+        pass,
+        model: modelName(target),
+        promptTokens: tokens,
+        maxSteps: steps,
+        ...(target.costKind === "priced" && target.price ? { price: target.price } : {}),
+      })
+      return true
+    }
+    for (const pass of plan) {
+      if (
+        !(await add(
+          pass,
+          first,
+          projectedTexts[pass],
+          pass === "security" ? Math.ceil((config.maxSteps * 2) / 3) : config.maxSteps,
+        ))
+      )
+        return
+    }
+    if (config.verify !== "off" || triage) {
+      const reserved = { ...verifyBase, candidates: [], headFiles: projectedHeads }
+      if (!(await add("verify", model, buildVerifyPrompt(reserved), 10, verifyLimit))) return
+      if (judge && !(await add("judge", judge, buildJudgePrompt({ ...reserved, checks: [] }), 10, verifyLimit))) return
+    }
+    return estimateDispatch(passes)
+  }
+
+  if (maxInputTokens > 0) {
+    dispatch = await projectedTurns(texts, heads)
+    let estimate = dispatch
+    if (estimate) {
+      // A lower step count cannot reduce the first input to a pass. The desktop has no dollar cap.
+      const decision = decideDispatch(estimate, {
+        maxInputTokens,
+        available: ["steps:verify", "steps:security", "steps:review", "diff"],
+      })
+      if (!decision.go && "shrink" in decision && decision.shrink === "diff") {
+        const changedOnly = renderPatch(inline, 0)
+        if (changedOnly !== prompt.diff || heads?.length) {
+          // A rebuilt PR may supply a non-inline change only through its head file. Keep its changed
+          // lines in the specialist prompt. The checker gets no specialist diff, so it needs a
+          // hunk copy for every head it could previously cite, including those in the inline diff.
+          const changes = new Map(sent.map((file) => [file.path, file]))
+          const trimmedHeads = heads?.map((head) => {
+            const file = changes.get(head.path)
+            return file?.hunks.length ? { path: head.path, text: renderPatch([file], 0), exact: false } : head
+          })
+          const inlinePaths = new Set(inline.map((file) => file.path))
+          const promptPaths = new Set(prompt.headFiles?.map((file) => file.path))
+          const trimmed = specialistTexts({
+            ...prompt,
+            diff: changedOnly,
+            headFiles: trimmedHeads?.filter(
+              (file) =>
+                promptPaths.has(file.path) && (!inlinePaths.has(file.path) || !changes.get(file.path)?.hunks.length),
+            ),
+          })
+          const next = await projectedTurns(trimmed, trimmedHeads)
+          const before = estimate
+          if (!next) {
+            estimate = undefined
+          } else if (
+            next.firstTurnTokens < before.firstTurnTokens &&
+            next.passes.every((pass, index) => pass.promptTokens <= before.passes[index]!.promptTokens)
+          ) {
+            texts = trimmed
+            heads = trimmedHeads
+            estimate = next
+            shrink.push({ step: "diff", estimate })
+            dispatchNotes.push(
+              "Partial coverage. The review used changed lines only. Surrounding lines and full file copies were omitted to fit the token budget.",
+            )
+          }
+        }
+      }
+    }
+    if (input.signal?.aborted) return undefined
+    if (!estimate || !decideDispatch(estimate, { maxInputTokens }).go) {
+      const reason = estimate ? noteBudgetEstimate() : BUDGET_ESTIMATE_UNAVAILABLE
+      return {
+        ...budgetStop(reason, dispatchNotes),
+        ...(dispatch ? { dispatch, shrink } : {}),
+      }
+    }
+    remainingTokens -= estimate.passes
+      .filter((entry) => entry.pass === "review" || entry.pass === "security")
+      .reduce((sum, entry) => sum + entry.promptTokens, 0)
+  }
+
+  async function checkerFits(pass: "verify" | "judge", target: ReviewModel, text: string, candidates: Finding[]) {
+    // The candidate count bounds the forecast only. Price the actual request without dropping findings.
+    const tokens = await firstTurn(pass, target, text)
+    if (tokens === undefined || tokens > remainingTokens) {
+      const paths = new Set(sent.map((file) => file.path))
+      const affected = [
+        ...new Set(
+          candidates
+            .flatMap((candidate) => [
+              candidate.path,
+              ...(candidate.evidence ?? []).map((source) =>
+                source.replace(/:\d+(?:-\d+)?$/, "").replace(/^(\.\/|\/)+/, ""),
+              ),
+            ])
+            .filter((path) => paths.has(path)),
+        ),
+      ]
+      uncheckedPaths = affected.length ? affected : [...paths]
+      dispatchNotes.push(
+        `Review incomplete. The ${pass} pass did not run because its first request could not be confirmed within the remaining token budget.`,
+      )
+      return false
+    }
+    remainingTokens -= tokens
+    return true
+  }
 
   if (review.length > ESTIMATE_FILES && input.confirm) {
     const estimate = estimateReview({
@@ -907,13 +1372,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       ? `Reviewing with ${modelName(triage)}, then double-checking with ${modelName(model)}…`
       : `Reviewing with ${modelName(model)}…`,
   )
-  const subject = pr ? `#${pr.number}` : "uncommitted changes"
-  // Which of the owner's memory lines the reviewers hear follows who wrote the change, never what the checkout holds.
-  const authored = authorship(pr, "pr" in input ? input.viewer : undefined)
-  const scope: Scope = { paths: review.map((file) => file.path), trust: authored }
-  const rules = reviewPermissionRules({})
-  const timeoutMs = input.timeoutMs ?? REVIEW_TIMEOUT_MS
-  const stop = stopWhen(input.signal, timeoutMs)
+  const stop = stopWhen(input.signal, maxInputTokens > 0 ? Math.max(0, previewDeadline - Date.now()) : timeoutMs)
   const runs = await Promise.all(
     plan.map((name) =>
       runSpecialist({
@@ -924,6 +1383,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
         name,
         title: `${REVIEW_SESSION_TITLE_PREFIX}${subject} · ${name}`,
         text: texts[name],
+        ruleCheck,
         scope,
         model: first,
         rules,
@@ -935,22 +1395,28 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     throw cause
   })
 
-  const reports = runs.flatMap((run) => (run.report ? [{ source: run.name, report: run.report }] : []))
+  const reports = runs.flatMap((run) =>
+    run.report ? [{ source: run.name, report: holdSecrets ? withoutRedactedReportEdits(run.report) : run.report }] : [],
+  )
   if (!reports.length) {
     stop.dispose()
     const spend = reviewProgressSpend(runs, first)
     if (spend) input.onProgress?.({ type: "spend", ...spend })
     throw new Error(
-      `Vector could not finish this review: ${(runs.find((run) => run.detail)?.detail ?? "no reviewer answered").replace(/[.\s]+$/, "")}.${spentSoFar(runs, first)}`,
+      withSettingNotes(
+        `Vector could not finish this review: ${(runs.find((run) => run.detail)?.detail ?? "no reviewer answered").replace(/[.\s]+$/, "")}.${spentSoFar(runs, first)}`,
+      ),
     )
   }
 
   const index = buildAnchorIndex(files)
-  const proposed = reports.flatMap(({ source, report }) =>
-    report.findings.map((finding) => toFinding(finding, source, index)),
-  )
-  // What the last review found in files that did not change since. They were double-checked then, if at all.
-  const carried = previous ? previousFindings(previous.selection).filter((finding) => unchanged.has(finding.path)) : []
+  // A finding on a held path is never quoted to the double-check or the judge, and is not shown.
+  const fresh = reports
+    .flatMap(({ source, report }) => report.findings.map((finding) => toFinding(finding, source, index)))
+    .filter((finding) => !heldPaths.has(finding.path))
+  const freshRules = trusted ? checkedRuleFindings(fresh, trusted) : undefined
+  const proposed = freshRules?.findings ?? fresh
+  const ruleCounts = freshRules ? [freshRules, ...(unchanged.size && carriedRules ? [carriedRules] : [])] : []
 
   // The double-check: a second session re-reads the code behind each finding of concern or above and answers
   // confirmed or rejected; rejected findings are dropped. It is what keeps a reviewer's guesses off the pull request.
@@ -972,9 +1438,13 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     status(
       `Double-checking ${candidates.length} ${candidates.length === 1 ? "finding" : "findings"}${triage ? ` with ${modelName(model)}` : ""}…${spentSoFar(runs, first)}`,
     )
+  const verifyText = candidates.length
+    ? buildVerifyPrompt({ ...verifyBase, candidates, headFiles: verifyHeadFiles(sent, heads, candidates) })
+    : ""
   const verify = !candidates.length
     ? undefined
-    : stop.stopped()
+    : stop.stopped() ||
+        (maxInputTokens > 0 && (!(await checkerFits("verify", model, verifyText, candidates)) || stop.stopped()))
       ? ({ status: "skipped", verdicts: [], usage: NO_USAGE } satisfies VerifyRun)
       : await runVerify({
           client,
@@ -983,13 +1453,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           onSession: (sessionID) => input.onProgress?.({ type: "session", sessionID, costKind: model.costKind }),
           title: `${REVIEW_SESSION_TITLE_PREFIX}${subject} · verify`,
           scope,
-          text: buildVerifyPrompt({
-            trust: checkout.trust,
-            head,
-            ...(pr ? {} : { uncommitted: true }),
-            candidates,
-            headFiles: verifyHeadFiles(review, heads, candidates),
-          }),
+          text: verifyText,
           model,
           rules,
           stop: stop.promise,
@@ -1004,13 +1468,14 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           ...(pr ? {} : { uncommitted: true }),
           candidates,
           checks: verify.verdicts,
-          headFiles: verifyHeadFiles(review, heads, candidates),
+          headFiles: verifyHeadFiles(sent, heads, candidates),
         })
       : ""
   if (judgeText && judge) status(`Asking ${modelName(judge)} for the panel's final call…`)
   const judged = !judgeText
     ? undefined
-    : stop.stopped()
+    : stop.stopped() ||
+        (maxInputTokens > 0 && (!(await checkerFits("judge", judge!, judgeText, candidates)) || stop.stopped()))
       ? ({ status: "skipped", verdicts: [], usage: NO_USAGE } satisfies VerifyRun)
       : await runVerify({
           client,
@@ -1038,7 +1503,8 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     .map((finding) => (verdicts.get(finding.id) === "confirmed" ? { ...finding, verified: true } : finding))
   const rejected = proposed.length - kept.length
   const unconfirmed = kept.length - checked.length
-  const findings = [...checked, ...carried]
+  const retained = unchanged.size ? (carriedRules?.findings ?? carried) : []
+  const findings = [...checked, ...retained]
   // What the panel says about the double-check. The shared policy (plan.ts) accounts for every candidate left without a
   // verdict, whether or not the pass finished, in the engine's words. The legacy rule gives one note for a pass that did
   // not finish.
@@ -1093,6 +1559,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
 
   const selection = selectFindings({
     findings,
+    ...(trusted ? { trustedRules: trusted, ruleCounts } : {}),
     anchors: files,
     head,
     trust: checkout.trust,
@@ -1215,11 +1682,12 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     judged: judged?.status === "ok",
   })
   return {
-    ...summary,
+    ...reviewed,
     checkout,
     authored,
     label,
-    report,
+    // Saved desktop reports are also consumed outside the panel. Keep only the checked finding fields under VS-43.
+    report: ruleCheck ? { ...report, findings: previousFindings(selection) } : report,
     selection,
     anchored,
     cost: used
@@ -1248,8 +1716,12 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
     banners: partialBanners(runs, timeoutMs),
     notes: [
       ...picked.notes,
+      ...dispatchNotes,
+      ...settingNotes,
+      ...holdNotes,
       ...(judge && judgeText && judged?.status !== "ok" ? [noteJudgeUnfinished(modelName(judge))] : []),
       ...verifyNotes,
+      ...(trusted ? ruleCheckNotes(ruleCounts) : []),
       ...(config.triageModel && !triage && !named
         ? [
             `The triage model in .vector/review.json, ${config.triageModel}, is not connected, so the whole review ran on ${modelName(model)}.`,
@@ -1273,7 +1745,7 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
       callers: related.reduce((total, entry) => total + entry.hits.length, 0),
       checks: checks.length,
       failing: checks.filter((check) => FAILED_CHECK.has(check.conclusion)).length,
-      instructions: Boolean(instructions),
+      instructions: Boolean(rulePrompt.instructions),
     },
     ...(verify
       ? {
@@ -1286,9 +1758,10 @@ export async function runReview(input: ReviewRunInput, client: ReviewClient): Pr
           },
         }
       : {}),
-    fileKeys,
-    settingsKey,
-    ...(carried.length ? { carried: carried.length } : {}),
+    ...(dispatchNotes.length ? {} : { fileKeys, settingsKey }),
+    ...(uncheckedPaths ? { partial: "budget" as const, unreviewed: uncheckedPaths } : {}),
+    ...(dispatch ? { dispatch, shrink } : {}),
+    ...(retained.length ? { carried: retained.length } : {}),
     ...(passes.length ? { passes } : {}),
     ...(triage ? { triage: modelName(triage) } : {}),
     ...(Object.keys(fixes).length ? { fixes } : {}),
@@ -1353,7 +1826,14 @@ function evidenceNotes(context: {
               ),
             }
           : {}),
-        scope: evidenceScope({ adapter: "desktop", config, ...(triage ? { triage: modelName(triage) } : {}) }),
+        // Under "zdr" the engine server holds the desktop's sessions to the route rules (VS-23d), so the scope is the
+        // zdr route's, as the engine's is.
+        scope: evidenceScope({
+          adapter: "desktop",
+          config,
+          ...(triage ? { triage: modelName(triage) } : {}),
+          ...(config.privacy === "zdr" ? { route: "zdr" as const } : {}),
+        }),
         served: [...context.served],
         now: (context.input.now ?? Date.now)(),
         ...(context.input.certificates ? { certificates: context.input.certificates } : {}),
@@ -1362,9 +1842,135 @@ function evidenceNotes(context: {
   ]
 }
 
+// The user config's hidden review block (VS-23d), from the engine's global config route. A read that fails or returns
+// nothing rejects the review: the block may be what holds it to zero data retention.
+async function userReviewSettings(client: ReviewClient) {
+  if (!client.global) return undefined
+  const result = await client.global.config.get()
+  if (!result.data) throw new Error("Vector could not read your review settings, so it did not start the review.")
+  return result.data.review
+}
+
+// VS-23d (SF-15): what the base's review.json may say when a pull request changes it, as texts for mergeReviewConfig's
+// privacy-only base read, which can only raise privacy and holdback. No route the desktop uses reads a git blob, so it
+// is rebuilt from the diff, for each changed file whose base path is review.json (a rename away from it included),
+// compared without case:
+// - the checkout's text at that path, when the diff applies to it (the checkout is at the base);
+// - the head's text rebuilt back with revertPatch, when the checkout holds the head;
+// - else the base side of the diff's hunks (context and removed lines), which is the base when its hunks cover the
+//   whole file and otherwise a fragment that is not JSON. Only where it sets one of the two keys is read from it
+//   (fragmentSettings), so a mention anywhere else (an ignore path, a label) raises nothing, as a real parse of the base
+//   would not.
+// A file added at review.json, or renamed onto it, had no base copy, so it gives nothing. A base setting outside the
+// hunks, with the checkout at neither end, is not seen; the engine server's own hold is the backstop for the user
+// config's privacy.
+async function baseReviewSettings(files: readonly DiffFile[], read: (path: string) => Promise<string | undefined>) {
+  const wanted = REVIEW_CONFIG_PATH.toLowerCase()
+  const texts = await Promise.all(
+    files
+      .filter((file) => file.status !== "added" && (file.oldPath ?? file.path).toLowerCase() === wanted)
+      .map(async (file) => {
+        const there = (await read(file.oldPath ?? file.path)) ?? ""
+        const here = file.oldPath && file.oldPath !== file.path ? ((await read(file.path)) ?? "") : there
+        const exact = [
+          applyPatch(there, file) === undefined ? undefined : there,
+          revertPatch(file.status === "deleted" ? "" : here, file),
+        ].filter((text) => text !== undefined)
+        if (exact.length) return exact
+        return fragmentSettings(
+          file.hunks
+            .flatMap((hunk) => hunk.lines.filter((line) => line.kind !== "add").map((line) => line.text))
+            .join("\n"),
+        )
+      }),
+  )
+  const all = texts.flat()
+  return all.length ? all : [undefined]
+}
+
+// Each place a fragment of review.json sets privacy or holdback, as a one-key JSON text for mergeReviewConfig: the key
+// as JSON spells it, and its value as written. A value the fragment cuts off, or one that is not a JSON string or
+// scalar, leaves a text that is not JSON and mentions the key, which mergeReviewConfig reads as the stricter setting;
+// a value that is not a level reads as that too. None when the fragment sets neither, so the review keeps the defaults.
+function fragmentSettings(text: string) {
+  return [...text.matchAll(/"(privacy|holdback)"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}\s]*)/g)].map(
+    (match) => `{"${match[1]}": ${match[2]}}`,
+  )
+}
+
+// The strictest of several readings of the settings: privacy and holdback raised to the highest any gives. Under the
+// privacy-only base read the rest are the same in each.
+function strictest(readings: readonly { config: ReviewConfig; warnings: string[] }[]) {
+  const zdr = readings.some((reading) => reading.config.privacy === "zdr")
+  const secrets = readings.some((reading) => reading.config.holdback === "secrets")
+  return {
+    config: {
+      ...readings[0]!.config,
+      ...(zdr ? { privacy: "zdr" as const } : {}),
+      ...(secrets ? { holdback: "secrets" as const } : {}),
+    },
+    warnings: [...new Set(readings.flatMap((reading) => reading.warnings))],
+  }
+}
+
+// The route rules' refusal a model's names and cost kind alone decide, as the engine's ReviewRoutes.modelRefusal
+// does; undefined when only where its requests go can decide.
+function routeRefusalOf(model: ReviewModel): RouteRefusal | undefined {
+  const decision = decideRoute(
+    {
+      providerID: model.providerID,
+      modelID: model.modelID,
+      destinations: [],
+      freeModel: model.costKind === "free" || model.freeModel !== undefined,
+    },
+    { privacy: "zdr", attested: [] },
+  )
+  return decision.allowed || decision.refusal === "unknown-destination" ? undefined : decision.refusal
+}
+
 // A file's diff as one key: its rename, status and hunks.
 function fileKey(file: DiffFile) {
   return fnv1a64([file.oldPath ?? "", file.status, file.patch].join("\n"))
+}
+
+function containsRedactedValue(text: string | undefined) {
+  return text !== undefined && holdbackText(text).includes(REDACTED)
+}
+
+// The model can only see the placeholder where a value was held back. Preserve its finding and omit edits that could
+// write the placeholder into the file. This also covers a value that would be redacted when posted.
+function withoutRedactedEdit<T extends ModelFinding>(finding: T): T {
+  const suggestion = containsRedactedValue(finding.suggestion)
+  const patch = containsRedactedValue(finding.patch)
+  if (!suggestion && !patch) return finding
+  const clean = { ...finding }
+  if (suggestion) delete clean.suggestion
+  if (patch) delete clean.patch
+  return clean
+}
+
+function withoutRedactedReportEdits(report: ModelReport): ModelReport {
+  return { ...report, findings: report.findings.map(withoutRedactedEdit) }
+}
+
+function withoutRedactedEdits(outcome: ReviewOutcomeLite): ReviewOutcomeLite {
+  const { selection } = outcome
+  const fixes =
+    outcome.fixes &&
+    Object.fromEntries(Object.entries(outcome.fixes).filter(([, fix]) => !containsRedactedValue(fix.after.join("\n"))))
+  return {
+    ...outcome,
+    report: withoutRedactedReportEdits(outcome.report),
+    selection: {
+      ...selection,
+      inline: selection.inline.map(withoutRedactedEdit),
+      overflow: selection.overflow.map(withoutRedactedEdit),
+      outsideDiff: selection.outsideDiff.map(withoutRedactedEdit),
+      elsewhere: selection.elsewhere.map(withoutRedactedEdit),
+      nits: selection.nits.map(withoutRedactedEdit),
+    },
+    ...(fixes ? { fixes } : {}),
+  }
 }
 
 // Every finding a review listed, as findings again, for carrying them into the next review.
@@ -1389,6 +1995,8 @@ function previousFindings(selection: Selection): Finding[] {
     confidence: finding.confidence,
     ...(finding.evidence ? { evidence: finding.evidence } : {}),
     ...(finding.rule ? { rule: finding.rule } : {}),
+    ...(finding.citation ? { citation: finding.citation } : {}),
+    ...(finding.rulesSource ? { rulesSource: finding.rulesSource } : {}),
     source: finding.source,
     ...(finding.verified ? { verified: true } : {}),
     ...(finding.also ? { also: finding.also } : {}),
@@ -1530,6 +2138,7 @@ async function runSpecialist(input: {
   name: Specialist
   title: string
   text: string
+  ruleCheck?: "strict"
   // The changed paths and the trust, which choose how the owner reviews; never the pull request's own text.
   scope: Scope
   model?: ReviewModel
@@ -1561,6 +2170,7 @@ async function runSpecialist(input: {
     }
   input.onSession(sessionID)
 
+  const format = reviewReportFormat(input.ruleCheck)
   const ask = (text: string) =>
     client.session
       .prompt({
@@ -1568,7 +2178,7 @@ async function runSpecialist(input: {
         directory,
         agent: name,
         ...(input.model ? { model: { providerID: input.model.providerID, modelID: input.model.modelID } } : {}),
-        format: FORMAT,
+        format,
         parts: [{ type: "text", text, metadata: { [SCOPE]: input.scope } }],
       })
       .then(
@@ -1598,7 +2208,7 @@ async function runSpecialist(input: {
 
   // A stopped session, or one that answered without a report, gets the finalize prompt in the same session: its
   // findings exist only in its own context.
-  let report = reportOf(message)
+  let report = reportOf(message, input.ruleCheck)
   if (!report) {
     const restrictionFailure = await client.session
       .update({ sessionID, directory, permission: [...input.rules, ...FINALIZE_RULES] })
@@ -1617,7 +2227,7 @@ async function runSpecialist(input: {
       }
     const answer = await within(ask(buildFinalizePrompt()), FINALIZE_MS)
     if (!answer) await client.session.abort({ sessionID, directory }).catch(() => undefined)
-    report = reportOf(answer)
+    report = reportOf(answer, input.ruleCheck)
   }
   const usage = await usageOf(client, sessionID, directory)
   if (report) return { name, status, sessionID, report, usage, ...(guarded ? { detail: guarded } : {}) }
@@ -1712,13 +2322,14 @@ function verdictsOf(message: ReviewMessage | undefined): VerifyResult[] | undefi
   return decodeVerify(message.info.structured) ?? (text ? decodeVerify(text) : undefined)
 }
 
-function reportOf(message: ReviewMessage | undefined): ModelReport | undefined {
+function reportOf(message: ReviewMessage | undefined, ruleCheck?: "strict"): ModelReport | undefined {
   if (!message) return undefined
   const text = message.parts
     .filter((part) => part.type === "text" && part.text)
     .map((part) => part.text)
     .join("\n")
-  return decodeReport(message.info.structured) ?? (text ? decodeReport(text) : undefined)
+  const keys = ruleCheck ? { ruleCheck } : undefined
+  return decodeReport(message.info.structured, keys) ?? (text ? decodeReport(text, keys) : undefined)
 }
 
 // The id is computed from the anchored code, as in the engine, so the same finding keeps its id across surfaces.
@@ -2094,12 +2705,23 @@ export function countBySeverity(groups: readonly { severity: Severity; findings:
 
 export type ReviewEvent = "comment" | "approve" | "request-changes"
 
-// Vector never approves on its own. The user may, but not while a blocking finding stands.
-export function reviewEvents(selection: Selection): Record<ReviewEvent, boolean> {
+// The panel's error message and retry button handle a refusal before any session. Programmatic callers
+// keep runReview's structured outcome. Once a specialist has run, the panel can show its findings and cost.
+export function reviewPanelResult(outcome: ReviewOutcomeLite | undefined) {
+  if (outcome?.partial === "budget-estimate") throw new Error(outcome.notes.join(" "))
+  return outcome
+}
+
+// Vector never approves on its own. The user may approve after a completed review with no blocking findings.
+export function reviewEvents(
+  selection: Selection,
+  partial?: ReviewOutcomeLite["partial"],
+): Record<ReviewEvent, boolean> {
+  if (partial === "budget-estimate") return { comment: false, approve: false, "request-changes": false }
   const blocking = [...selection.inline, ...selection.overflow, ...selection.outsideDiff, ...selection.elsewhere].some(
     (finding) => finding.severity === "blocking",
   )
-  return { comment: true, approve: !blocking, "request-changes": true }
+  return { comment: true, approve: !blocking && !partial, "request-changes": true }
 }
 
 export function repoOf(url: string): RepoRef | undefined {
@@ -2392,15 +3014,16 @@ export function buildDesktopSummary(outcome: ReviewOutcomeLite, url?: string) {
 function desktopSummaryBody(outcome: ReviewOutcomeLite, url?: string, inlinePosted = false) {
   return buildSummaryBody({
     form: "desktop",
+    ...(outcome.partial === "budget" ? { incomplete: true } : {}),
     inlinePosted,
     repo: url ? repoOf(url) : undefined,
     pr: outcome.pr,
     head: outcome.head,
     baseRef: outcome.baseRef,
     mode: "full",
-    report: outcome.report,
-    selection: outcome.selection,
-    files: outcome.files,
+    report: outcome.partial === "budget-estimate" ? undefined : outcome.report,
+    selection: outcome.partial === "budget-estimate" ? undefined : outcome.selection,
+    files: outcome.partial === "budget-estimate" ? [] : outcome.files,
     skipped: outcome.skipped,
     banners: outcome.banners,
     notes: outcome.notes,
