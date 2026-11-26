@@ -83,6 +83,10 @@ In `owner-actions/hosted-ops.md`: lifecycle rules on `vector-media` for `ship-de
 Checks: read, and the R2 media token and the ops settings exist (A37, A47). Do not list `ship-desk` before A50's
 screens and its readiness check.
 
+## Local configuration validation
+
+Run `vector ship validate` from the directory containing `.vector/ship.json`. It reads the local file with the capture parser and reports the configured port, steps, route count and maximum image count. This is an offline configuration check. The hosted capture still uses the pull request's base commit and its own card and capture ticket.
+
 ## Not done
 
 - The `ship-desk` readiness check and the screens (A50); the desktop merge with the person's own sign-in (A50).
@@ -90,7 +94,6 @@ screens and its readiness check.
   with the marker make cards, and no card has a verdict. (21 Nov 2026: both are built, V31 in BT12 and the reader in
   BT11; the repository binding reader followed on `codium-api-fixes`. While the GitHub agent service is off no
   repository is bound, so no card is made.)
-- A local try-out mode for `.vector/ship.json` (`vector ship capture` needs a ticket and a card).
 - Nothing was pushed or deployed. `bun.lock` was not touched.
 
 ## P7 review fixes (5 Nov 2026)
