@@ -3,6 +3,7 @@ import { randomBytes, randomInt, randomUUID } from "node:crypto"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { mintCliToken } from "../../../api/_lib/cli-token"
 import { mintRunToken } from "../../../api/_lib/cloud-agents-run-token"
+import { createRunBodyVisibility } from "../../../api/_lib/everywhere/adapters/cloud-agents"
 import { ENV_NAMES, platformOn, readConfig } from "../../../api/_lib/everywhere/config"
 import {
   READ_BODY_ONCE_SCRIPT,
@@ -27,7 +28,9 @@ import type { SwitchState } from "../../../api/_lib/everywhere/switch"
 import { ApiError } from "../../../api/_lib/http"
 import route, { config, createJobBodyRoute, type BodyRouteDeps } from "../../../api/everywhere/jobs/[jid]/body"
 import { TIMING, createJobId, decodeActionsJobBody, type PlatformId } from "../../../packages/schema/src/everywhere"
+import { githubAppFixture } from "./github-app-fixture"
 import { RouteHarness, everywhereEnv } from "./lib/everywhere-account"
+import { bindingFields, bindingStore } from "./lib/everywhere-cloud-agents"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { seedJobAuthority } from "./lib/everywhere-job-authority"
 import {
@@ -244,6 +247,7 @@ function deps(extra: Partial<BodyRouteDeps> = {}): BodyRouteDeps {
     fetcher: fake.fetch,
     now: () => fake.clock.now,
     switches: async (name) => (name === "everywhere" ? everywhere : undefined),
+    visibility: async () => "private",
     runTokens: {
       store: liveStore,
       revokedBefore: async () => undefined,
@@ -705,6 +709,103 @@ describe("the body route", () => {
     }
   })
 
+  test("a formerly private job cannot be read until the repository is confirmed live private", async () => {
+    const job = await running()
+    const token = runToken(ALICE, job.rid)
+    const refused: readonly NonNullable<BodyRouteDeps["visibility"]>[] = [
+      async () => "public",
+      async () => "internal",
+      async () => undefined,
+      async () => {
+        throw new Error("Visibility unavailable")
+      },
+    ]
+    for (const visibility of refused) {
+      const mark = fake.commands.length
+      const answer = await read(job.jid, token, { deps: { visibility } })
+      expect([answer.status, answer.body]).toEqual([404, NOT_FOUND])
+      expect(answer.text).not.toContain(TASK)
+      expect(answer.text).not.toContain(CONTEXT_TEXT)
+      expect(scripted(since(mark))).toEqual([])
+      expect(fake.read(marker(job))).toBeUndefined()
+    }
+    expect((await read(job.jid, token)).status).toBe(200)
+    expect((await read(job.jid, token)).status).toBe(410)
+  })
+
+  test("the body reads live GitHub App metadata for the signed account, repository and binding generation", async () => {
+    await using fixture = await githubAppFixture()
+    const { repositoryId, app, state } = fixture
+    const repository = { id: Number(repositoryId), fullName: "fixture-owner/project", shared: false }
+    const job = await running(slackJob({ repository }), runId(repository.id))
+    const token = runToken(ALICE, job.rid)
+    let fields = bindingFields({ repositoryId, account: ALICE })
+    const binding = bindingStore(() => fields)
+    const options = { deps: { visibility: createRunBodyVisibility({ store: binding.store, app }) } }
+    const expectRefused = async () => {
+      const mark = fake.commands.length
+      const answer = await read(job.jid, token, options)
+      expect([answer.status, answer.body]).toEqual([404, NOT_FOUND])
+      expect(scripted(since(mark))).toEqual([])
+      expect(fake.read(marker(job))).toBeUndefined()
+    }
+
+    state.repository.private = true
+    state.repository.visibility = "private"
+    for (const [field, value] of [
+      ["account", BOB],
+      ["generation", "2"],
+      ["repository", "fixture-owner/other"],
+    ] as const) {
+      fields = bindingFields({ repositoryId, account: ALICE, with: { [field]: value } })
+      await expectRefused()
+    }
+    expect(state.requests).toEqual([])
+    fields = bindingFields({ repositoryId, account: ALICE })
+    for (const [privateRepository, visibility] of [
+      [false, "public"],
+      [true, "internal"],
+      [true, undefined],
+      [true, "unknown"],
+      [true, "public"],
+      [false, "private"],
+    ] as const) {
+      state.repository.private = privateRepository
+      state.repository.visibility = visibility
+      await expectRefused()
+    }
+
+    state.repository.private = true
+    state.repository.visibility = "private"
+    state.enabled = false
+    await expectRefused()
+    state.enabled = true
+    const answer = await read(job.jid, token, options)
+    expect([answer.status, answer.body?.task]).toEqual([200, TASK])
+    expect(fake.read(marker(job))).toBeDefined()
+    expect(state.minted).toHaveLength(7)
+    for (const mint of state.minted) {
+      expect(mint.body.permissions).toEqual({ metadata: "read" })
+      expect(mint.body.repository_ids).toEqual([repository.id])
+    }
+    expect(fixture.tokens.size).toBe(0)
+  })
+
+  test("a live visibility check cannot extend a run past its deadline", async () => {
+    const job = await running()
+    const deadline = fake.clock.now + MINUTE
+    const answer = await read(job.jid, runToken(ALICE, job.rid, { dl: deadline }), {
+      deps: {
+        visibility: async () => {
+          fake.clock.now = deadline
+          return "private"
+        },
+      },
+    })
+    expect([answer.status, answer.body]).toEqual([404, NOT_FOUND])
+    expect(fake.read(marker(job))).toBeUndefined()
+  })
+
   test("B9: a body that is gone, or whose end the server's own clock has reached, gives 410 and sets no marker", async () => {
     const deleted = await running()
     fake.send(["DEL", everywhereKeys.jobBody(deleted.jid)])
@@ -940,7 +1041,14 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
     const job = await realRunning()
     const real = testEverywhereStore(redis.fetch)
     const gate = barrier(real, everywhereKeys.job(job.jid), 12)
-    const input = { jid: job.jid, account: job.sponsor, rid: job.rid, repository: String(REPOSITORY), platformOn: on }
+    const input = {
+      jid: job.jid,
+      account: job.sponsor,
+      rid: job.rid,
+      repository: String(REPOSITORY),
+      platformOn: on,
+      isPrivate: async () => true,
+    }
     const verdicts = await Promise.all(
       Array.from({ length: 12 }, () => readRunBody({ ...realCtx(), store: gate() }, input)),
     )
@@ -982,7 +1090,14 @@ describe.skipIf(!process.env.VECTOR_TEST_REDIS_URL)("against a real Redis", () =
     const job = await realRunning()
     const real = testEverywhereStore(redis.fetch)
     expect(Number(await real(["DEL", everywhereKeys.jobBody(job.jid)]))).toBe(1)
-    const input = { jid: job.jid, account: job.sponsor, rid: job.rid, repository: String(REPOSITORY), platformOn: on }
+    const input = {
+      jid: job.jid,
+      account: job.sponsor,
+      rid: job.rid,
+      repository: String(REPOSITORY),
+      platformOn: on,
+      isPrivate: async () => true,
+    }
     expect(await readRunBody(realCtx(), input)).toEqual({ ok: false, status: 410, code: "EVERYWHERE_BODY_GONE" })
     expect(Number(await real(["EXISTS", marker(job)]))).toBe(0)
   })

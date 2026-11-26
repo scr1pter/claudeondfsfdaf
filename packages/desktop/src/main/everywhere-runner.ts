@@ -35,19 +35,31 @@ const PendingAnswer = Schema.fromJsonString(Schema.Struct({
   offers: Schema.optional(Schema.Array(Schema.Unknown)),
   waiting: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }))
+const decodeSettlement = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ settled: Schema.Literal(true) })),
+  { onExcessProperty: "error" },
+)
+const decodeEnded = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ code: Schema.Literal("JOB_ENDED") }) })),
+)
+const SETTLE_ANSWER_BYTES = 4_096
+class SettlementEnded extends Error {}
 
 export function createEverywhereJobsClient(input: { readonly token: () => Promise<string>; readonly device: string; readonly fetcher?: typeof fetch; readonly url?: string }): JobsClient {
   const origin = new URL(input.url ?? "https://vectordev.ai")
   if (!(origin.origin === "https://vectordev.ai" || (origin.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname))) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Invalid Everywhere service")
-  const call = async (route: string, body: unknown) => {
+  const post = async (route: string, body: unknown) => {
     // Each request is the `everywhere` source: Vector Local decides and logs it first, and one it blocks rejects with
     // EgressGuard.EgressBlocked before anything is sent. With Vector Local off it goes to the fetcher unchanged (under
     // Bun, with a company's certificate authorities added: LocalCA).
-    const response = await Egress.fetch("everywhere", new URL(`/api/everywhere/jobs/${route}`, origin), {
+    return Egress.fetch("everywhere", new URL(`/api/everywhere/jobs/${route}`, origin), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
       headers: { authorization: `Bearer ${await input.token()}`, "x-vector-device": input.device, "content-type": "application/json" },
       body: JSON.stringify(body),
     }, input.fetcher)
+  }
+  const call = async (route: string, body: unknown) => {
+    const response = await post(route, body)
     if (!response.ok) throw new Error(response.status === 404 || response.status === 409 ? "Everywhere job stopped" : "Everywhere service unavailable")
     return await response.json() as Record<string, unknown>
   }
@@ -71,7 +83,14 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
     settle: async (result) => {
       const checked = decodeSettle(result)
       if (!checked.ok) throw new Error("Invalid Everywhere result")
-      await call("settle", checked.value)
+      const response = await post("settle", checked.value)
+      if (response.status === 200 || response.status === 409) {
+        const body = await responseText(response, SETTLE_ANSWER_BYTES)
+        if (response.status === 200 && Option.isSome(decodeSettlement(body))) return
+        // The settle route emits this code only after proving the sponsor, the device and the exact lease.
+        if (response.status === 409 && Option.isSome(decodeEnded(body))) throw new SettlementEnded()
+      } else await response.body?.cancel().catch(() => undefined)
+      throw new Error("Everywhere result was not acknowledged")
     },
     async pending(readiness) {
       // The same label, sign-in, device and ten-second bound as the POST routes; a GET with the booleans as `1` or `0`.
@@ -197,17 +216,33 @@ export function createEverywhereRunner(deps: RunnerDeps) {
   const active = new Map<string, AbortController>()
   const localAllowed = () => localAllows((deps.localPolicy ?? Egress.policy)())
 
+  function warn(message: string) {
+    if (!deps.log) return false
+    try {
+      deps.log(message)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async function deliver(result: Settle, journaled = false) {
     // JobsClient has a ten-second request bound. An acknowledgement loss must replay this
     // exact result, never substitute a contradictory terminal outcome.
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await deps.jobs.settle(result)
-        if (journaled) await deps.ledger.acknowledge(result).catch(() => deps.log?.("Vector everywhere could not clear an acknowledged publication receipt."))
+        if (journaled)
+          await deps.ledger.clearReceipt(result).catch(() => warn("Vector everywhere could not clear an acknowledged publication receipt."))
         return true
-      } catch { /* The same lease and payload are safe to retry. */ }
+      } catch (error) {
+        if (!(error instanceof SettlementEnded)) continue
+        if (journaled && warn("Vector everywhere could not report a publication because the job had ended."))
+          await deps.ledger.clearReceipt(result).catch(() => warn("Vector everywhere could not retire a publication receipt."))
+        return false
+      }
     }
-    deps.log?.("Vector everywhere could not acknowledge a job result.")
+    warn("Vector everywhere could not acknowledge a job result.")
     return false
   }
 
@@ -389,7 +424,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
           await deps.ledger.remember(uncertain)
           publication = uncertain
           if (controller.signal.aborted || now() >= deadline) {
-            await deps.ledger.acknowledge(uncertain)
+            await deps.ledger.clearReceipt(uncertain)
             publication = undefined
             outcome = "held"
           } else {
@@ -397,7 +432,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
             // already admitted. The git executor retains its own 60-second bound.
             const publishingGit = deps.git(project.directory, project.repository, new AbortController().signal)
             if (!await publishingGit.push(snapshot, placed.directory, branch)) {
-              await deps.ledger.acknowledge(uncertain)
+              await deps.ledger.clearReceipt(uncertain)
               publication = undefined
               outcome = "held"
             } else {

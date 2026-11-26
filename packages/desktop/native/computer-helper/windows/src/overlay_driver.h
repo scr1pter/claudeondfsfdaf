@@ -109,12 +109,16 @@ inline constexpr std::array<std::wstring_view, 2> overlay_driver_lookups{L"first
 enum class OverlayDriverUiaCall : uint8_t { root, hit };
 inline constexpr std::array<std::wstring_view, 2> overlay_driver_uia_calls{L"root", L"hit"};
 inline constexpr std::array<std::wstring_view, 2> overlay_driver_uia_actors{L"healthy", L"retired"};
+enum class OverlayDriverUiaRootAttempt : uint8_t { initial, replacement };
+inline constexpr std::array<std::wstring_view, 2> overlay_driver_uia_root_attempts{L"initial", L"replacement"};
 struct OverlayDriverUiaFailure {
   OverlayDriverLookup lookup{};
   OverlayDriverUiaCall call{};
   bool available = false;
   WindowsUiaExpiry expiry{};
   std::optional<int32_t> status;
+  // The first root may adopt a replacement before throwing. Other calls have no attempt label.
+  std::optional<OverlayDriverUiaRootAttempt> root_attempt{};
 };
 struct OverlayDriverResult {
   bool ok = false, skipped = false;
