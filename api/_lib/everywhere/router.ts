@@ -3,7 +3,7 @@ import { decideRoute, type CapCounts, type RouteDecision, type RouteInput } from
 import { createJobEvents } from "./events.js"
 import { dispatchJob, offerJob, queueJob, readComputer, readJob, refuseJob, type JobRecord, type JobsContext } from "./jobs.js"
 import type { PlatformAdapter, JobView } from "./platform.js"
-import type { Ports } from "./ports.js"
+import type { Ports, Repository } from "./ports.js"
 
 export type Routing = {
   readonly context: () => JobsContext
@@ -15,29 +15,30 @@ export type Routing = {
 }
 
 /** Facts use the pre-admission counters. An accepted job must never count itself against its own route. */
-export async function routeFacts(input: {
+export async function routeFacts<Repo extends Pick<Repository, "id" | "fullName">>(input: {
   readonly ctx: JobsContext
   readonly ports: Ports
   readonly trigger: InboundTrigger
   readonly sponsor: string
-  readonly repository?: { readonly id: number; readonly fullName: string }
+  readonly repository?: Repo
+  readonly resolveRepository?: () => Promise<Repo | undefined>
   readonly counts: CapCounts
   readonly receivedAt: number
   readonly github?: { readonly actorId: number; readonly binderId: number }
-}): Promise<RouteInput & { readonly computers: number }> {
-  const [everywhere, remote, inPlan, remotePerk, presence, computer] = await Promise.all([
-    input.ports.switch("everywhere"), input.ports.switch("remote"),
-    input.ports.perk(input.sponsor, "everywhere"), input.ports.perk(input.sponsor, "remote"),
-    input.ports.presence(input.sponsor).catch(() => ({ online: false, computers: 0, reason: "unreachable" as const })),
+}): Promise<RouteInput & { readonly computers: number; readonly repository?: Repo }> {
+  const readGates = () => Promise.all([
+    input.ports.switch("everywhere"),
+    input.ports.switch("remote"),
+    input.ports.perk(input.sponsor, "everywhere"),
+    input.ports.perk(input.sponsor, "remote"),
+  ])
+  const [gates, presence, computer] = await Promise.all([
+    readGates(),
+    input.ports.presence(input.sponsor).catch(() => ({ online: false, computers: 0, reason: "not-configured" as const })),
     readComputer(input.ctx.store, input.sponsor),
   ])
-  // A platform that is not an enabled run source has no Actions route, so nothing is read for it (R-C8/R-A8).
-  const sourceEnabled = input.trigger.platform !== "github" && input.ports.cloudSource?.(input.trigger.platform) === true
-  const binding = input.repository && input.ports.prepareCloud && sourceEnabled
-    ? await input.ports.binding(input.repository.id).catch(() => undefined) : undefined
-  const visibility = binding && input.repository && input.ports.visibility
-    ? await input.ports.visibility(input.repository.id).catch(() => undefined) : undefined
-  return {
+  const [everywhere, remote, inPlan, remotePerk] = gates
+  const facts = {
     platform: input.trigger.platform,
     switches: { everywhere, remote, platform: true },
     requester: { ...input.trigger.actor, account: input.sponsor },
@@ -47,19 +48,40 @@ export async function routeFacts(input: {
     repository: input.repository,
     github: input.github,
     laptop: {
-      configured: presence.reason !== "not-configured" && presence.reason !== "unreachable",
+      // The production adapter reports an unreachable relay only after checking Remote setup and entitlement.
+      configured: presence.reason !== "not-configured",
       perk: remotePerk,
       online: presence.online && Number.isSafeInteger(presence.computers) && presence.computers > 0,
       lastSeen: computer.lastSeen,
       waitForComputer: computer.readiness?.waitForComputer !== false,
     },
     computers: Number.isSafeInteger(presence.computers) ? Math.max(0, presence.computers) : 0,
+    receivedAt: input.receivedAt,
+    now: input.ctx.now,
+  } satisfies RouteInput & { readonly computers: number }
+  // Repository proof uses the sponsor's binding only after switch, identity, perk and cap checks pass.
+  const lookup = input.resolveRepository
+  const attempted = lookup !== undefined && decideRoute(facts).action === "ask-repository"
+  const repository = attempted ? await lookup() : input.repository
+  // A switch or entitlement can change during a live repository lookup.
+  const current = attempted ? await readGates() : gates
+  const [currentEverywhere, currentRemote, currentPlan, currentRemotePerk] = current
+  // A platform that is not an enabled run source has no Actions route, so nothing is read for it (R-C8/R-A8).
+  const sourceEnabled = input.trigger.platform !== "github" && input.ports.cloudSource?.(input.trigger.platform) === true
+  const binding = repository && input.ports.prepareCloud && sourceEnabled
+    ? await input.ports.binding(repository.id).catch(() => undefined) : undefined
+  const visibility = binding && repository && input.ports.visibility
+    ? await input.ports.visibility(repository.id).catch(() => undefined) : undefined
+  return {
+    ...facts,
+    switches: { ...facts.switches, everywhere: currentEverywhere, remote: currentRemote },
+    inPlan: currentPlan,
+    laptop: { ...facts.laptop, perk: currentRemotePerk },
+    repository,
     actions: input.ports.prepareCloud ? {
       sourceEnabled, bodyByReference: true, modeRecorded: true,
       binding, visibility,
     } : undefined,
-    receivedAt: input.receivedAt,
-    now: input.ctx.now,
   }
 }
 

@@ -148,8 +148,11 @@ const phase = Effect.fn("AgentCodiumTest.phase")(function* (input: Omit<AgentPha
 })
 
 /** A Codium test's repository, with the gateway in front of this instance's fake model server. */
-const start = Effect.fn("AgentCodiumTest.start")(function* (mode: "codium" | "own-key" = "codium") {
-  const test = yield* setup()
+const start = Effect.fn("AgentCodiumTest.start")(function* (
+  mode: "codium" | "own-key" = "codium",
+  config?: Parameters<typeof setup>[0],
+) {
+  const test = yield* setup(config)
   yield* Effect.promise(() => commitSetup(test.dir))
   codium.reset({ codium: mode === "codium", target: test.llm.url })
   return test
@@ -3036,6 +3039,7 @@ describe("the Brain context (B08, BT07a)", () => {
       time?: ReturnType<typeof fakeClock>
       calls?: [string, Record<string, unknown>][]
       text?: string
+      resultTitle?: string
       session?: Partial<SessionSave>
       share?: PublicSessionShare.Interface
       artifacts?: FakeArtifact[]
@@ -3056,6 +3060,7 @@ describe("the Brain context (B08, BT07a)", () => {
     })
     yield* test.llm.tool("write", writeNotes(test.dir))
     yield* test.llm.text(input.text ?? "Wrote the notes.")
+    if (input.resultTitle) yield* test.llm.text(input.resultTitle)
     const github = fakeGithub({
       roles: { alice: "write" },
       threads: [
@@ -3150,7 +3155,7 @@ describe("the Brain context (B08, BT07a)", () => {
     "a desktop Brain run gives its first model request the approved context once, as labelled untrusted data, with the rule only in the system instructions, and saves its conversation only under the Brain key",
     () =>
       Effect.gen(function* () {
-        const test = yield* start()
+        const test = yield* start("codium", { agent: { title: { model: `vector-plan/${CODIUM_MODEL.id}` } } })
         const packed = yield* Effect.promise(() => pack())
         const download = yield* Effect.promise(() => brainUploaded(packed.bytes))
         const row = yield* brainRun(test, { answer: () => Response.json(download) })
@@ -3183,6 +3188,9 @@ describe("the Brain context (B08, BT07a)", () => {
         const whole = JSON.stringify(row.first)
         for (const marker of MARKERS)
           expect({ marker, count: whole.split(marker).length - 1 }).toEqual({ marker, count: 1 })
+        const titleRequests = row.bodies.filter(isTitle)
+        expect(titleRequests).toHaveLength(1)
+        expect(MARKERS.filter((marker) => textIn(titleRequests[0], false).includes(marker))).toEqual([])
         for (const body of row.bodies)
           expect(MARKERS.filter((marker) => textIn(body, true).includes(marker))).toEqual([])
         // The untrusted-data rule stays in the system layer, never in the user turn (INV-S14).
@@ -3355,6 +3363,102 @@ describe("the Brain context (B08, BT07a)", () => {
     { git: true },
     120_000,
   )
+
+  it.instance(
+    "public Brain runs withhold matching reply, title and tool detail while preserving ordinary results",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* start()
+        const marker = "LoomgateBatchExport"
+        const context = `Quartz reconciliation requires a dedicated ledger review for ${marker}.`
+        const packed = yield* Effect.promise(() =>
+          pack({ publicRepository: true, entries: [{ ...lesson, text: context }] }),
+        )
+        for (const scenario of [
+          { name: "event says public", eventPublic: true, serverPublic: false, matching: true },
+          { name: "server says public", eventPublic: false, serverPublic: true, matching: true },
+          { name: "both say private", eventPublic: false, serverPublic: false, matching: true },
+          { name: "public run has an ordinary reply", eventPublic: true, serverPublic: true, matching: false },
+        ]) {
+          const download = yield* Effect.promise(() =>
+            brainUploaded(packed.bytes, { publicRepository: scenario.serverPublic }),
+          )
+          const text = scenario.matching ? context : "Wrote the notes."
+          const title = scenario.matching ? marker : "Update notes"
+          const row = yield* brainRun(test, {
+            answer: () => Response.json(download),
+            ticket: { repository: { private: !scenario.eventPublic } },
+            ...(scenario.matching ? { calls: [["grep", { pattern: marker }]] } : {}),
+            text,
+            resultTitle: title,
+          })
+          expect({ name: scenario.name, request: textIn(row.first, false) }).toEqual({
+            name: scenario.name,
+            request: expect.stringContaining(context),
+          })
+          expect(row.run.result).toMatchObject({ outcome: "changes" })
+          const { summary } = yield* Effect.promise(() => bundleOf(test.dir))
+          if (!summary) throw new Error("The run did not write a valid summary.")
+          const log = row.run.lines.join("\n")
+          const withheld = (scenario.eventPublic || scenario.serverPublic) && scenario.matching
+          if (withheld) {
+            expect({
+              name: scenario.name,
+              leaked: [log, summary.title, summary.body, summary.comment].some((part) => part.includes(marker)),
+            }).toEqual({
+              name: scenario.name,
+              leaked: false,
+            })
+            expect(summary.title).toBe("Changes from Vector")
+            expect(summary.comment).toBe("Vector left out output that repeats the approved Brain context.")
+            expect(log).toContain(summary.comment)
+            continue
+          }
+          expect(summary.title).toBe(title)
+          expect(summary.body).toContain(text)
+          expect(summary.comment).toBe(text)
+          expect(log).toContain(text)
+        }
+        expect(guard.outside()).toEqual([])
+      }),
+    { git: true },
+  )
+
+  const entryPath = "src/EchoBundleMetadata.ts"
+  for (const { name, copied, entries } of [
+    { name: "an entry path", copied: entryPath, entries: [{ ...lesson, paths: [entryPath] }] },
+    { name: "an insight-only attachment", copied: INSIGHT, entries: [] },
+  ]) {
+    it.instance(
+      `public Brain output screening covers ${name}`,
+      () =>
+        Effect.gen(function* () {
+          const test = yield* start()
+          const bundle = yield* Effect.promise(() => pack({ publicRepository: true, entries }))
+          const download = yield* Effect.promise(() => brainUploaded(bundle.bytes, { publicRepository: true }))
+          const row = yield* brainRun(test, {
+            answer: () => Response.json(download),
+            ticket: { repository: { private: false } },
+            text: `The approved detail is ${copied}.`,
+            resultTitle: copied,
+          })
+          const input = textIn(row.first, false)
+          expect(input).toContain(OPEN_TAG)
+          const literal = input.slice(input.indexOf(OPEN_TAG) + OPEN_TAG.length, input.indexOf("\n</brain_context>"))
+          const received = JSON.parse(JSON.parse(literal) as string) as { memory: unknown[] }
+          expect(received.memory).toHaveLength(entries.length)
+          expect(input).toContain(copied)
+          expect(row.run.result).toMatchObject({ outcome: "changes" })
+          const { summary } = yield* Effect.promise(() => bundleOf(test.dir))
+          if (!summary) throw new Error("The run did not write a valid summary.")
+          for (const output of [row.run.lines.join("\n"), summary.title, summary.body, summary.comment])
+            expect(output).not.toContain(copied)
+          expect(summary.comment).toBe("Vector left out output that repeats the approved Brain context.")
+          expect(guard.outside()).toEqual([])
+        }),
+      { git: true },
+    )
+  }
 
   it.instance(
     "no other event, mode or upload id makes a Brain read, nor a stop before it, and a ticket dispatch without a repository id asks nothing",

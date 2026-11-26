@@ -323,10 +323,10 @@ size_t run_overlay_driver_tests() {
     // The closed uia object rides beside stage and cause only, and never changes ok, skip, reason or exit.
     const auto stage = overlay_driver_uia_stage(WindowsUiaPhase::root_element);
     require(stage.has_value(), "overlay-driver.root-element-has-a-stage");
-    struct Case { OverlayDriverUiaFailure failure; const wchar_t* lookup; const wchar_t* call; const wchar_t* actor; const wchar_t* expiry; const wchar_t* hresult; };
+    struct Case { OverlayDriverUiaFailure failure; const wchar_t* lookup; const wchar_t* call; const wchar_t* actor; const wchar_t* expiry; const wchar_t* hresult; const wchar_t* root_attempt = nullptr; };
     const std::vector<Case> cases{
-      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::worker_current, {}}, L"first", L"root", L"retired", L"worker-current", L"unobserved"},
-      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}}, L"first", L"root", L"retired", L"caller-wait", L"unobserved"},
+      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::worker_current, {}, OverlayDriverUiaRootAttempt::initial}, L"first", L"root", L"retired", L"worker-current", L"unobserved", L"initial"},
+      {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}, OverlayDriverUiaRootAttempt::replacement}, L"first", L"root", L"retired", L"caller-wait", L"unobserved", L"replacement"},
       {{OverlayDriverLookup::refresh, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, static_cast<int32_t>(UIA_E_TIMEOUT)}, L"refresh", L"root", L"retired", L"caller-wait", L"timeout"},
       {{OverlayDriverLookup::refresh, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::worker_budget, {}}, L"refresh", L"root", L"retired", L"worker-budget", L"unobserved"},
       {{OverlayDriverLookup::first, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::none, static_cast<int32_t>(E_ACCESSDENIED)}, L"first", L"root", L"healthy", L"none", L"access_denied"},
@@ -342,7 +342,12 @@ size_t run_overlay_driver_tests() {
         const auto wire = result.wire(); const auto document = winrt::to_string(wire.Stringify());
         require(wire.Size() == 8 && wire.HasKey(L"uia"), "overlay-driver.uia-detail-reaches-the-result-frame");
         const auto detail = wire.GetNamedObject(L"uia");
-        require(wire_keys(detail) == std::set<std::wstring>{L"lookup", L"call", L"actor", L"expiry", L"hresult"} && named(detail, L"lookup") == item.lookup && named(detail, L"call") == item.call && named(detail, L"actor") == item.actor && named(detail, L"expiry") == item.expiry && named(detail, L"hresult") == item.hresult, "overlay-driver.uia-detail-is-closed");
+        std::set<std::wstring> fields{L"lookup", L"call", L"actor", L"expiry", L"hresult"};
+        if (item.root_attempt) {
+          fields.insert(L"rootAttempt");
+          require(named(detail, L"rootAttempt") == item.root_attempt, "overlay-driver.uia-detail-names-the-first-root-attempt");
+        }
+        require(wire_keys(detail) == fields && named(detail, L"lookup") == item.lookup && named(detail, L"call") == item.call && named(detail, L"actor") == item.actor && named(detail, L"expiry") == item.expiry && named(detail, L"hresult") == item.hresult, "overlay-driver.uia-detail-is-closed");
         for (const auto banned : {"PRIVATE", "0x", "8007", "-2147"}) require(document.find(banned) == std::string::npos, "overlay-driver.uia-detail-carries-no-hresult-value");
       }
     }
@@ -350,7 +355,10 @@ size_t run_overlay_driver_tests() {
     for (const auto& failure : {OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::caller_wait, {}},
            OverlayDriverUiaFailure{static_cast<OverlayDriverLookup>(2), OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}},
            OverlayDriverUiaFailure{OverlayDriverLookup::first, static_cast<OverlayDriverUiaCall>(2), false, WindowsUiaExpiry::caller_wait, {}},
-           OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, static_cast<WindowsUiaExpiry>(windows_uia_expiries.size()), {}}}) {
+           OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, static_cast<WindowsUiaExpiry>(windows_uia_expiries.size()), {}},
+           OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}, static_cast<OverlayDriverUiaRootAttempt>(2)},
+           OverlayDriverUiaFailure{OverlayDriverLookup::refresh, OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}, OverlayDriverUiaRootAttempt::initial},
+           OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::hit, false, WindowsUiaExpiry::caller_wait, {}, OverlayDriverUiaRootAttempt::replacement}}) {
       const OverlayDriverResult value{false, false, L"native_failure", L"uia-root-element", L"core_failure:no_ui_tree", failure}; const auto wire = value.wire();
       require(value.exit_code() == 1 && wire.Size() == 7 && !wire.HasKey(L"uia") && named(wire, L"stage") == L"uia-root-element", "overlay-driver.incoherent-uia-detail-is-dropped");
     }

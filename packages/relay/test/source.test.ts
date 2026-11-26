@@ -79,6 +79,7 @@ describe("wrangler.jsonc", () => {
     expect(value.durable_objects.bindings).toEqual([{ name: "ACCOUNT_RELAY", class_name: "AccountRelay" }])
     expect(value.migrations).toEqual([{ tag: "v1", new_sqlite_classes: ["AccountRelay"] }])
     expect(value.kv_namespaces.map((entry: { binding: string }) => entry.binding)).toEqual(["REMOTE_FLAGS"])
+    expect(value.observability).toEqual({ enabled: false })
   })
 
   test("holds no secret: the keys are set with wrangler secret put", async () => {
