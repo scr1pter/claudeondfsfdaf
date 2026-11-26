@@ -131,18 +131,19 @@ describe("independent overlay source admission", () => {
     const header = await readFile(path.join(native, "uia_native.h"), "utf8")
     const implementation = await readFile(path.join(native, "uia_native.cpp"), "utf8")
     const driver = await readFile(path.join(native, "overlay_driver.cpp"), "utf8")
-    expect(header).toContain("system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic = {})")
+    expect(header).toContain("system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic = {},")
+    expect(header).toContain("WindowsUiaDeadline root_deadline = WindowsUiaDeadline::max()")
     expect(header).toContain("std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none}")
     expect(header).toContain("std::atomic<WindowsUiaPhase>::is_always_lock_free")
     expect(header.match(/friend class NativeUia;/g)).toHaveLength(1)
     expect(header.match(/enum class WindowsUiaPhase/g)).toHaveLength(1)
     expect(implementation).toContain("std::shared_ptr<WindowsUiaDiagnostic> diagnostic;")
     expect(implementation).toContain("actor->diagnostic = std::move(diagnostic)")
-    expect(implementation).toContain("[self = shared_from_this(), promise, ticket, body = std::move(body)]")
+    expect(implementation).toContain("[self = shared_from_this(), promise, ticket, outer_deadline, body = std::move(body)]")
     expect(implementation).toContain("state->phase.store(phase, std::memory_order_relaxed)")
     expect(implementation).not.toMatch(/WindowsUiaDiagnostic\s*[*&]/)
     expect(driver).toContain("std::make_shared<WindowsUiaDiagnostic>()")
-    expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic)")
+    expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic, life->deadline)")
     expect(header).toContain("std::atomic<uint64_t> timeout_observation{0}")
     expect(header).toContain("std::atomic<uint64_t>::is_always_lock_free")
     expect(header).toContain("uint64_t{1} + static_cast<uint64_t>(phase.load(std::memory_order_relaxed))")
@@ -203,7 +204,7 @@ describe("independent overlay source admission", () => {
     expect(timeout).toContain("(void)CoCancelCall(thread, 0); unavailable();")
     expect(implementation).toContain("ticket->deadline = now_ms() + 50")
     const rootFailure = driver.slice(
-      driver.indexOf("try { root = uia.root(window); }"),
+      driver.indexOf("try { root = first_root ? first_root() : uia.root(window); }"),
       driver.indexOf("stage = OverlayDriverStage::stop_hit;"),
     )
     expect(rootFailure.match(/uia\.available\(\)/g)).toHaveLength(1)
@@ -213,11 +214,12 @@ describe("independent overlay source admission", () => {
       "failure = OverlayDriverUiaFailure{lookup, OverlayDriverUiaCall::root, available, diagnostic->failure_expiry(available), diagnostic->failure_status(available)};",
     )
     expect(driver).toContain(
-      "observe_stop(uia, window, *request, stage, uia_diagnostic, OverlayDriverLookup::first, uia_failure)",
+      "observe_stop(uia, window, *request, stage, uia_diagnostic, OverlayDriverLookup::first, uia_failure, first_root)",
     )
     expect(driver).toContain(
       "observe_stop(uia, window, request, stage, diagnostic, OverlayDriverLookup::refresh, failure)",
     )
+    expect(driver).toContain("observe_first_uia_root(uia, uia_diagnostic, window, life->deadline,")
     expect(driver).toContain("overlay_driver_caught(options.mode, stage, std::current_exception(), uia_failure)")
     const hitFailure = driver.slice(
       driver.indexOf(

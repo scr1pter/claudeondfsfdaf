@@ -92,6 +92,7 @@ import {
   type RuntimeModelRefusal,
 } from "@/features/agents/external-runtime-models"
 import { PullRequests } from "@/features/pull-requests/pull-requests"
+import { localFixesMounted } from "@/features/vectorscope/local-fix-slot"
 import {
   isInternalProjectPath,
   isManagedAgentWorkspacePath,
@@ -161,6 +162,9 @@ type ParallelAgentRuntime = AgentRuntime
 
 const LocalReviewPanel = lazy(() =>
   import("@/features/vectorscope/local-review-panel").then((module) => ({ default: module.LocalReviewPanel })),
+)
+const LocalFixPanel = lazy(() =>
+  import("@/features/vectorscope/local-fix-panel").then((module) => ({ default: module.LocalFixPanel })),
 )
 const ReviewMemoryConnectedPanel = lazy(() =>
   import("@/features/vectorscope/review-memory-connected-panel").then((module) => ({
@@ -6958,6 +6962,28 @@ export default function NewLayout(props: ParentProps) {
                   >
                     <ReviewMemoryConnectedPanel directory={activeWorkspaceScope().sourcePath} />
                   </Show>
+                </Suspense>
+              )
+            : undefined
+        }
+        localFix={
+          localFixesMounted(serverSync().capabilities().vectorscopeLocalFixes, serverSync().globalConfig())
+            ? (input) => (
+                <Suspense
+                  fallback={
+                    <p role="status" class="p-4">
+                      Loading local fixes…
+                    </p>
+                  }
+                >
+                  <LocalFixPanel
+                    outcome={input.outcome()}
+                    pr={input.pr()}
+                    dismissed={input.dismissed()}
+                    applied={input.applied()}
+                    parentID={activeWorkspaceScope().parentSessionId}
+                    directory={activeWorkspaceScope().sourcePath}
+                  />
                 </Suspense>
               )
             : undefined

@@ -1,22 +1,32 @@
 // Browser-safe decoding of the engine's retained result. This validates the
 // shared runner's selection; it never selects findings or grants execution.
 import { Option, Schema } from "effect"
+import { LABS } from "../model-lab"
 import { ReviewRun } from "@vectordevai/schema/review-run"
 import { NonNegativeInt, optional, PositiveInt } from "@vectordevai/schema/schema"
 import { hash } from "../util/encode"
+import { OFFLINE_DIAGNOSTIC_RULES, type DiagnosticRule } from "./diagnostic"
+import { BUDGET_REQUEST_CHANGED, strictFindingBody } from "./format"
+import { withAlso } from "./select"
+import { MAX_FINDING_QUOTES, MAX_TRACE_QUOTES } from "./schema"
 import {
   CATEGORIES,
   FAILURE_CLASSES,
   FAILURE_MECHANISMS,
   FINDING_SCOPES,
+  HOLDBACK_REASONS,
   REVIEW_LENSES,
   SEVERITIES,
+  SKIPPED_FILE_REASONS,
   STRICT_DROPS,
   STRICT_FIX_KINDS,
   VERIFIED_BY,
+  type Finding,
+  type ReviewConfig,
   type ReviewOutcome,
+  type StrictFinding,
 } from "./types"
-import { REVIEW_VERDICTS, reviewVerdict, type VerdictResult } from "./verdict"
+import { REVIEW_VERDICTS, reviewVerdict, unfinishedCauses, type VerdictResult } from "./verdict"
 
 const text = Schema.String.check(Schema.isMaxLength(ReviewRun.RESULT_BYTES))
 const amount = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
@@ -26,8 +36,19 @@ const risk = Schema.Literals(["low", "medium", "high"])
 const kind = Schema.Literals(["free", "priced", "plan", "local", "unknown", "codium"])
 const pass = Schema.Literals(["review", "security", "verify", "judge", "lens", "repro"])
 const many = <S extends Schema.Top>(schema: S) =>
-  Schema.mutable(Schema.Array(schema).check(Schema.isMaxLength(100_000)))
+  Schema.mutable(Schema.Array(schema)).check(Schema.isMaxLength(100_000))
+const strictDrops = many(Schema.Struct({ reason: Schema.Literals(STRICT_DROPS), count: NonNegativeInt }))
 const quote = Schema.Struct({ path: text, line: PositiveInt, side, code: text })
+const rulesSource = Schema.Literals(["base branch", "working tree"])
+const ruleCitation = Schema.Struct({
+  source: Schema.Union([
+    Schema.Struct({ kind: Schema.Literal("repository_instructions") }),
+    Schema.Struct({ kind: Schema.Literal("review_rules") }),
+    Schema.Struct({ kind: Schema.Literal("paths"), index: NonNegativeInt }),
+  ]),
+  quote: text,
+  lines: optional(Schema.Struct({ start: PositiveInt, end: PositiveInt })),
+})
 const findingFields = {
   path: text,
   line: PositiveInt,
@@ -41,6 +62,8 @@ const findingFields = {
   confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
   evidence: optional(many(text)),
   rule: optional(text),
+  citation: optional(ruleCitation),
+  rulesSource: optional(rulesSource),
   duplicateOf: optional(text),
   failure: optional(
     Schema.Struct({
@@ -55,11 +78,22 @@ const findingFields = {
   severityUnreadable: optional(Schema.Boolean),
   scope: optional(Schema.Literals(FINDING_SCOPES)),
 }
+// A normalized Finding's offline-diagnostic provenance (Finding.diagnostics, set by withDiagnosticEvidence): data only,
+// never a confirmation. Exactly the versioned rules, so an unknown rule or an extra key still refuses the result.
+const diagnostics = optional(
+  many(
+    Schema.Struct({
+      source: Schema.Literal("offline-v1"),
+      rule: Schema.Literals(Object.keys(OFFLINE_DIAGNOSTIC_RULES) as [DiagnosticRule, ...DiagnosticRule[]]),
+    }),
+  ),
+)
 const finding = {
   ...findingFields,
   id: text,
   side,
   source: Schema.Literals(["review", "security"]),
+  diagnostics,
   verified: optional(Schema.Boolean),
   verifiedBy: optional(Schema.Literals(VERIFIED_BY)),
   also: optional(many(text)),
@@ -82,6 +116,10 @@ const prior = Schema.Struct({
   also: optional(many(PositiveInt)),
 })
 const Outcome = Schema.Struct({
+  claimedAuthor: optional(
+    many(Schema.Struct({ source: Schema.Literals(["branch", "pr-body", "trailer"]), lab: Schema.Literals(LABS) })),
+  ),
+  trivial: optional(Schema.Literal(true)),
   report: Schema.Struct({
     summary: text,
     risk,
@@ -93,6 +131,7 @@ const Outcome = Schema.Struct({
         ...findingFields,
         id: optional(text),
         source: optional(Schema.Literals(["review", "security"])),
+        diagnostics,
         verified: optional(Schema.Boolean),
         verifiedBy: optional(Schema.Literals(VERIFIED_BY)),
         also: optional(many(text)),
@@ -101,6 +140,8 @@ const Outcome = Schema.Struct({
     priorStatus: optional(many(Schema.Struct({ id: text, status: Schema.Literals(["fixed", "open"]), reason: text }))),
   }),
   selection: Schema.Struct({
+    diffIncomplete: optional(Schema.Literal(true)),
+    strict: optional(Schema.Struct({ complete: Schema.Boolean, findingCount: NonNegativeInt, dropped: strictDrops })),
     inline: many(
       Schema.Struct({
         ...finding,
@@ -135,6 +176,7 @@ const Outcome = Schema.Struct({
           "duplicate",
           "dismissed",
           "rejected-by-verify",
+          "rule-unverified",
           "unconfirmed",
           "nit",
         ]),
@@ -146,22 +188,14 @@ const Outcome = Schema.Struct({
   skipped: many(
     Schema.Struct({
       path: text,
-      reason: Schema.Literals([
-        "ignored",
-        "lockfile",
-        "generated",
-        "vendored",
-        "build-output",
-        "binary",
-        "deleted",
-        "size-limit",
-      ]),
+      reason: Schema.Literals(SKIPPED_FILE_REASONS),
       additions: optional(NonNegativeInt),
     }),
   ),
   cost: optional(
     Schema.Struct({
       costUsd: amount,
+      labs: optional(Schema.Literals([2, 3])),
       codium: optional(Schema.Boolean),
       tokensOwnOnly: optional(Schema.Boolean),
       usageMissing: optional(Schema.Boolean),
@@ -232,11 +266,33 @@ const Outcome = Schema.Struct({
           fix: Schema.Struct({ kind: Schema.Literals(STRICT_FIX_KINDS), text }),
           verifiedBy: Schema.Literals(VERIFIED_BY),
           verifier: text,
+          linkedRule: optional(Schema.Struct({ source: text, quote: text, rulesSource })),
+          certificate: optional(
+            Schema.Struct({
+              trace: Schema.mutable(Schema.Array(quote)).check(
+                Schema.isMinLength(1),
+                Schema.isMaxLength(MAX_TRACE_QUOTES),
+              ),
+              guards: Schema.mutable(Schema.Array(quote)).check(Schema.isMaxLength(MAX_FINDING_QUOTES)),
+              reach: Schema.Literals(["caller-shown", "entry-point"]),
+            }),
+          ),
         }),
       ),
-      dropped: many(Schema.Struct({ reason: Schema.Literals(STRICT_DROPS), count: NonNegativeInt })),
+      dropped: strictDrops,
       fixUnchecked: NonNegativeInt,
     }),
+  ),
+  // VS-34 (SF-13b): the held-back files, so the recomputed verdict keeps a held deletion's note and completeness.
+  held: optional(
+    many(
+      Schema.Struct({
+        path: text,
+        oldPath: optional(text),
+        status: Schema.Literals(["added", "modified", "deleted", "renamed"]),
+        reason: Schema.Literals(HOLDBACK_REASONS),
+      }),
+    ),
   ),
 })
 
@@ -285,6 +341,102 @@ function sameVerdict(
   )
 }
 
+const strictLocation = (finding: Pick<Finding, "path" | "line" | "side" | "title">) =>
+  JSON.stringify([finding.path, finding.line, finding.side, finding.title])
+
+// The selected row has no verifier model name. Compare the evidence both records carry, including the
+// unchecked fix which postableStrict puts only in the body. Selection can append its own "also at" sentence.
+function sameStrictEvidence(finding: Finding, kept: StrictFinding) {
+  const citation = finding.citation
+  const linked = kept.linkedRule
+  if (linked || citation || finding.rulesSource || finding.rule) {
+    if (!linked || !citation) return false
+    const source = citation.source.kind === "paths" ? `paths[${citation.source.index}]` : citation.source.kind
+    if (
+      source === "scoped" ||
+      source !== linked.source ||
+      citation.quote !== linked.quote ||
+      finding.rule !== linked.quote ||
+      finding.rulesSource !== linked.rulesSource
+    )
+      return false
+  }
+  const body = strictFindingBody(kept)
+  return (
+    strictLocation(finding) === strictLocation(kept) &&
+    finding.endLine === kept.endLine &&
+    finding.severity === "blocking" &&
+    finding.verified === true &&
+    finding.verifiedBy === kept.verifiedBy &&
+    finding.failure?.class === kept.class &&
+    finding.failure.mechanism === kept.mechanism &&
+    finding.failure.trigger === kept.trigger &&
+    finding.failure.impact === kept.impact &&
+    JSON.stringify(finding.quotes) === JSON.stringify(kept.quotes) &&
+    finding.suggestion === (kept.fix.kind === "suggestion" ? kept.fix.text : undefined) &&
+    finding.patch === (kept.fix.kind === "patch" ? kept.fix.text : undefined) &&
+    finding.body === (finding.also?.length ? withAlso(body, finding.also) : body)
+  )
+}
+
+/** A branch cache may serve a completed strict result only for the head and coverage that produced it. */
+export function completeStrictReview(input: unknown, head: string, evidence?: ReviewConfig["verifyEvidence"]): boolean {
+  const decoded = Schema.decodeUnknownOption(Outcome, { onExcessProperty: "error" })(input)
+  if (Option.isNone(decoded)) return false
+  const outcome = decoded.value
+  const strict = outcome.strict
+  const summary = outcome.selection.strict
+  if (!strict || (evidence === "certificate" && strict.findings.some((finding) => !finding.certificate))) return false
+  const selected = [
+    ...outcome.selection.inline,
+    ...outcome.selection.outsideDiff,
+    ...outcome.selection.elsewhere,
+    ...outcome.selection.overflow,
+    ...outcome.selection.nits,
+  ]
+  const verified = new Map(strict.findings.map((finding) => [finding.id, finding]))
+  const locations = new Map(strict.findings.map((finding) => [strictLocation(finding), finding]))
+  const places = new Set(strict.findings.map((finding) => `${finding.path}:${finding.line}`))
+  // An inline finding that reappeared or rose to blocking takes its prior comment's ID in selectFindings.
+  // Its StrictFinding retains the verifier's original ID. No other selected row can use this substitution.
+  const continued = new Set([...outcome.selection.reappeared, ...outcome.selection.raised.map((row) => row.id)])
+  const used = new Set<string>()
+  const matches = selected.every((finding, index) => {
+    const inline = outcome.selection.inline[index]
+    const kept = inline && continued.has(finding.id) ? locations.get(strictLocation(finding)) : verified.get(finding.id)
+    if (!kept || used.has(kept.id) || !sameStrictEvidence(finding, kept)) return false
+    if (finding.also?.some((place) => !places.has(place) || place.slice(0, place.lastIndexOf(":")) !== finding.path))
+      return false
+    if (
+      inline &&
+      (inline.anchor.path !== kept.path ||
+        inline.anchor.side !== kept.side ||
+        inline.anchor.line < kept.line ||
+        inline.anchor.line > (kept.endLine ?? kept.line) ||
+        (inline.anchor.startLine !== undefined && inline.anchor.startLine !== kept.line) ||
+        (inline.suggestionAllowed && kept.fix.kind !== "suggestion"))
+    )
+      return false
+    used.add(kept.id)
+    return true
+  })
+  return (
+    outcome.head === head &&
+    strict.head === head &&
+    strict.complete &&
+    !strict.incomplete?.length &&
+    summary?.complete === true &&
+    summary.findingCount === strict.findings.length &&
+    verified.size === strict.findings.length &&
+    matches &&
+    JSON.stringify(summary.dropped) === JSON.stringify(strict.dropped) &&
+    strict.fixUnchecked === strict.findings.filter((finding) => finding.fix.kind === "unchecked").length &&
+    !outcome.selection.diffIncomplete &&
+    !outcome.trivial &&
+    !unfinishedCauses(outcome).length
+  )
+}
+
 /** Unknown fields/statuses are not silently discarded into a clean result. */
 export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["target"]): LocalResult | undefined {
   const decoded = Schema.decodeUnknownOption(Result, { onExcessProperty: "error" })(input)
@@ -303,8 +455,151 @@ export function decodeLocalResult(input: unknown, expected: ReviewRun.Start["tar
       (result.outcome.strict && result.outcome.strict.head !== expected.head))
   )
     return undefined
-  if (result.error !== undefined && (result.outcome || result.exitCode !== 2)) return undefined
-  if (result.outcome && result.exitCode === 2) return undefined
+  const outcome = result.outcome
+  const summary = outcome?.selection.strict
+  if (
+    summary &&
+    (!outcome?.strict ||
+      summary.complete !== outcome.strict.complete ||
+      summary.findingCount !== outcome.strict.findings.length ||
+      JSON.stringify(summary.dropped) !== JSON.stringify(outcome.strict.dropped))
+  )
+    return undefined
+  const budgetStop = outcome?.partial === "budget-estimate"
+  // A materialized request can outgrow its plan after an empty helper session is created.
+  // Preserve its zero-step refusal while rejecting a session that actually performed model work.
+  const stoppedAtSend = budgetStop && outcome.notes[0] === BUDGET_REQUEST_CHANGED
+  if (
+    stoppedAtSend &&
+    (!outcome.specialists.length ||
+      outcome.sessions.length !== outcome.specialists.length ||
+      new Set(outcome.sessions).size !== outcome.sessions.length ||
+      outcome.specialists.some(
+        (entry) =>
+          (entry.name !== "review" && entry.name !== "security" && !(entry.name === "lens" && entry.lens)) ||
+          entry.status !== "skipped" ||
+          entry.steps !== 0 ||
+          entry.detail !== "first-request-changed",
+      ))
+  )
+    return undefined
+  if (
+    outcome &&
+    (outcome.trivial || budgetStop) &&
+    (outcome.cost ||
+      (outcome.strict &&
+        (outcome.strict.complete ||
+          JSON.stringify(outcome.strict.incomplete) !==
+            JSON.stringify(unfinishedCauses({ ...outcome, strict: undefined })) ||
+          outcome.strict.findings.length ||
+          outcome.strict.dropped.length ||
+          outcome.strict.fixUnchecked)) ||
+      (!stoppedAtSend && (outcome.sessions.length || outcome.specialists.length)) ||
+      outcome.passes?.length ||
+      outcome.report.findings.length ||
+      outcome.report.files.length ||
+      outcome.selection.inline.length ||
+      outcome.selection.overflow.length ||
+      outcome.selection.outsideDiff.length ||
+      outcome.selection.elsewhere.length ||
+      outcome.selection.nits.length)
+  )
+    return undefined
+  if (
+    outcome?.trivial &&
+    (outcome.partial || outcome.held?.length || outcome.unreviewed.length || outcome.skipped.length)
+  )
+    return undefined
+  if (budgetStop) {
+    // The local service retains this refusal with its target and error. All the changed files remain due,
+    // including any which were already classified as skipped before the budget check.
+    const due = new Set(outcome.unreviewed)
+    if (
+      result.exitCode !== 2 ||
+      !result.error?.trim() ||
+      due.size !== outcome.unreviewed.length ||
+      due.size < outcome.stats.files ||
+      outcome.skipped.some((file) => !due.has(file.path)) ||
+      outcome.held?.some((file) => !due.has(file.path)) ||
+      outcome.report.priorStatus?.length ||
+      outcome.selection.raised.length ||
+      outcome.selection.reappeared.length
+    )
+      return undefined
+  } else if (outcome && result.exitCode === 2) {
+    // These are retained service failures, not successful reviews with an error attached.
+    // Match the service's stop classes without using its display text as authority or losing actual spend.
+    const noCurrentEvidence =
+      !outcome.report.findings.length &&
+      !outcome.report.files.length &&
+      !outcome.report.priorStatus?.length &&
+      !outcome.selection.inline.length &&
+      !outcome.selection.overflow.length &&
+      !outcome.selection.outsideDiff.length &&
+      !outcome.selection.elsewhere.length &&
+      !outcome.selection.nits.length &&
+      !outcome.selection.raised.length &&
+      !outcome.selection.reappeared.length &&
+      !outcome.selection.dropped.length &&
+      !outcome.strict?.findings.length &&
+      !outcome.strict?.dropped.length &&
+      !outcome.strict?.fixUnchecked
+    const noAttempt =
+      noCurrentEvidence &&
+      !outcome.specialists.length &&
+      !outcome.sessions.length &&
+      !outcome.passes?.length &&
+      (!outcome.cost ||
+        [
+          outcome.cost.costUsd,
+          outcome.cost.input,
+          outcome.cost.output,
+          outcome.cost.reasoning,
+          outcome.cost.cacheRead,
+          outcome.cost.cacheWrite,
+        ].every((value) => value === 0))
+    const heldPaths = new Set(outcome.held?.map((file) => file.path))
+    const held =
+      noAttempt &&
+      !!outcome.held?.length &&
+      heldPaths.size === outcome.held.length &&
+      outcome.held.every((file) =>
+        outcome.skipped.some((skip) => skip.reason === "held-back" && skip.path === file.path),
+      ) &&
+      outcome.skipped.filter((file) => file.reason === "held-back").every((file) => heldPaths.has(file.path))
+    const batch = noAttempt && outcome.selection.diffIncomplete === true && outcome.unreviewed.length > 0
+    const privacy = outcome.partial === "privacy" && noCurrentEvidence
+    // An already-complete batch cursor can select no files and reach the service's empty-reviewer failure.
+    const noReviewer =
+      noAttempt &&
+      outcome.partial === undefined &&
+      !outcome.held?.length &&
+      !outcome.unreviewed.length &&
+      !outcome.selection.diffIncomplete &&
+      outcome.skipped.every(
+        (file) =>
+          file.reason === "ignored" ||
+          file.reason === "lockfile" ||
+          file.reason === "generated" ||
+          file.reason === "vendored" ||
+          file.reason === "build-output" ||
+          file.reason === "binary" ||
+          file.reason === "deleted",
+      )
+    const reviewers = outcome.specialists.filter((entry) => entry.name !== "verify" && entry.name !== "judge")
+    const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
+    if (
+      !result.error?.trim() ||
+      outcome.trivial ||
+      outcome.base !== result.target?.mergeBase ||
+      outcome.strict?.complete ||
+      !(privacy || held || batch || failed || noReviewer)
+    )
+      return undefined
+  } else {
+    if (result.error !== undefined && (result.outcome || result.exitCode !== 2)) return undefined
+    if (result.outcome && result.exitCode === 2) return undefined
+  }
   const verdict = result.outcome
     ? reviewVerdict({ kind: "outcome", outcome: result.outcome })
     : result.error !== undefined
@@ -366,8 +661,16 @@ export async function decodeLocalRun(input: unknown, expected: ExpectedRun): Pro
   if (Option.isNone(json)) return undefined
   const result = decodeLocalResult(json.value, run.request.target)
   if (!result) return undefined
+  // A retained service stop (exit 2 with its error) already carries the canonical non-clean verdict decodeLocalResult
+  // checked against its outcome, and the engine marks every such run failed. Re-deriving it here would add a
+  // model-error cause to a held-back or empty-reviewer stop in which no model ran.
+  const retainedStop =
+    run.status === "failed" &&
+    result.exitCode === 2 &&
+    result.error !== undefined &&
+    result.verdict.verdict !== "clean-complete"
   const verdict =
-    run.status === "completed"
+    run.status === "completed" || retainedStop
       ? result.verdict
       : result.outcome
         ? reviewVerdict({

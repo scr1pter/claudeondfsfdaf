@@ -85,6 +85,46 @@ const prepare = (value: Input) => Effect.runPromise(LLMRequestPrep.prepare(value
 const systemMessages = (prepared: LLMRequestPrep.Prepared) =>
   prepared.messages.flatMap((message) => (message.role === "system" ? [message.content] : []))
 
+test("model-input preparation skips credential presence and transport headers while retaining system and parameter hooks", async () => {
+  const value = input({ model: gpt, directory: "/test" })
+  function unexpected(): never {
+    throw new Error("sizing must not inspect a transport credential")
+  }
+  const hooks: string[] = []
+  const prepared = await prepare({
+    ...value,
+    modelInputOnly: true,
+    model: {
+      ...value.model,
+      get headers() {
+        return unexpected()
+      },
+    },
+    provider: {
+      ...value.provider,
+      get key() {
+        return unexpected()
+      },
+      options: {
+        get apiKey() {
+          return unexpected()
+        },
+      },
+    },
+    plugin: {
+      trigger: (name, _input, output) => {
+        if (name === "chat.headers") return Effect.die(new Error("header hook invoked during sizing"))
+        hooks.push(name)
+        return Effect.succeed(output)
+      },
+    },
+  })
+  expect(prepared.headers).toEqual({})
+  expect(hooks).toEqual(["experimental.chat.system.transform", "chat.params"])
+  expect(prepared.tools.read).toBeDefined()
+  expect(prepared.messages).toContainEqual({ role: "user", content: "Fix the failing test." })
+})
+
 describe("internal stable-prefix marker", () => {
   const selected = {
     ...model("gpt-6.1-sol", "@ai-sdk/openai", "openai"),

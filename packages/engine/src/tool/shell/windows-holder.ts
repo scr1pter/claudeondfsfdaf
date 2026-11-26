@@ -9,7 +9,6 @@ using System;
 using System.IO;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Web.Script.Serialization;
@@ -53,6 +52,7 @@ public static class VectorShellHolder {
   static volatile bool badControl;
   static void Check(bool ok,string operation) { if(!ok) throw new Exception(operation+" failed ("+Marshal.GetLastWin32Error()+")"); }
   static void Emit(object value) { Console.Error.WriteLine("VECTOR_SHELL/1 "+new JavaScriptSerializer().Serialize(value)); Console.Error.Flush(); }
+  static void Startup(int step) { Console.Error.WriteLine("VECTOR_SHELL/1 {\"type\":\"startup\",\"step\":"+step+"}"); }
   static string Line(Stream stream,int max) {
     using(var bytes=new MemoryStream()) {
       for(int n=0;n<=max;n++) {
@@ -78,12 +78,22 @@ public static class VectorShellHolder {
     IntPtr job=IntPtr.Zero, attrs=IntPtr.Zero, handles=IntPtr.Zero, jobs=IntPtr.Zero, env=IntPtr.Zero, output=IntPtr.Zero, input=IntPtr.Zero;
     PI child=new PI(); bool assigned=false, attrsReady=false, cleaned=false, attempted=false;
     try {
+      Startup(4);
       var stream=Console.OpenStandardInput();
-      var read=Task.Run(()=>Line(stream,262144));
-      if(!read.Wait(15000) || read.Result==null) throw new Exception("Configuration timeout or EOF");
+      stream=new BufferedStream(stream,4096);
+      string configLine=null; bool readFailed=false;
+      var reader=new Thread(()=> {
+        try { configLine=Line(stream,262144); }
+        catch(Exception) { readFailed=true; }
+      });
+      reader.IsBackground=true; reader.Start();
+      if(!reader.Join(15000)) throw new Exception("Configuration timeout or EOF");
+      if(readFailed) throw new Exception("Configuration read failed");
+      if(configLine==null) throw new Exception("Configuration timeout or EOF");
       var json=new JavaScriptSerializer(); json.MaxJsonLength=262144;
-      var cfg=json.Deserialize<Launch>(read.Result);
+      var cfg=json.Deserialize<Launch>(configLine);
       if(cfg==null || String.IsNullOrEmpty(cfg.file) || String.IsNullOrEmpty(cfg.commandLine) || cfg.commandLine.Length>32766 || cfg.env==null) throw new Exception("Invalid configuration");
+      Startup(5);
       Check(SetHandleInformation(GetStdHandle(-10),1,0),"Control inheritance");
       Check(SetHandleInformation(GetStdHandle(-12),1,0),"Status inheritance");
       job=CreateJobObjectW(IntPtr.Zero,null); Check(job!=IntPtr.Zero,"Create job");
@@ -107,7 +117,9 @@ public static class VectorShellHolder {
       env=Marshal.StringToHGlobalUni(block.ToString());
       var start=new SX(); start.si.cb=Marshal.SizeOf(typeof(SX)); start.si.flags=0x100;
       start.si.input=input; start.si.output=output; start.si.error=output; start.attrs=attrs;
+      Startup(6);
       Check(CreateProcessW(cfg.file,new StringBuilder(cfg.commandLine),IntPtr.Zero,IntPtr.Zero,true,0x08080404,env,cfg.cwd,ref start,out child),"Create suspended job process"); assigned=true;
+      Startup(7);
       var control=new Thread(()=> {
         try {
           bool acknowledged=false;
@@ -154,16 +166,82 @@ public static class VectorShellHolder {
 }
 `
 
+export const startupPhases = [
+  "spawn",
+  "host-entered",
+  "utility-loaded",
+  "compiler-returned",
+  "reading-config",
+  "config-decoded",
+  "creating-payload",
+  "payload-created",
+] as const
+
+export type StartupPhase = (typeof startupPhases)[number]
+
+type DeliveryEvent =
+  | "launchReturnedMs"
+  | "spawnEventMs"
+  | "configWrittenMs"
+  | "configWriteFailedMs"
+  | "firstStderrMs"
+  | "firstMarkerMs"
+  | "utilityLoadedMs"
+  | "compilerReturnedMs"
+  | "readingConfigMs"
+  | "readyMs"
+  | "watchdogMs"
+  | "exitMs"
+  | "closeMs"
+  | "closeDeadlineMs"
+
+export type DeliveryReceipt = Partial<Record<DeliveryEvent, number>>
+
+const startupDeliveryEvents: Partial<Record<StartupPhase, DeliveryEvent>> = {
+  "host-entered": "firstMarkerMs",
+  "utility-loaded": "utilityLoadedMs",
+  "compiler-returned": "compilerReturnedMs",
+  "reading-config": "readingConfigMs",
+}
+
+/** Closed delivery timings. After the watchdog, only cleanup milestones can change the receipt. */
+export function deliveryTimeline(elapsed: () => number) {
+  const timings: DeliveryReceipt = {}
+  const mark = (event: DeliveryEvent) => {
+    if (timings.watchdogMs !== undefined && event !== "exitMs" && event !== "closeMs" && event !== "closeDeadlineMs")
+      return
+    timings[event] ??= Math.min(60_000, Math.max(0, Math.round(elapsed() / 10) * 10))
+  }
+  return {
+    mark,
+    markStartupPhase(phase: StartupPhase) {
+      const event = startupDeliveryEvents[phase]
+      if (event) mark(event)
+    },
+    snapshot(): DeliveryReceipt {
+      return { ...timings }
+    },
+  }
+}
+
+const startup = (step: number) => `[Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"startup","step":${step}}'); `
+
 // Resolve the Windows PowerShell built-in by its Microsoft strong name. The helper intentionally has no inherited
 // PSModulePath: command discovery can otherwise wait indefinitely before Add-Type starts, even with -NoProfile.
 export const preparation =
-  "Import-Module -Assembly ([Reflection.Assembly]::Load('Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')); "
+  "Import-Module -Assembly ([Reflection.Assembly]::Load('Microsoft.PowerShell.Commands.Utility, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')); " +
+  startup(2)
 
-export const script = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';try { ${preparation}Add-Type -TypeDefinition @'\n${source}\n'@ -ReferencedAssemblies System.Web.Extensions } catch { [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"error","terminationProven":true,"message":"Windows containment helper unavailable"}'); exit 1 }; exit [VectorShellHolder]::Run()`
+// Remove C# indentation only in the transported script to leave room for the phase receipts in Windows' argv limit.
+export const script = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';${startup(1)}try { ${preparation}Add-Type -TypeDefinition @'\n${source.replace(/^ +/gm, "")}\n'@ -ReferencedAssemblies System.Web.Extensions } catch { [Console]::Error.WriteLine('VECTOR_SHELL/1 {"type":"error","terminationProven":true,"message":"Windows containment helper unavailable"}'); exit 1 }; ${startup(3)}exit [VectorShellHolder]::Run()`
 
 export function argumentsForHolder() {
-  const encoded = Buffer.from(script, "utf16le").toString("base64")
-  if (encoded.length > 30_000) throw new Error("Windows containment helper exceeds the command-line limit")
+  return argumentsForScript(script, 30_000)
+}
+
+export function argumentsForScript(input: string, limit: number) {
+  const encoded = Buffer.from(input, "utf16le").toString("base64")
+  if (encoded.length > limit) throw new Error("Windows containment helper exceeds the command-line limit")
   return [
     "-NoLogo",
     "-NoProfile",

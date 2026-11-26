@@ -1,3 +1,4 @@
+import { ReviewMcp } from "@/review/mcp"
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import type { Tool as MCPToolDef } from "@modelcontextprotocol/sdk/types.js"
 import { dynamicTool, jsonSchema, type JSONSchema7, type Tool } from "ai"
@@ -47,8 +48,10 @@ export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: numbe
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(inputSchema),
     execute: async (args: unknown, options) => {
+      ReviewMcp.checkCall(options.abortSignal)
       // Clients are created through ./sdk, so by now this resolves to the module already loaded.
       const { CallToolResultSchema } = await import("./sdk")
+      ReviewMcp.checkCall(options.abortSignal)
       const result = await client
         .callTool(
           {

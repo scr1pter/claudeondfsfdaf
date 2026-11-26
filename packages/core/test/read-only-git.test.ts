@@ -32,6 +32,29 @@ const usage = (references: boolean) =>
       "",
     ].join("\n"),
   )
+// The port's path rule, which a caller checks before asking for a path-scoped read (ReviewGit.ignoredPaths, SF-13b).
+test("repositoryPath accepts only plain repository-relative paths", () => {
+  for (const file of ["probe.txt", "src/a b.ts", ":colon", "-v", "é.local.json", "a\tb", 'q"uote', "x".repeat(4096)])
+    expect(ReadOnlyGit.repositoryPath(file)).toBe(true)
+  for (const file of [
+    "",
+    "/abs",
+    "a\\b",
+    "../x",
+    "a/../b",
+    "./a",
+    "a//b",
+    "a/",
+    ".git/config",
+    "sub/.GIT/x",
+    "a\rb",
+    "a\nb",
+    "a\u0000b",
+    "x".repeat(4097),
+  ])
+    expect(ReadOnlyGit.repositoryPath(file)).toBe(false)
+})
+
 test("fsck supports only known versions with matching advertised full graph and reference capabilities", () => {
   for (const version of ["2.43.0", "2.49.1"])
     expect(ReadOnlyGit.fsckProfile(Buffer.from(`git version ${version}\n`), usage(false))).toEqual({
@@ -882,6 +905,23 @@ local("the scoped typed port covers review collection and refuses option-shaped 
     await fs.writeFile(path.join(f.directory, "extra.txt"), "new untracked contents\n")
     expect((await repository.read({ kind: "untracked" })).bytes.toString()).toContain("extra.txt")
     expect((await repository.read({ kind: "added-diff", file: "extra.txt" })).bytes.toString()).toContain("b/extra.txt")
+    // VS-34 item 4 (SF-13b): the work tree's ignore rules, index or not, each path echoed as given ("./" keeps a leading
+    // ":" a path, as check-ignore takes no pathspec magic); a path none ignores exits 1.
+    await fs.writeFile(path.join(f.directory, ".gitignore"), "*.local.json\n")
+    const ignored = await repository.read({
+      kind: "check-ignore",
+      files: ["config.local.json", "probe.txt", ":colon.local.json"],
+    })
+    expect(ignored.code).toBe(0)
+    expect(ignored.bytes.toString()).toBe("./config.local.json\n./:colon.local.json\n")
+    expect(await repository.read({ kind: "check-ignore", files: ["probe.txt"] })).toEqual({
+      code: 1,
+      bytes: Buffer.alloc(0),
+    })
+    // An option-shaped name is a path after "--" and "./".
+    expect((await repository.read({ kind: "check-ignore", files: ["--stdin"] })).code).toBe(1)
+    for (const files of [["../counter"], [], Array.from({ length: 1025 }, (_, index) => `f${index}.txt`)])
+      await expect(repository.read({ kind: "check-ignore", files })).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
     await fs.writeFile(path.join(f.base, "outside.txt"), "PRIVATE-UNREACHABLE-BYTES")
     await fs.symlink(path.join(f.base, "outside.txt"), path.join(f.directory, "linked.txt"))
     await expect(repository.read({ kind: "added-diff", file: "linked.txt" })).rejects.toBeInstanceOf(
@@ -930,6 +970,331 @@ async function liveGit(f: Awaited<ReturnType<typeof fixture>>, args: string[]) {
   await fs.writeFile(f.counter, "")
   return result
 }
+
+local(
+  "impact reads committed trees, literal import paths and word matches within each requested output cap",
+  async () => {
+    const f = await fixture("*.ts diff=fixture\n")
+    await fs.mkdir(path.join(f.directory, "src"))
+    const importer = "src/[x].ts"
+    await fs.writeFile(path.join(f.directory, importer), 'import { Needle } from "./dep"\nconst joinedNeedle = 1\n')
+    await fs.writeFile(path.join(f.directory, "src", "other.ts"), "export const Needle = 1\n")
+    await fs.writeFile(path.join(f.directory, "package.json"), '{"name":"pinned"}\n')
+    await f.git(["add", "--all"])
+    await f.git([...author, "commit", "-qm", "impact sources"])
+    const reviewed = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    await f.git(["checkout", "-q", "--detach", "HEAD^"])
+    await fs.mkdir(path.join(f.directory, "src"), { recursive: true })
+    await fs.writeFile(path.join(f.directory, importer), "export const LiveOnly = 3\n")
+    await fs.writeFile(path.join(f.directory, "package.json"), '{"name":"live"}\n')
+    await f.git(["config", "diff.fixture.textconv", f.command])
+    await guarded(f)
+    const repo = await ReadOnlyGit.open(f.input)
+    const grep = (search: Extract<ReadOnlyGit.Read, { kind: "impact-grep" }>["search"], maxBytes = 1024) =>
+      repo.read({ kind: "impact-grep", revision: reviewed, maxBytes, search })
+    try {
+      expect(repo.head).not.toBe(reviewed)
+      const noSizes = (rev: string) =>
+        repo.read({ kind: "impact-tree", revision: rev, maxBytes: 4096, namesAndIdsOnly: true })
+      expect((await noSizes(reviewed)).bytes.toString()).toContain("\t" + importer + "\0")
+      expect((await noSizes(repo.head)).bytes.toString()).not.toContain(importer)
+      const listed = await repo.read({ kind: "impact-tree", revision: reviewed, maxBytes: 4096 })
+      expect(listed.code).toBe(0)
+      expect(listed.bytes.toString()).toContain("\t" + importer + "\0")
+      expect(await repo.read({ kind: "impact-tree", revision: repo.head, maxBytes: 1 })).toEqual({
+        code: 3,
+        bytes: Buffer.alloc(0),
+      })
+      const manifest = await grep({ kind: "manifests", exclude: [] })
+      expect(manifest.code).toBe(0)
+      expect(manifest.bytes.toString()).toContain('{"name":"pinned"}')
+      expect(manifest.bytes.toString()).not.toContain('"live"')
+      const imports = await grep({ kind: "imports", files: [importer] })
+      expect(imports.code).toBe(0)
+      expect(imports.bytes.toString()).toContain("import { Needle }")
+      expect(imports.bytes.toString()).not.toContain("joinedNeedle")
+      expect(imports.bytes.toString()).not.toContain("LiveOnly")
+      expect(imports.bytes.toString()).not.toContain("other.ts")
+      expect(
+        (
+          await grep({ kind: "symbols", names: ["Needle"], exclude: [":(top,exclude,literal)src/other.ts"] })
+        ).bytes.toString(),
+      ).toBe(reviewed + ":" + importer + "\0")
+      expect(await grep({ kind: "symbols", names: ["Missing"], exclude: [] })).toEqual({
+        code: 1,
+        bytes: Buffer.alloc(0),
+      })
+      expect(
+        await repo.read({ kind: "show", revision: reviewed, file: importer, maxBytes: 2, distinguishLarge: true }),
+      ).toEqual({ code: 3, bytes: Buffer.alloc(0) })
+      for (const op of [
+        { kind: "imports", files: ["../outside"] },
+        { kind: "symbols", names: ["Needle\nother"], exclude: [] },
+        { kind: "manifests", exclude: [":(attr)probe"] },
+      ] as const)
+        await expect(grep(op)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+      await expect(repo.read({ kind: "impact-tree", revision: "HEAD", maxBytes: 4096 })).rejects.toBeInstanceOf(
+        ReadOnlyGit.Unavailable,
+      )
+      await expect(repo.read({ kind: "impact-version" }, AbortSignal.abort())).rejects.toBeInstanceOf(
+        ReadOnlyGit.Unavailable,
+      )
+      await expect(repo.status(AbortSignal.abort())).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+      expect((await repo.status()).head).toBe(repo.head)
+      expect((await repo.read({ kind: "impact-version" })).bytes.toString()).toStartWith("git version ")
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repo.close()
+    }
+  },
+)
+
+local("show reads bounded raw bytes only from a regular file in the exact private commit", async () => {
+  const f = await fixture("probe.txt diff=fixture\n")
+  const first = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  await f.git(["update-index", "--add", "--cacheinfo", `160000,${first},submodule`])
+  await f.git([...author, "commit", "-qm", "historical gitlink"])
+  const previous = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  await f.git(["update-index", "--force-remove", "submodule"])
+  await fs.mkdir(path.join(f.directory, "nested"))
+  await fs.writeFile(path.join(f.directory, "nested", "empty"), "")
+  await fs.symlink("probe.txt", path.join(f.directory, "link"))
+  const bytes = Buffer.from([0, 255, 10, 128])
+  await fs.writeFile(path.join(f.directory, "probe.txt"), bytes)
+  await fs.writeFile(path.join(f.directory, ":(glob)*"), "literal", { mode: 0o755 })
+  await fs.writeFile(path.join(f.directory, "large"), Buffer.alloc(1024 * 1024 + 1, 97))
+  await f.git(["add", "-A"])
+  await f.git([...author, "commit", "-qm", "file kinds and sizes"])
+  await f.git([...author, "tag", "-a", "tagged", "-m", "tag object"])
+  const tag = (await f.git(["rev-parse", "tagged"])).stdout.trim()
+  const tree = (await f.git(["rev-parse", "HEAD^{tree}"])).stdout.trim()
+  await fs.writeFile(path.join(f.directory, "probe.txt"), "staged")
+  await f.git(["add", "probe.txt"])
+  await fs.writeFile(path.join(f.directory, "probe.txt"), "on disk")
+  await f.git(["config", "diff.fixture.textconv", f.command])
+  await guarded(f)
+
+  const repository = await ReadOnlyGit.open(f.input)
+  const show = (file: string, maxBytes: number, revision = repository.head) =>
+    repository.read({ kind: "show", file, revision, maxBytes })
+  try {
+    expect(await show("probe.txt", bytes.length)).toEqual({ code: 0, bytes })
+    expect(await show("probe.txt", bytes.length - 1)).toEqual(unset)
+    expect(await show("probe.txt", 15, previous)).toEqual({ code: 0, bytes: Buffer.from("saved contents\n") })
+    expect(await show(":(glob)*", 7)).toEqual({ code: 0, bytes: Buffer.from("literal") })
+    expect(await show("nested/empty", 0)).toEqual({ code: 0, bytes: Buffer.alloc(0) })
+    expect(await show("large", 1024 * 1024)).toEqual(unset)
+    for (const file of ["missing", "nested", "link"]) expect(await show(file, 128)).toEqual(unset)
+    expect(await show("submodule", 128, previous)).toEqual(unset)
+    for (const revision of [tag, tree, "0".repeat(40)]) expect(await show("probe.txt", 128, revision)).toEqual(unset)
+    for (const file of ["../probe.txt", ".git/HEAD", "/absolute", "x\nother", "\ud800"])
+      await expect(show(file, 128)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+    for (const revision of ["HEAD", previous.slice(0, 10), "--all", previous + ":probe.txt"])
+      await expect(show("probe.txt", 128, revision)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+    for (const limit of [-1, 1.5, Infinity, 1024 * 1024 + 1])
+      await expect(show("probe.txt", limit)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+    expect(await f.calls()).toBe(0)
+  } finally {
+    await repository.close()
+  }
+  await expect(show("probe.txt", 128)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+})
+
+local("the private view reports only whether captured info attributes or excludes may contain rules", async () => {
+  const f = await fixture()
+  const attributes = path.join(f.gitDirectory, "info", "attributes")
+  const exclude = path.join(f.gitDirectory, "info", "exclude")
+  const initial = await ReadOnlyGit.open(f.input)
+  try {
+    // Git init supplied its ordinary template. Later changes cannot alter this view's answer.
+    expect(initial.hasInfoRules).toBe(false)
+    await fs.writeFile(attributes, "# comment\r\n \t\r\n")
+    await fs.writeFile(exclude, "\\#literal\n")
+    expect(initial.hasInfoRules).toBe(false)
+  } finally {
+    await initial.close()
+  }
+  const withExclude = await ReadOnlyGit.open(f.input)
+  try {
+    expect(withExclude.hasInfoRules).toBe(true)
+    expect(Reflect.set(withExclude, "hasInfoRules", false)).toBe(false)
+    await fs.rm(exclude)
+    await fs.writeFile(attributes, "doc.md linguist-generated\n")
+  } finally {
+    await withExclude.close()
+  }
+  const withAttributes = await ReadOnlyGit.open(f.input)
+  try {
+    expect(withAttributes.hasInfoRules).toBe(true)
+  } finally {
+    await withAttributes.close()
+  }
+  await fs.writeFile(attributes, "# comment\r\n \t\r\n")
+  const comments = await ReadOnlyGit.open(f.input)
+  try {
+    expect(comments.hasInfoRules).toBe(false)
+  } finally {
+    await comments.close()
+  }
+})
+
+local("path references prove absence only after a literal search of the whole private commit", async () => {
+  const f = await fixture("*.bin diff=fixture\n")
+  const original = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  await fs.symlink("old/lib.data.ts", path.join(f.directory, "link"))
+  await f.git(["add", "link"])
+  await f.git([...author, "commit", "-qm", "link target"])
+  const linked = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  await f.git(["rm", "-q", "link"])
+  await f.git(["update-index", "--add", "--cacheinfo", `160000,${original},submodule`])
+  await f.git([...author, "commit", "-qm", "gitlink"])
+  const gitlink = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  await f.git(["update-index", "--force-remove", "submodule"])
+  await fs.mkdir(path.join(f.directory, "nested"))
+  const binary = path.join(f.directory, "nested", "references.bin")
+  await fs.writeFile(binary, Buffer.from("\0prefixLIB.DATA_suffix\0--version\0otherZname\n"))
+  await f.git(["add", "nested"])
+  await f.git([...author, "commit", "-qm", "binary references"])
+  await fs.writeFile(binary, "onlyInIndex")
+  await f.git(["add", "nested"])
+  await fs.writeFile(binary, "onlyOnDisk")
+  await f.git(["config", "diff.fixture.textconv", f.command])
+  await guarded(f)
+
+  const repository = await ReadOnlyGit.open(f.input)
+  const references = (file: string, revision = repository.head) =>
+    repository.read({ kind: "path-references", file, revision })
+  try {
+    expect(
+      await repository.read({
+        kind: "unaliased-changes",
+        from: original,
+        to: repository.head,
+        files: ["nested/references.bin"],
+      }),
+    ).toEqual({
+      code: 0,
+      bytes: Buffer.alloc(0),
+    })
+    for (const to of [linked, gitlink])
+      expect(await repository.read({ kind: "unaliased-changes", from: original, to, files: ["probe.txt"] })).toEqual({
+        code: 2,
+        bytes: Buffer.alloc(0),
+      })
+    // The old path is absent from the tree and has no diff hunk. A reference to its stem still blocks a skip.
+    for (const file of ["old/lib.data.ts", "old/--version.ts"])
+      expect(await references(file)).toEqual({ code: 0, bytes: Buffer.alloc(0) })
+    for (const file of ["old/other.name.ts", "onlyInIndex.md", "onlyOnDisk.ts"])
+      expect(await references(file)).toEqual(unset)
+    expect(await references("old/lib.data.ts", original)).toEqual(unset)
+    for (const revision of [linked, gitlink, "0".repeat(40)])
+      expect(await references("old/lib.data.ts", revision)).toEqual({ code: 2, bytes: Buffer.alloc(0) })
+    expect(await references("old/é.ts")).toEqual({ code: 2, bytes: Buffer.alloc(0) })
+    for (const file of ["../x", ".git/config", "old/a\nb.ts"])
+      await expect(references(file)).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+    await expect(references("old/lib.data.ts", "HEAD")).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+    expect(await f.calls()).toBe(0)
+  } finally {
+    await repository.close()
+  }
+})
+
+local(
+  "unrelated asset links allow a proof while aliases of changed instructions or config targets refuse it",
+  async () => {
+    const f = await fixture()
+    for (const dir of ["assets", "public", "src", "docs"]) await fs.mkdir(path.join(f.directory, dir))
+    await fs.writeFile(path.join(f.directory, "assets", "icon.svg"), "<svg/>")
+    await fs.writeFile(path.join(f.directory, "src", "policy.ts"), "// instructions\n")
+    await fs.writeFile(path.join(f.directory, "src", "code.ts"), "// old\n")
+    await fs.writeFile(path.join(f.directory, "docs", "help.md"), "Introduction.\n")
+    await fs.symlink("icon.svg", path.join(f.directory, "assets", "badge.svg"))
+    await fs.symlink("../assets/icon.svg", path.join(f.directory, "public", "badge.svg"))
+    await fs.symlink("src/policy.ts", path.join(f.directory, "AGENTS.md"))
+    const save = async (message: string) => {
+      await f.git(["add", "-A"])
+      await f.git([...author, "commit", "-qm", message])
+      return (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+    }
+    const base = await save("ordinary files and confined links")
+    await fs.appendFile(path.join(f.directory, "docs", "help.md"), "More details.\n")
+    await fs.appendFile(path.join(f.directory, "src", "code.ts"), "// new\n")
+    const docs = await save("unrelated documentation and comments")
+    await fs.appendFile(path.join(f.directory, "src", "policy.ts"), "// changed instructions\n")
+    const changed = await save("target contents changed")
+    await fs.chmod(path.join(f.directory, "assets", "icon.svg"), 0o755)
+    const mode = await save("asset mode changed")
+    await fs.unlink(path.join(f.directory, "public", "badge.svg"))
+    await fs.symlink("../assets/./icon.svg", path.join(f.directory, "public", "badge.svg"))
+    const retargeted = await save("same destination by a changed link")
+    await guarded(f)
+    const repository = await ReadOnlyGit.open(f.input)
+    const check = (from: string, to: string, files: string[]) =>
+      repository.read({ kind: "unaliased-changes", from, to, files })
+    const clear = { code: 0, bytes: Buffer.alloc(0) }
+    const unknown = { code: 2, bytes: Buffer.alloc(0) }
+    try {
+      expect(await check(base, docs, ["docs/help.md", "src/code.ts"])).toEqual(clear)
+      for (const candidate of ["AGENTS.md", "sRc/PoLiCy.ts", "assets/icon.svg", "assets", "public/badge.svg"])
+        expect(await check(base, docs, [candidate])).toEqual(unknown)
+      // Target mode and object identity are compared even if the caller accidentally omits the changed target.
+      expect(await check(docs, changed, ["docs/help.md"])).toEqual(unknown)
+      expect(await check(changed, mode, ["docs/help.md"])).toEqual(unknown)
+      expect(await check(mode, retargeted, ["docs/help.md"])).toEqual(unknown)
+      // "icon" is only in filenames and raw link targets, never in a regular blob.
+      expect(await repository.read({ kind: "path-references", revision: docs, file: "old/Icon.ts" })).toEqual(clear)
+      expect(await repository.read({ kind: "path-references", revision: docs, file: "old/unused.ts" })).toEqual(unset)
+      await expect(check(base, docs, ["../outside"])).rejects.toBeInstanceOf(ReadOnlyGit.Unavailable)
+      expect(await f.calls()).toBe(0)
+    } finally {
+      await repository.close()
+    }
+  },
+)
+
+local("link proofs refuse dangling, escaping, directory, chained, ambiguous and excessive links", async () => {
+  const f = await fixture()
+  await fs.mkdir(path.join(f.directory, "assets"))
+  await fs.writeFile(path.join(f.directory, "assets", "file"), "unchanged\n")
+  await fs.symlink("assets/file", path.join(f.directory, "good"))
+  await f.git(["add", "-A"])
+  await f.git([...author, "commit", "-qm", "safe link"])
+  const base = (await f.git(["rev-parse", "HEAD"])).stdout.trim()
+  const unsupported: string[] = []
+  const save = async (reason: string) => {
+    await f.git(["add", "-A"])
+    await f.git([...author, "commit", "-qm", reason])
+    unsupported.push((await f.git(["rev-parse", "HEAD"])).stdout.trim())
+  }
+  const bad = path.join(f.directory, "link")
+  for (const target of ["missing", "/outside", "../outside", "assets", "good", "good/../probe.txt", "link"]) {
+    await fs.symlink(target, bad)
+    await save(target)
+    await fs.unlink(bad)
+  }
+  await fs.writeFile(path.join(f.directory, "assets", "File"), "case collision\n")
+  await save("ambiguous asset names")
+  await fs.unlink(path.join(f.directory, "assets", "File"))
+  for (let index = 0; index < 64; index++) await fs.symlink("assets/file", path.join(f.directory, "extra" + index))
+  await save("65 links exceed the limit")
+
+  const repository = await ReadOnlyGit.open(f.input)
+  try {
+    for (const to of unsupported) {
+      // Checking only the suspect tree against itself detects invalid inventories independently of the changed link set.
+      expect(await repository.read({ kind: "unaliased-changes", from: to, to, files: ["example.md"] })).toEqual({
+        code: 2,
+        bytes: Buffer.alloc(0),
+      })
+    }
+    expect(await repository.read({ kind: "unaliased-changes", from: base, to: base, files: ["example.md"] })).toEqual({
+      code: 0,
+      bytes: Buffer.alloc(0),
+    })
+  } finally {
+    await repository.close()
+  }
+})
 
 local(
   "named references resolve to private-snapshot commits from loose and packed refs as rev-parse does",

@@ -190,7 +190,7 @@ describe("a repository's subagent and workflow keys", () => {
   })
 })
 
-// The released top-level inventory remains historical; connect and computer need the newer engine.
+// The released top-level inventory remains historical. New top-level keys are checked separately below.
 const RELEASED_TOP_LEVEL = [
   "$schema",
   "shell",
@@ -277,14 +277,17 @@ const everyKey = {
 }
 
 describe("version skew", () => {
-  test("connect, computer and everywhere are the intentional top-level additions", () => {
+  test("connect, computer, everywhere and review are the intentional top-level additions", () => {
     expect(() => ConfigParse.schema(Released, { connect: { review: { after_run: "off" } } }, "vector.json")).toThrow()
+    const review = { privacy: "zdr", holdback: "secrets" }
+    expect(() => ConfigParse.schema(Released, { review }, "vector.json")).toThrow()
+    expect(ConfigParse.schema(ConfigV1.Info, { review }, "vector.json").review).toEqual(review)
     expect(() => ConfigParse.schema(Released, { everywhere: { enabled: false } }, "vector.json")).toThrow()
     expect(RELEASED_TOP_LEVEL).not.toContain("computer")
     expect(RELEASED_TOP_LEVEL).not.toContain("everywhere")
     expect(Object.keys(Released.fields).sort()).toEqual([...RELEASED_TOP_LEVEL].sort())
     expect(Object.keys(ConfigV1.Info.fields).sort()).toEqual(
-      [...RELEASED_TOP_LEVEL, "connect", "computer", "everywhere"].sort(),
+      [...RELEASED_TOP_LEVEL, "connect", "computer", "everywhere", "review"].sort(),
     )
   })
 

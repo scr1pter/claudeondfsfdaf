@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { matchPostImage, parseUnifiedDiff, renderPatch, type DiffFile } from "@vectordevai/core/review/diff"
-import { holdbackFiles } from "@vectordevai/core/review/holdback"
+import {
+  holdbackContext,
+  holdbackFiles,
+  holdbackLines,
+  holdbackText,
+  type HoldbackContext,
+} from "@vectordevai/core/review/holdback"
+import { CREDENTIAL_FILES } from "@vectordevai/core/review/permission"
 import type { HeadFile } from "@vectordevai/core/review/prompt"
+import type { PriorFinding } from "@vectordevai/core/review/types"
 
 // The payload holdback (VS-34a) over synthetic diffs. Placeholders only: token-like literals and private key headers
 // are assembled at run time, as in redact.test.ts and scan.test.ts, so no token-like literal sits in the source.
@@ -623,5 +631,196 @@ describe("holdbackFiles", () => {
       "curl -H 'x-token: [redacted]' https://example.com",
     )
     expect(holdbackFiles([file], { ignored: [] }).files).toEqual([file])
+  })
+})
+
+// VS-34 design item 3 (SF-13b): the other untrusted blocks a prompt quotes, beside the diff and the head files.
+describe("holdbackContext", () => {
+  const held = [
+    { path: "deploy/.netrc" },
+    { path: "notes.txt", oldPath: "id_rsa" }, // a rename away from a key's name is held on its old path
+  ]
+  const context = (): HoldbackContext => ({
+    pr: {
+      number: 7,
+      title: `Rotate ${t.ghp}`,
+      body: `Uses ${t.akia} for the bucket.`,
+      author: "octo",
+      commits: [`Add ${t.sk}`, "Plain subject"],
+    },
+    related: [
+      {
+        symbol: "sign",
+        path: "src/sign.ts",
+        hits: [
+          { path: "src/call.ts", line: 4, text: `sign("${t.glpat}")` },
+          { path: "config/prod/.envrc", line: 1, text: `export TOKEN=${t.npm}` },
+          { path: "deploy/.netrc", line: 2, text: "machine example.test" },
+          { path: "notes.txt", line: 1, text: "renamed key" },
+        ],
+      },
+      { symbol: "login", path: "id_rsa", hits: [{ path: "src/login.ts", line: 9, text: "login()" }] },
+    ],
+    history: [
+      { path: "src/sign.ts", text: `abc1234 octo 2026-11-01 Add ${t.hf}\nblame: sign()` },
+      { path: "deploy/.netrc", text: "def5678 octo 2026-11-02 machine example.test login ci" },
+    ],
+    humanComments: [
+      { author: "reviewer", association: "MEMBER", body: `Try ${t.xoxb} instead` },
+      { author: "reviewer", path: "src/sign.ts", line: 3, body: `Leaked ${t.ant}?` },
+      { author: "other", path: "notes.txt", line: 1, body: "the old key's line" },
+    ],
+    requirements: `The service reads ${t.proj} from the vault.`,
+    checks: [
+      { name: "test", conclusion: "failure", excerpt: `export GH=${t.ghs}\nexit 1` },
+      { name: "lint", conclusion: "success" },
+    ],
+    // Earlier findings: one whose model-written title quotes a value, one on the held .netrc, one on the unchanged
+    // .envrc and one on the renamed key's new path.
+    prior: [
+      prior({ id: "a1", path: "src/sign.ts", title: `Hard-coded ${t.pat}` }),
+      prior({ id: "b2", path: "deploy/.netrc", title: "Committed registry login for ci" }),
+      prior({ id: "c3", path: "config/prod/.envrc", title: "Exported token" }),
+      prior({ id: "d4", path: "notes.txt", title: "Key material in notes" }),
+    ],
+  })
+  const prior = (fields: Pick<PriorFinding, "id" | "path" | "title">): PriorFinding => ({
+    ...fields,
+    where: "inline",
+    line: 1,
+    side: "RIGHT",
+    severity: "blocking",
+    category: "security",
+    sha: "1111111",
+    status: "open",
+  })
+
+  test("redacts every token shape in the untrusted text it keeps, and keeps authors, paths, lines and symbols", () => {
+    const result = holdbackContext(context(), { held })
+    expect(result.pr).toEqual({
+      number: 7,
+      title: "Rotate [redacted]",
+      body: "Uses [redacted] for the bucket.",
+      author: "octo",
+      commits: ["Add [redacted]", "Plain subject"],
+    })
+    expect(result.related).toEqual([
+      { symbol: "sign", path: "src/sign.ts", hits: [{ path: "src/call.ts", line: 4, text: 'sign("[redacted]")' }] },
+    ])
+    expect(result.history).toEqual([
+      { path: "src/sign.ts", text: "abc1234 octo 2026-11-01 Add [redacted]\nblame: sign()" },
+    ])
+    expect(result.humanComments).toEqual([
+      { author: "reviewer", association: "MEMBER", body: "Try [redacted] instead" },
+      { author: "reviewer", path: "src/sign.ts", line: 3, body: "Leaked [redacted]?" },
+    ])
+    expect(result.requirements).toBe("The service reads [redacted] from the vault.")
+    expect(result.checks).toEqual([
+      { name: "test", conclusion: "failure", excerpt: "export GH=[redacted]\nexit 1" },
+      { name: "lint", conclusion: "success" },
+    ])
+    expect(result.prior).toEqual([prior({ id: "a1", path: "src/sign.ts", title: "Hard-coded [redacted]" })])
+    const text = JSON.stringify(result)
+    for (const value of [t.ghp, t.akia, t.sk, t.glpat, t.npm, t.hf, t.xoxb, t.ant, t.proj, t.ghs, t.pat])
+      expect(text).not.toContain(value)
+  })
+
+  test("drops what quotes a held path, or a path holdback would hold, even when nothing held it", () => {
+    // Nothing held: what quotes a credential path (the unchanged .envrc, the .netrc, an entry declared in id_rsa) still
+    // goes, and the rest stays.
+    const result = holdbackContext(context(), { held: [] })
+    expect(result.related?.map((entry) => entry.path)).toEqual(["src/sign.ts"])
+    expect(result.related?.[0].hits.map((hit) => hit.path)).toEqual(["src/call.ts", "notes.txt"])
+    expect(result.history?.map((entry) => entry.path)).toEqual(["src/sign.ts"])
+    expect(result.humanComments?.map((comment) => comment.path)).toEqual([undefined, "src/sign.ts", "notes.txt"])
+    expect(result.prior?.map((entry) => entry.id)).toEqual(["a1", "d4"])
+    // Held: the renamed key's new path, which names no credential, goes too.
+    const holding = holdbackContext(context(), { held })
+    expect(holding.related?.[0].hits.map((hit) => hit.path)).toEqual(["src/call.ts"])
+    expect(holding.history?.map((entry) => entry.path)).toEqual(["src/sign.ts"])
+    expect(holding.humanComments?.map((comment) => comment.path)).toEqual([undefined, "src/sign.ts"])
+    expect(holding.prior?.map((entry) => entry.id)).toEqual(["a1"])
+  })
+
+  test("leaves false-positive bait as it is", () => {
+    const bait = "process.env.API_KEY, tokenizer.encode(input), YOUR_TOKEN_HERE and sk-test"
+    const result = holdbackContext(
+      {
+        pr: { title: bait, body: bait },
+        related: [{ symbol: "x", path: "src/x.ts", hits: [{ path: "src/y.ts", line: 1, text: bait }] }],
+        history: [{ path: "src/x.ts", text: bait }],
+        humanComments: [{ author: "a", body: bait }],
+        requirements: bait,
+      },
+      { held: [] },
+    )
+    expect(JSON.stringify(result)).not.toContain("[redacted]")
+    expect(result.pr).toEqual({ title: bait, body: bait })
+  })
+
+  test("is pure: frozen input, the same result twice, and absent blocks stay absent", () => {
+    const input = context()
+    const copy = structuredClone(input)
+    deepFreeze(input)
+    const first = holdbackContext(input, { held })
+    expect(holdbackContext(input, { held })).toEqual(first)
+    expect(input).toEqual(copy)
+    expect(holdbackContext({}, { held })).toEqual({})
+    expect(Object.keys(holdbackContext({ history: [] }, { held: [] }))).toEqual(["history"])
+    expect(holdbackContext({ requirements: "" }, { held: [] })).toEqual({ requirements: "" })
+  })
+
+  test("redacts the environment's secret values only when they are passed", () => {
+    const env = { DEPLOY_TOKEN: "placeholder-deploy-token-0001" }
+    const input = { requirements: "Deploy with placeholder-deploy-token-0001." }
+    expect(holdbackContext(input, { held: [], env }).requirements).toBe("Deploy with [redacted].")
+    expect(holdbackContext(input, { held: [] })).toEqual(input)
+  })
+})
+
+// VS-34's tool half (SF-14): the read and grep tools redact with these, in the prompt's reading, and the credential
+// list they hold back by path is permission.ts's, which the read tool's rules deny under the key.
+describe("the tool half's redaction", () => {
+  test("redacts a text as the prompt is redacted, by shape and with no environment", () => {
+    const text = `const token = "${t.ghp}" // and ${t.akia}`
+    expect(holdbackText(text)).toBe('const token = "[redacted]" // and [redacted]')
+    expect(holdbackText("process.env.GITHUB_TOKEN ?? tokenizer")).toBe("process.env.GITHUB_TOKEN ?? tokenizer")
+    // No environment value is read, however secret its name.
+    const env = { PROBE_SECRET_VALUE: "plain-words-value-1234" }
+    expect(holdbackText(`x = ${env.PROBE_SECRET_VALUE}`)).toBe(`x = ${env.PROBE_SECRET_VALUE}`)
+  })
+
+  test("reads lines as one text, so a key's header marks body lines a line at a time would miss, and keeps each line", () => {
+    const lines = ["# fixture", rsaBegin, ...rsaBody, rsaEnd, `token: ${t.npm}`]
+    const out = holdbackLines(lines)
+    expect(out).toHaveLength(lines.length)
+    expect(out[0]).toBe("# fixture")
+    expect(out[1]).toBe(rsaBegin)
+    for (const [index, line] of rsaBody.entries()) {
+      expect(out[2 + index]).toBe("[redacted]")
+      // Read alone, a body line has no header, so its shape gives nothing away.
+      expect(holdbackText(line)).toBe(line)
+    }
+    expect(out.at(-1)).toBe("token: [redacted]")
+    expect(holdbackLines([])).toEqual([])
+  })
+
+  test("redacts a key written on one line, with escaped breaks, as a service-account file holds it", () => {
+    const escaped = `{"private_key": "${pkBegin}\\n${rsaBody.join("\\n")}\\n${pkEnd}\\n"}`
+    const out = holdbackText(escaped)
+    for (const line of rsaBody) expect(out).not.toContain(line)
+    expect(out).toContain(pkBegin)
+  })
+
+  test("holds back the credential list permission.ts denies the read tool under the key", () => {
+    // Each pattern's root form or a nested file under it is held back as a credential file.
+    const files = CREDENTIAL_FILES.map((pattern) =>
+      pattern.startsWith("*") ? pattern.replace("*", "keys/app") : pattern,
+    )
+    const result = holdbackFiles(
+      files.map((file) => added(file, ["x"])),
+      { ignored: [] },
+    )
+    expect(result.held.map((file) => [file.path, file.reason])).toEqual(files.map((file) => [file, "credential-file"]))
   })
 })

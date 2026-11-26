@@ -26,6 +26,7 @@ import { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 import { ProviderTransform } from "@/provider/transform"
 import { LLMRequestPrep } from "./llm/request"
+import { reviewRequestProjection } from "./review-request-size"
 
 import { type Tool as AITool, tool, jsonSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
@@ -42,6 +43,7 @@ import { ComputerGeneric } from "@/computer/generic"
 import { Computer } from "@vectordevai/schema/computer"
 import { assertExternalDirectoryEffect, readPatterns } from "@/tool/external-directory"
 import type { Tool } from "@/tool/tool"
+import { ReviewMcp } from "@/review/mcp"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
 import { ulid } from "ulid"
@@ -95,6 +97,11 @@ import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
 import { UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
 import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
+import { REVIEW_LENSES } from "@vectordevai/core/review/types"
+import { holdbackText } from "@vectordevai/core/review/holdback"
+import { holdsBack } from "@vectordevai/core/review/permission"
+import { ReviewSessionAdmission } from "@vectordevai/core/review/session-admission"
+import { ReviewRoutes } from "@/review/route"
 import { Git } from "@/git"
 import { DOCUMENTS as MEMORY_DOCUMENTS } from "@/tool/memory"
 import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
@@ -143,13 +150,19 @@ const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
 const MAX_INSTRUCTION_SNAPSHOTS = 256
 // Vectorscope's reviewers and its judge run as hidden sessions named `vectorscope.<pass>`.
 const VECTORSCOPE = "vectorscope."
+// VS-34 (holdback "secrets"): a review session whose stored rules are holdback's, read as session/tools.ts reads them.
+const holdsReviewBack = (session: { readonly internal?: string; readonly permission?: readonly PermissionV1.Rule[] }) =>
+  session.internal?.startsWith(VECTORSCOPE) === true && holdsBack(session.permission)
 // Agents whose output leaves the machine or reaches the web: research workers and the research judge.
 const OUTWARD_AGENTS = new Set(["researcher", "research-judge"])
 
-/** A pinned review cannot substitute ambient files or a lossy summary for its admitted context. */
+/**
+ * A review session that cannot go on with what it was given: a pinned review cannot substitute ambient files or a lossy
+ * summary for its admitted context, and a "zdr" review never summarises its history (VS-23c). `next` says what to do.
+ */
 export class ReviewContextUnavailable extends Error {
-  constructor(reason: string) {
-    super(`Review incomplete: ${reason} Start a fresh review with the pinned context.`)
+  constructor(reason: string, next = "Start a fresh review with the pinned context.") {
+    super(`Review incomplete: ${reason} ${next}`)
     this.name = "ReviewContextUnavailable"
   }
 }
@@ -251,6 +264,22 @@ const FAST_EXECUTION_SYSTEM_PROMPT = [
   "Begin validation as soon as its dependencies are ready and avoid redundant narration, but never skip tests or silently lower quality.",
 ].join(" ")
 
+function sessionSystem(
+  environment: string[],
+  instructions: string[],
+  mcp?: string,
+  skills?: string,
+  executionMode?: SessionV1.User["executionMode"],
+) {
+  return [
+    ...environment,
+    ...instructions,
+    ...(mcp ? [mcp] : []),
+    ...(skills ? [skills] : []),
+    ...(executionMode === "fast" ? [FAST_EXECUTION_SYSTEM_PROMPT] : []),
+  ]
+}
+
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
   const padding = trimmed.endsWith("==") ? 2 : trimmed.endsWith("=") ? 1 : 0
@@ -275,7 +304,18 @@ export class FreeModelsResumeError extends Schema.TaggedErrorClass<FreeModelsRes
   message: Schema.String,
 }) {}
 
+export interface ReviewFirstRequest {
+  readonly session: NonNullable<Session.CreateInput>
+  readonly prompt: Omit<PromptInput, "sessionID">
+  readonly route: ReviewRoutes.Registered
+  readonly conditional?: { pass: "verify" | "judge"; candidateLimit: number; maxSerializedTextChars?: number }
+}
+
 export interface Interface {
+  /** Locally size the fresh review helper's model-visible request, before creating or admitting a session. */
+  readonly reviewFirstRequest?: (
+    input: ReviewFirstRequest,
+  ) => Effect.Effect<{ promptTokens: number; cached?: boolean } | undefined>
   /** Reuse prompt model selection for owner actions without admitting a prompt or changing a free selection. */
   readonly currentModel: (
     sessionID: SessionID,
@@ -452,7 +492,13 @@ const layer = Layer.effect(
             ? Effect.die(
                 new Error("Workflow runs cannot receive prompts or commands; resume them with the workflow tool."),
               )
-            : TaskPlace.within(sessionID)(effect),
+            : ReviewMcp.restrictedFamily(session, sessions.get).pipe(
+                Effect.andThen((restricted) =>
+                  TaskPlace.within(sessionID)(
+                    restricted ? Effect.provideService(effect, ReviewMcp.Restricted, true) : effect,
+                  ),
+                ),
+              ),
         ),
       )
     const admit: Interface["admit"] = (sessionID) =>
@@ -1766,6 +1812,16 @@ const layer = Layer.effect(
       )(function* (part) {
         if (part.type === "file") {
           if (part.source?.type === "resource") {
+            if (yield* ReviewMcp.restrictedFamily(current, sessions.get))
+              return [
+                {
+                  messageID: info.id,
+                  sessionID: input.sessionID,
+                  type: "text",
+                  synthetic: true,
+                  text: ReviewMcp.unavailable,
+                },
+              ]
             const { clientName, uri } = part.source
             yield* Effect.logInfo("mcp resource", { clientName, uri, mime: part.mime })
             const pieces: Draft<SessionV1.Part>[] = [
@@ -2558,6 +2614,29 @@ const layer = Layer.effect(
         // replace the exact base instructions supplied by the owning service.
         if (pinnedReview && tasks.some((task) => task.type === "compaction"))
           throw new ReviewContextUnavailable("Compaction would discard the provided review context.")
+        // VS-23d (SF-15): a recorded review hold still requires a live ZDR policy after cache eviction or restart.
+        // The desktop's HTTP prompt can adopt the policy. A command or summary cannot.
+        const recordedHold = session.metadata?.[ReviewSessionAdmission.ZDR_METADATA] === true
+        if (
+          session.internal?.startsWith(VECTORSCOPE) &&
+          (recordedHold
+            ? !ReviewRoutes.zdr(sessionID)
+            : !ReviewRoutes.known(sessionID) &&
+              (reviewScope(msgs).privacy === "zdr" ||
+                ReviewRoutes.serverPolicy((yield* config.getGlobal()).review).privacy === "zdr"))
+        )
+          throw new ReviewContextUnavailable(
+            'This review\'s privacy is "zdr", and no review holds this session to a zero data retention route, so nothing was sent.',
+            "Start a new review.",
+          )
+        // VS-23c (SF-12b): a "zdr" review's history is never summarised. The summary would be one more request, on the
+        // compaction agent's model or the pass's, that is not one of the pass's own turns (ReviewRoutes.turn refuses it
+        // as well). An overflow, a step that ends in "compact" and a pending compaction task all come back here first.
+        if (tasks.some((task) => task.type === "compaction") && ReviewRoutes.zdr(sessionID))
+          throw new ReviewContextUnavailable(
+            'This review\'s privacy is "zdr", so its history is never summarised, and nothing more was sent.',
+            "Review fewer files at once, or use a model with a larger context.",
+          )
         if (pinnedReview && reviewScope(msgs).instructions !== "provided")
           throw new ReviewContextUnavailable("The provided review context is no longer available.")
         if (resumed && lastUser.id === resumed.parentID)
@@ -2852,6 +2931,7 @@ const layer = Layer.effect(
         // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
         // found for it is not filled in from the owner's personal memory or private documents.
         const audience = audienceOf(session, agent.name)
+        const holdback = holdsReviewBack(session)
         // Attachments the user marked to remember become documents while this request runs, never at admission. A
         // session a guest is in keeps none.
         if (!guest && !session.parentID && !session.internal)
@@ -2889,7 +2969,7 @@ const layer = Layer.effect(
               query: (sized?.users ?? SessionMemory.request(msgs)).map(SessionMemory.typed).join("\n"),
               first: !msgs.some((message) => message.info.role === "assistant" && message.info.agent !== "quick"),
             })
-        msgs = yield* withheldRecall(sessionID, msgs, personal, audience)
+        msgs = yield* withheldRecall(sessionID, msgs, { personal, audience, holdback })
         // What the request carries out of the brain, for Vector Local's network log; counted only while it is on.
         const carried = Egress.policy().enabled
           ? carriedOf(msgs, personal, personal && audience === "owner", learned.length)
@@ -3205,11 +3285,14 @@ const layer = Layer.effect(
                       : {}),
                   },
                 ).pipe(Effect.orDie),
-            quick || pinnedReview ? Effect.succeed(undefined) : sys.mcp(agent, rules),
+            quick || pinnedReview ? Effect.succeed(undefined) : sys.mcp(agent, rules, session.internal),
             // The quick lane sends this request's own messages; autocomplete only the newest one, below.
             MessageV2.toModelMessagesEffect(history, model, { dropMedia }),
           ])
-          const instructions = snapshot.instructions
+          // Under holdback "secrets" (the session's stored rules, as the tools read them) a review session's instruction
+          // files and Brain digest are redacted as the read tool redacts loaded instructions: a credential in AGENTS.md
+          // is still a credential.
+          const instructions = holdback ? snapshot.instructions.map(holdbackText) : snapshot.instructions
           if (tools.memory && snapshot.documents)
             tools.memory = { ...tools.memory, description: `${tools.memory.description}\n${MEMORY_DOCUMENTS.trim()}` }
           const system = [
@@ -3224,11 +3307,7 @@ const layer = Layer.effect(
                   ...(stillWorking ? [stillWorking] : []),
                 ]
               : []),
-            ...env.session,
-            ...instructions,
-            ...(mcpInstructions ? [mcpInstructions] : []),
-            ...(skills ? [skills] : []),
-            ...(lastUser.executionMode === "fast" ? [FAST_EXECUTION_SYSTEM_PROMPT] : []),
+            ...sessionSystem(env.session, instructions, mcpInstructions, skills, lastUser.executionMode),
           ]
           const format = lastUser.format ?? { type: "text" as const }
           if (
@@ -4096,8 +4175,7 @@ const layer = Layer.effect(
     const withheldRecall = Effect.fn("SessionPrompt.withheldRecall")(function* (
       sessionID: SessionID,
       msgs: SessionV1.WithParts[],
-      personal: boolean,
-      audience: Brain.Audience = "owner",
+      { personal, audience, holdback }: { personal: boolean; audience: Brain.Audience; holdback: boolean },
     ) {
       // What a tool found (memory search and reads, linked files' pointers) is filled in from personal memory and
       // private documents only for a role whose output stays in the session.
@@ -4211,15 +4289,18 @@ const layer = Layer.effect(
           const recall = SessionMemory.recall(part)
           if (part.type === "text" && recall && (recall.cards.length > 0 || (personal && recall.personal.length > 0))) {
             const lines = recall.ids.flatMap((id) => cards.get(id) ?? memory.get(id) ?? [])
+            if (recall.review) {
+              // Recall renders scope paths as well as screened note text. Use the estimator's redaction on the block.
+              const text = ownerBlock(lines)
+              return [{ ...part, text: holdback ? holdbackText(text) : text }]
+            }
             return [
               {
                 ...part,
-                text: recall.review
-                  ? ownerBlock(lines)
-                  : Brain.recallText(lines, {
-                      newest: recall.newest,
-                      documents: recall.ids.some((id) => cards.has(id)),
-                    }),
+                text: Brain.recallText(lines, {
+                  newest: recall.newest,
+                  documents: recall.ids.some((id) => cards.has(id)),
+                }),
               },
             ]
           }
@@ -4430,16 +4511,16 @@ const layer = Layer.effect(
         command: input.command,
         agent: input.agent,
       })
-      const cmd = yield* commands.get(input.command)
+      const currentSession = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      const cmd = yield* commands.get(input.command, currentSession.internal)
       if (!cmd) {
-        const available = (yield* commands.list()).map((c) => c.name)
+        const available = (yield* commands.list(currentSession.internal)).map((c) => c.name)
         const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
       const agentName = cmd.agent ?? input.agent
-      const currentSession = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const agent = !agentName
         ? yield* agents.defaultInfo()
         : currentSession.internal
@@ -4612,7 +4693,212 @@ const layer = Layer.effect(
       return result
     })
 
+    const reviewFirstRequest = Effect.fn("SessionPrompt.reviewFirstRequest")(
+      function* ({ session, prompt, route, conditional }: ReviewFirstRequest) {
+        const part = prompt.parts[0]
+        const format = prompt.format
+        const rules = session.permission
+        const name = prompt.agent
+        const lensSession = REVIEW_LENSES.some(
+          (lens) =>
+            session.internal === `vectorscope.lens.${lens}` ||
+            session.internal === `${PINNED_SESSION_PREFIX}lens.${lens}`,
+        )
+        if (
+          !session.internal ||
+          (!lensSession && !/^vectorscope\.(?:bound\.)?(?:review|security|verify|judge)$/.test(session.internal)) ||
+          !name ||
+          !["review", "security", "vectorscope"].includes(name) ||
+          route.agent !== name ||
+          !prompt.model ||
+          format?.type !== "json_schema" ||
+          prompt.parts.length !== 1 ||
+          part?.type !== "text" ||
+          part.ignored ||
+          part.synthetic ||
+          prompt.size ||
+          prompt.noReply ||
+          prompt.secondOpinion ||
+          prompt.judge ||
+          isComputerMention(part.metadata?.[Computer.MENTION_KEY]) ||
+          !rules ||
+          rules[0]?.permission !== "*" ||
+          rules[0]?.pattern !== "*" ||
+          rules[0]?.action !== "deny" ||
+          rules
+            .slice(1)
+            .some(
+              (rule) =>
+                !["read", "grep", "glob", "list", "bash", "external_directory", "StructuredOutput"].includes(
+                  rule.permission,
+                ),
+            )
+        )
+          return
+        const scope = scopeOf(part.metadata)
+        const pinned = session.internal.startsWith(PINNED_SESSION_PREFIX)
+        if (
+          pinned !== (scope?.instructions === "provided") ||
+          (!route.decision?.allowed && route.decision !== undefined)
+        )
+          return
+        if (
+          conditional &&
+          (!session.internal.endsWith("." + conditional.pass) ||
+            !Number.isSafeInteger(conditional.candidateLimit) ||
+            conditional.candidateLimit < 0 ||
+            conditional.maxSerializedTextChars === undefined ||
+            !Number.isSafeInteger(conditional.maxSerializedTextChars) ||
+            conditional.maxSerializedTextChars < JSON.stringify(part.text).length)
+        )
+          return
+
+        const settings = yield* config.get()
+        if (!flags.pure && settings.plugin_origins?.length) return
+        if (flags.experimentalNativeLlm && route.policy.privacy !== "zdr") return
+        const info = provider.reviewProvider && (yield* provider.reviewProvider(prompt.model.providerID))
+        const model = info?.models[prompt.model.modelID]
+        if (!info || !model || model.api.npm === "gitlab-ai-provider") return
+        const hooks = plugin.reviewRequestHooks && (yield* plugin.reviewRequestHooks())
+        const defs = registry.reviewDefinitions && (yield* registry.reviewDefinitions())
+        if (!hooks || !defs) return
+
+        const agent = yield* agents.helper(name, pinned ? { reviewedPrompt: true } : undefined)
+        if (!agent) return
+        const same = agent.model?.providerID === model.providerID && agent.model?.modelID === model.id
+        const variant =
+          prompt.variant ?? (same && agent.variant && model.variants?.[agent.variant] ? agent.variant : undefined)
+        // A request-shaped user message only in memory. No session, registry entry, guard, transcript, or assistant is created.
+        const sessionID = SessionID.descending()
+        const user: SessionV1.User = {
+          id: MessageID.ascending(),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: name,
+          model: { ...prompt.model, variant },
+          tools: prompt.tools,
+          system: prompt.system,
+          executionMode: prompt.executionMode,
+          format,
+        }
+        const parts: SessionV1.Part[] = [{ ...part, id: PartID.ascending(), messageID: user.id, sessionID }]
+        const tools: Record<string, AITool> = Object.fromEntries(
+          defs.map((def) => {
+            const { description, schema } = SessionTools.definition(model, def)
+            return [def.id, { description, inputSchema: jsonSchema(schema) }]
+          }),
+        )
+        tools.StructuredOutput = createStructuredOutputTool({
+          schema: format.schema,
+          retryCount: format.retryCount,
+          model,
+          onSuccess() {},
+        })
+        const offered = Object.keys(LLMRequestPrep.resolveTools({ tools, agent, permission: rules, user }))
+        const nested = session.parentID !== undefined
+        const subagents = {
+          ...SystemPrompt.subagentAvailability({
+            agents: yield* agents.list(),
+            permission: agent.permission,
+            session: rules,
+            agent: name,
+            nested,
+          }),
+          ...(nested ? { fork: false } : {}),
+          teammates: offered.includes("send_teammate_message"),
+        }
+        const env = yield* sys.environment(model, {
+          subagents,
+          tools: offered,
+          nested,
+          workspace: !pinned,
+          date: user.time.created,
+        })
+        const instructions: string[] = []
+        let skills: string | undefined
+        // The real review session uses the empty MCP catalog, including zero-tool instructions and resource tools.
+        if (!pinned) {
+          if (
+            settings.instructions?.some((source) => /^https?:\/\//.test(source)) ||
+            (settings.skills?.urls?.length && !Permission.disabled(["skill"], agent.permission).has("skill"))
+          )
+            return
+          if (!brain.previewReviewContext) return
+          const place = yield* instruction.place()
+          const paths = scope?.paths ?? []
+          const memory = yield* brain.previewReviewContext(place, {
+            personal: !freeModelMayTrain(model) && !(session.parentID && (yield* guests.marked(session.parentID))),
+            kinds: habitsOf(session, name, scope).kinds,
+            query: scopeQuery(paths),
+            files: paths.map((file) => path.join(place.root, file)),
+            wrap: ownerBlock,
+          })
+          if (!memory) return
+          // Redacted under holdback as the session's own request redacts them, so this estimate matches what is sent.
+          const held = holdsReviewBack(session) ? holdbackText : (text: string) => text
+          instructions.push(...(yield* instruction.system()).map(held))
+          if (memory.digest) instructions.push(held(memory.digest))
+          if (memory.recall)
+            parts.push({
+              type: "text",
+              synthetic: true,
+              id: PartID.ascending(),
+              messageID: user.id,
+              sessionID,
+              text: held(memory.recall),
+            })
+          skills = yield* sys.skills(agent, { learned: [] })
+        }
+        const messages = yield* MessageV2.toModelMessagesEffect([{ info: user, parts }], model)
+        if ((agent.steps ?? Infinity) <= 1) messages.push({ role: "assistant", content: MAX_STEPS_PROMPT })
+        const system = [
+          ...sessionSystem(env.session, instructions, undefined, skills, user.executionMode),
+          STRUCTURED_OUTPUT_SYSTEM_PROMPT,
+        ]
+        // Only auth *kind* changes model input. Evaluate the possible shapes without consulting any credentials.
+        const authKinds: Array<Pick<Auth.Info, "type"> | undefined> =
+          model.providerID === "openai" ? [undefined, { type: "oauth" }] : [undefined]
+        let largest: { promptTokens: number; cached?: boolean } | undefined
+        for (const kind of authKinds) {
+          const prepared = yield* LLMRequestPrep.prepare({
+            user,
+            agent,
+            provider: info,
+            model,
+            permission: rules,
+            sessionID,
+            parentSessionID: session.parentID,
+            explore: subagents.permitted?.includes("explore"),
+            stableSystem: env.stable,
+            system,
+            messages,
+            tools,
+            isWorkflow: false,
+            modelInputOnly: true,
+            purpose: "review",
+            ...(pinned ? { pinnedContext: true } : {}),
+            auth: kind,
+            flags,
+            plugin: hooks,
+          })
+          const estimate = yield* reviewRequestProjection({
+            prepared,
+            model,
+            ...(conditional && conditional.maxSerializedTextChars !== undefined
+              ? { conditional: { text: part.text, maxSerializedTextChars: conditional.maxSerializedTextChars } }
+              : {}),
+          })
+          if (!estimate) return
+          if (!largest || estimate.promptTokens > largest.promptTokens) largest = estimate
+        }
+        return largest
+      },
+      Effect.catchCause((cause) => (Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(undefined))),
+    )
+
     return Service.of({
+      reviewFirstRequest,
       currentModel,
       awaitTitles,
       cancel,

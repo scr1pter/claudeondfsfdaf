@@ -26,6 +26,7 @@
     "package.json",
     "test-browser/vectorscope-owner.test.ts",
     "test-browser/vectorscope-local.test.ts",
+    "test-browser/vectorscope-fix.test.ts",
     "test-browser/model-picker-state.test.ts"
   ],
   "exclude": ["dist", "ts-dist"]

@@ -1,5 +1,6 @@
 #pragma once
 #include <windows.h>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 
@@ -9,7 +10,8 @@ enum class WindowsComObservation { current, uninitialized, cancellation_unavaila
 // accepted OS operation or force a remote provider to honor cancellation; callers reject late results.
 class WindowsComCall final {
  public:
-  explicit WindowsComCall(uint32_t milliseconds = 50);
+  explicit WindowsComCall(uint32_t milliseconds = 50,
+    std::chrono::steady_clock::time_point outer_deadline = std::chrono::steady_clock::time_point::max());
   ~WindowsComCall();
   WindowsComCall(const WindowsComCall&) = delete;
   WindowsComCall& operator=(const WindowsComCall&) = delete;

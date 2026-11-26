@@ -33,11 +33,23 @@ describe("the app's browser bundle", () => {
         "packages/core/src/local-mode/sources.ts",
         // config.ts reads zdrAttested's attestation objects through it (VS-33).
         "packages/core/src/review/privacy.ts",
+        // The desktop's holdback half (VS-34, SF-15), with the shapes it redacts by and the paths it holds back.
+        "packages/core/src/review/holdback.ts",
+        "packages/core/src/brain/scan.ts",
+        "packages/core/src/util/wildcard.ts",
+        // The desktop's fix actions (SF-10b) and what they share with the CLI and the engine's wire schema.
+        "packages/app/src/features/vectorscope/local-fix.ts",
+        "packages/app/src/features/vectorscope/local-fix-panel.tsx",
+        "packages/app/src/features/vectorscope/local-fix-slot.tsx",
+        "packages/core/src/review/fix-plan.ts",
+        "packages/schema/src/review-fix.ts",
         "packages/app/src/workers/local-transcription.worker.ts",
         "packages/session-ui/src/components/markdown-shiki.worker.ts",
       ]),
     )
     expect(result.runtime).toEqual([])
+    // The renderer reaches the engine only through the generated client: no engine module is bundled.
+    expect(result.modules.filter((file) => file.startsWith("packages/engine/"))).toEqual([])
     expect(result.code).toBe(0)
   })
 

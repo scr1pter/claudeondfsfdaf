@@ -5,6 +5,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpRouter, HttpServer 
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { createVectorClient } from "@vectordevai/sdk/v2"
+import { BrainRunProposals } from "@vectordevai/core/brain/run-proposals"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { GUEST_REQUEST_HEADER, FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { SessionAudience } from "@vectordevai/core/session/audience"
@@ -187,6 +188,68 @@ it.live("owner preview validates without writes; guests and forwarded guests can
     expect((yield* call(() => f.sdk.session.children({ sessionID: allowedID }))).data).toHaveLength(0)
     expect(yield* f.llm.inputs).toHaveLength(0)
   }),
+)
+
+it.live(
+  "the owner import handler stages a valid returned Brain draft for review",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture()
+      const text = "Run the local parser fixture after changing token delimiters."
+      const packed = yield* call(() =>
+        BrainRunProposals.pack({
+          memory: {
+            format: "vector-memory",
+            version: 1,
+            scope: "repository",
+            exportedAt: 30,
+            documents: [],
+            entries: [
+              {
+                id: "returned-parser-fixture",
+                kind: "lesson",
+                scope: "repository",
+                status: "proposed",
+                pinned: false,
+                text,
+                paths: [],
+                evidence: [],
+                createdAt: 20,
+              },
+            ],
+          },
+          startedAt: 10,
+          publicRepository: false,
+          maxBytes: BrainRunProposals.MAX_BYTES,
+          screen: async () => [true],
+        }),
+      )
+      if (!packed) throw new Error("Could not encode the returned draft fixture")
+      const post = (sha256: string) =>
+        f.raw("/experimental/brain/run-proposals/import", owner, {
+          path: packed.path,
+          base64url: packed.bytes.toString("base64url"),
+          sha256,
+          publicRepository: false,
+        })
+      const rejected = yield* post("0".repeat(64))
+      expect(rejected.status).toBe(400)
+      const rejectedRows = yield* f.raw("/memory?scope=repository&filter=all")
+      expect(rejectedRows.status).toBe(200)
+      expect(yield* call(() => rejectedRows.json())).toMatchObject({ entries: [] })
+
+      const accepted = yield* post(packed.sha256)
+      expect(accepted.status).toBe(200)
+      expect(yield* call(() => accepted.json())).toEqual({ proposed: 1, known: 0, refused: 0, over: 0 })
+      const review = yield* f.raw("/memory?scope=repository&filter=review")
+      expect(review.status).toBe(200)
+      expect(yield* call(() => review.json())).toMatchObject({
+        entries: [{ text, scope: "repository", status: "proposed", pinned: false, origin: "import" }],
+      })
+      const active = yield* f.raw("/memory?scope=repository&filter=active")
+      expect(active.status).toBe(200)
+      expect(yield* call(() => active.json())).toMatchObject({ entries: [] })
+    }),
 )
 
 it.live(
