@@ -39,6 +39,8 @@ import { accountHandle, importTicketKeys, verifyTicket, type TicketClaims } from
 export const TICKET_HEADER = "x-vector-relay-ticket"
 /** The internal request's nonce, which the object records so a signed request is applied once. */
 export const NONCE_HEADER = "x-vector-relay-nonce"
+/** The HMAC-verified signing time, replaced by the Worker rather than copied from an external header. */
+export const SIGNED_AT_HEADER = "x-vector-relay-signed-at"
 /** REMOTE_FLAGS key whose value "1" turns the relay off. */
 export const KILL_KEY = "kill"
 /** Meters of a period are kept this long past its end (as the API's meters are). */
@@ -88,6 +90,8 @@ export class AccountRelay {
   private readonly ctx: DurableObjectState
   private readonly env: Env
   private readonly runtime: Runtime
+  /** Serializes the control object's durable flag fence and its external KV operation, even after rejection. */
+  private flagWrites: Promise<void> = Promise.resolve()
   private plan: Plan | undefined
   private flushedAt: number
   /** Awake time not yet written: the union of [event, event + idleTailMs] since the last write, in memory. */
@@ -128,6 +132,15 @@ export class AccountRelay {
       const path = new URL(request.url).pathname
       if (path === "/connect") return await this.connect(request, now)
       const action = /^\/internal\/([a-z-]{1,32})$/.exec(path)?.[1]
+      if (action === "flags" && request.method === "POST") {
+        // Enqueue before parsing: equal signing times retain control-object arrival order even if decoding yields.
+        const operation = this.flagWrites.then(() => this.internal(action, request, now))
+        this.flagWrites = operation.then(
+          () => undefined,
+          () => undefined,
+        )
+        return await operation.catch(() => failure(503, "INTERNAL_UNAVAILABLE"))
+      }
       if (action && request.method === "POST") return await this.internal(action, request, now)
       return failure(404, "RELAY_NOT_FOUND")
     } finally {
@@ -684,8 +697,13 @@ export class AccountRelay {
           return answer(this.deviceList(now))
         case "revoke-device":
           return this.revokeDevice(body, now)
-        case "flags":
-          return await this.flags(body)
+        case "flags": {
+          const text = request.headers.get(SIGNED_AT_HEADER) ?? ""
+          const signedAt = Number(text)
+          if (!/^(0|[1-9]\d{0,15})$/.test(text) || !Number.isSafeInteger(signedAt) || signedAt % 1000 !== 0)
+            return failure(401, "INTERNAL_SIGNATURE_INVALID")
+          return await this.writeFlags(body, signedAt)
+        }
         case "job-offer":
           return await this.jobOffer(body, now)
         default:
@@ -860,11 +878,41 @@ export class AccountRelay {
     return answer({ erased: true })
   }
 
-  /** The Worker's kill flag, written by the API when the owner's `remote` switch changes (any account's object). */
-  private async flags(body: Record<string, unknown>) {
+  /**
+   * The Worker's kill flag, routed through its one control object. Whole-second signing times order both directions;
+   * equal times follow arrival order. Persist the newest intent before KV so a restart or uncertain write cannot let
+   * an older call overwrite it. Only a confirmed newest intent can be reported as applied to a stale caller.
+   * KV retains its existing propagation semantics; direct writes outside this control object have no ordering fence.
+   */
+  private async writeFlags(body: Record<string, unknown>, signedAt: number) {
     if (typeof body.kill !== "boolean") return failure(400, "INTERNAL_BAD_REQUEST")
+    const row = this.sql<{ v: string }>("SELECT v FROM meta WHERE k = ?", "flags")[0]
+    const newest: unknown = row === undefined ? undefined : JSON.parse(row.v)
+    if (newest !== undefined) {
+      if (
+        !newest ||
+        typeof newest !== "object" ||
+        Array.isArray(newest) ||
+        Object.keys(newest).length !== 3 ||
+        !("kill" in newest) ||
+        typeof newest.kill !== "boolean" ||
+        !("signedAt" in newest) ||
+        typeof newest.signedAt !== "number" ||
+        !Number.isSafeInteger(newest.signedAt) ||
+        newest.signedAt < 0 ||
+        newest.signedAt % 1000 !== 0 ||
+        !("confirmed" in newest) ||
+        typeof newest.confirmed !== "boolean"
+      )
+        return failure(503, "INTERNAL_UNAVAILABLE")
+      if (signedAt < newest.signedAt)
+        return newest.confirmed ? answer({ kill: newest.kill, applied: false }) : failure(503, "INTERNAL_UNAVAILABLE")
+    }
+    // Durable Object SQL commits this fence before the external KV operation is released through its output gate.
+    this.setMeta("flags", { kill: body.kill, signedAt, confirmed: false })
     if (body.kill) await this.env.REMOTE_FLAGS.put(KILL_KEY, "1")
     else await this.env.REMOTE_FLAGS.delete(KILL_KEY)
+    this.setMeta("flags", { kill: body.kill, signedAt, confirmed: true })
     return answer({ kill: body.kill })
   }
 

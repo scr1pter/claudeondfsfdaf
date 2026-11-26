@@ -103,6 +103,7 @@ export async function opsCall(
   body: Readonly<Record<string, unknown>>,
   fetcher: typeof fetch = fetch,
   now = Date.now(),
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const origin = opsWorkerOrigin()
   if ((!opsEnabled() && action !== "erase") || !origin || !internalConfigured("ops")) throw unavailable()
@@ -116,7 +117,7 @@ export async function opsCall(
     response = await internalFetch(
       "ops",
       new URL(`${OPS_INTERNAL_PREFIX}${action}`, origin),
-      { method: "POST", body: JSON.stringify(body) },
+      { method: "POST", body: JSON.stringify(body), signal },
       fetcher,
       now,
     )
