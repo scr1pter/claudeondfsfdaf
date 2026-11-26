@@ -636,6 +636,46 @@ describe("jobs (R-C2)", () => {
     }
   })
 
+  test.each([
+    { name: "while signed out", signInEarly: false },
+    { name: "after a new sign-in", signInEarly: true },
+  ])("drops a stale token $name", async ({ signInEarly }) => {
+    const relay = createMemoryRelay()
+    let tokenReads = 0
+    const pending = Promise.withResolvers<string>()
+    const env = jobsComputer(relay, {}, undefined, async () => {
+      tokenReads += 1
+      return tokenReads === 1 ? pending.promise : "vct_new_login"
+    })
+    const signIn = async () => {
+      await env.link.refresh()
+      await turns(() => env.link.status().state === "online")
+    }
+    const opening = env.link.setEnabled(true)
+    try {
+      await until(() => tokenReads === 1)
+      env.link.signedOut()
+      await env.link.jobsChanged()
+      expect(env.link.status().state).toBe("signed-out")
+      expect(tokenReads).toBe(1)
+
+      if (signInEarly) await signIn()
+      pending.resolve("vct_previous_login")
+      await opening
+      expect(env.attempts).toHaveLength(signInEarly ? 1 : 0)
+      expect(env.sockets()).toBe(signInEarly ? 1 : 0)
+      expect(env.link.status().state).toBe(signInEarly ? "online" : "signed-out")
+
+      if (!signInEarly) await signIn()
+      expect(tokenReads).toBe(2)
+      expect(env.attempts).toHaveLength(1)
+      expect(env.sockets()).toBe(1)
+    } finally {
+      pending.resolve("vct_previous_login")
+      env.link.stop()
+    }
+  })
+
   test("the jobs cadence counts from each connection, and a close, want(false) or stop() ends it", async () => {
     const relay = createMemoryRelay()
     // The app's own timing: a 25-s ping, the 12-hour jobs cadence and a 1-s retry base.

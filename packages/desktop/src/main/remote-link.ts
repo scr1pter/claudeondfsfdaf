@@ -181,7 +181,8 @@ export function createRemoteLink(deps: LinkDependencies) {
     identity?: RemoteIdentity
     loaded?: Promise<void>
     socket?: RemoteSocket
-    opening?: boolean
+    opening?: symbol
+    signedOut: boolean
     online: boolean
     status: RemoteState
     message?: string
@@ -207,6 +208,7 @@ export function createRemoteLink(deps: LinkDependencies) {
   } = {
     online: false,
     status: "off",
+    signedOut: false,
     viewers: 0,
     attached: new Set(),
     peers: new Map(),
@@ -704,8 +706,13 @@ export function createRemoteLink(deps: LinkDependencies) {
 
   // Jobs never make an identity here: setEnabled and startPairing do, after the person turned Remote on (R-C2).
   const wanted = () => {
-    if (state.stopped || !deps.enabled.get() || !state.identity) return false
+    if (state.stopped || state.signedOut || !deps.enabled.get() || !state.identity) return false
     return phonesWanted() || jobsWanted()
+  }
+
+  const idleStatus = (): RemoteState => {
+    if (!deps.enabled.get()) return "off"
+    return state.signedOut ? "signed-out" : "ready"
   }
 
   const clearRetry = () => {
@@ -725,13 +732,16 @@ export function createRemoteLink(deps: LinkDependencies) {
   const open = async () => {
     const identity = state.identity
     if (!identity || state.socket || state.opening) return
-    state.opening = true
+    const opening = Symbol()
+    state.opening = opening
     setStatus("connecting")
     const token = await ticketToken()
+    if (state.opening !== opening) return
     const minted = wanted() ? await mint(identity, token) : undefined
-    state.opening = false
+    if (state.opening !== opening) return
+    state.opening = undefined
     if (state.socket) return
-    if (!minted || !wanted()) return void setStatus(deps.enabled.get() ? "ready" : "off")
+    if (!minted || !wanted()) return void setStatus(idleStatus())
     if ("refused" in minted) {
       setStatus(minted.refused, minted.message)
       retryIn(minted.retryMs)
@@ -842,7 +852,7 @@ export function createRemoteLink(deps: LinkDependencies) {
   const closed = (code: number) => {
     teardown()
     if (!wanted()) {
-      setStatus(deps.enabled.get() ? "ready" : "off")
+      setStatus(idleStatus())
       return
     }
     state.failures += 1
@@ -897,7 +907,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     if (!wanted()) {
       clearRetry()
       if (state.socket) close()
-      setStatus(deps.enabled.get() ? "ready" : "off")
+      setStatus(idleStatus())
       return
     }
     if (!state.socket) await open()
@@ -924,7 +934,10 @@ export function createRemoteLink(deps: LinkDependencies) {
     status,
     start: () => evaluate(),
     /** Looks again at whether to connect: after a sign-in, or a plan change. */
-    refresh: () => evaluate(),
+    refresh() {
+      state.signedOut = false
+      return evaluate()
+    },
     /** Whether this computer takes jobs changed (R-C2): connect or close for it, and pick the ticket cadence again. */
     jobsChanged: () => evaluate(),
     /**
@@ -934,6 +947,8 @@ export function createRemoteLink(deps: LinkDependencies) {
     device: () => state.identity?.device,
     /** Signed out of Vector: the connection closes until a sign-in. */
     signedOut() {
+      state.signedOut = true
+      state.opening = undefined
       clearRetry()
       pairing.cancel()
       close()
