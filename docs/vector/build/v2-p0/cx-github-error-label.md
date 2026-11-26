@@ -1,6 +1,6 @@
 # cx-github-error-label: own-key "Agent error: [object Object]" line (#98)
 
-Branch `cx-github-error-label`, the continuation of Codex's draft PR #98 (branch `github-error-label`). This v2 run took the draft over on 2026-11-25 because it had been idle for more than a day before the Saturday 2026-11-28 deadline. No feature flag changes, no public claims.
+Branch `cx-github-error-label`, the continuation of Codex's draft PR #98 (branch `github-error-label`). This v2 run took the draft over on 2026-11-25 because it had been idle for more than a day. No feature flag changes, no public claims.
 
 ## 2026-11-25, an own-key run printed "Agent error: [object Object]"
 
