@@ -13,6 +13,7 @@ import {
   directoryAcceptKey,
   isDirectoryAutoAccepting,
   autoRespondsPermission,
+  phoneReviewAsk,
   phoneTurnAllows,
   sessionLineage,
 } from "./permission-auto-respond"
@@ -167,13 +168,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
     async function willAutoRespond(permission: PermissionRequest, directory?: string) {
       if (!shouldAutoRespond(permission, directory)) return false
       const session = directory ? serverSync().child(directory, { bootstrap: false })[0].session : []
-      const runID = permission.metadata?.runID
-      const review =
-        directory &&
-        typeof runID === "string" &&
-        (permission.permission === "connect" || permission.permission === "connect_model")
-          ? { runID, sessionID: permission.sessionID, directory }
-          : undefined
+      const review = phoneReviewAsk(permission, directory)
       const allowed = await phoneTurnAllows(
         platform.remote ? (ids) => platform.remote!.isPhoneTurn(ids, review) : undefined,
         sessionLineage(session, permission.sessionID),
