@@ -103,3 +103,27 @@ Narrowing after a registry audit is owner item O5. The public docs page says not
 **Tests.** Lead ruling: no new test for comments. The behaviour each corrected comment describes is already pinned: `packages/desktop/src/main/research-proxy.test.ts` (the research proxy's challenge, secret and session wiring), `packages/core/test/local-mode/egress-proxy.test.ts`, and `packages/engine/test/config/local-policy.test.ts`, "the held change says how to apply it from where this Vector runs" (the desktop advice "Review and apply"). Checks on this branch: `git grep -n "Nothing starts it yet"` and `git grep -n "no confirmation of its own yet"` both come back empty. No mutation check, since nothing executes.
 
 **Waiting (VL-5c, W1).** `packages/engine/src/tool/shell/sandbox.ts`, the `offline()` docstring, says "on macOS and Linux it runs in the sandbox with no network but this computer's", but Linux bubblewrap's `--unshare-net` leaves no network at all (`OFFLINE_NOTICE.bubblewrap`, and the docs page already says so). The file is held by #128, #161, #162, #163, #167 and #170, and #161 edits the lines right after that docstring. When they have merged or closed, the docstring becomes: "on macOS it runs in the sandbox with no network but this computer's; on Linux, bubblewrap's --unshare-net leaves it no network at all, not even this computer's". Comment-only, pinned by the existing `OFFLINE_NOTICE` copy.
+
+## 2026-11-25, VL-6: the guard's Octokit note under Bun
+
+**What it closes.** `packages/core/src/local-mode/guard.ts` listed "@actions/github's Octokit (`vector github`)" among the requests the guard does not see under Bun, because the `undici` package's fetch is Bun.fetch there. The gap is already closed in code: since `e60ae35ea` (2026-10-22) every GitHub client in `vector github` is given `request.fetch: githubFetch` (`packages/engine/src/cli/cmd/github.shared.ts`, `Egress.fetch("github", …)`) or `readOnlyFetch`, which wraps it: `github.agent.ts` (`readOnlyGithub`, REST and GraphQL), `github.app.ts`, `github.handler.ts` (three clients), `github.publish.ts` and `github.review-api.ts`. `@actions/github` is imported only for `github.context` (`github.handler.ts`), and nothing calls `getOctokit`. So these requests are labelled, decided and logged. Only the comment was stale, and nothing stopped a new client from dropping the labelled fetch.
+
+**Lead ruling.** No held file is needed: fix the comment and add a source-scan test beside the existing "never calls Bun.fetch" test. The `vector github` files (held by #98, #106 and #160) are read, never edited. None of those PRs, nor #142, adds an Octokit or GraphQL client (checked in their diffs on 2026-11-25).
+
+**Fix.** `packages/core/src/local-mode/guard.ts`: the "Neither mode covers" bullet keeps "Vector's own code never calls Bun.fetch, which a test checks, and the guard is the first import of every entry point", says a library that sends through `undici`'s fetch is not seen under Bun, and says Vector's own GitHub clients are each given a labelled fetch (githubFetch, Egress.fetch as `github`) and @actions/github is read only for its event context, never to make a client, which a test checks.
+
+**Test.** `packages/core/test/local-mode/guard.test.ts`, "Vector's own code > gives every GitHub client a fetch Vector Local decides". It globs `*/src/**/*.{ts,tsx}` under `packages/`, as the neighbouring test does. For each `new Octokit(` or `graphql.defaults(` it takes the argument text up to the matching `)` by depth count and requires `fetch:` in it, it forbids `getOctokit(` anywhere, and it expects at least 7 client sites (8 today) so a wrong glob cannot pass it. It passes on main: it is the guard against regression, and the mutation below is its proof.
+
+**Mutation check.** Locally delete `request: { fetch: githubFetch }` from the client in `packages/engine/src/cli/cmd/github.app.ts` (no open PR holds that file; never committed): the test fails, naming `engine/src/cli/cmd/github.app.ts`. Restore with `git checkout -- packages/engine/src/cli/cmd/github.app.ts`. Not run in the drafting step.
+
+## Waiting
+
+- W1 (VL-5c): the `offline()` docstring in `packages/engine/src/tool/shell/sandbox.ts`, as above, once #128, #161, #162, #163, #167 and #170 have merged or closed.
+
+## Owner items (not built here)
+
+- O1: programs the agent starts (shell commands, stdio MCP servers, language servers) are not covered by the guard.
+- O2: Windows has no network sandbox for shell commands.
+- O3: the server adapters and error patterns were written from vendor docs, not from recordings of real servers.
+- O4: packet-capture gate L2 stays pending (`docs/vector/local-packet-capture.md`).
+- O5 (from VL-1): narrowing host-less allow entries to each service's own hosts, after an audit makes the registry's hosts complete (redirect, mirror and installer hosts included).
