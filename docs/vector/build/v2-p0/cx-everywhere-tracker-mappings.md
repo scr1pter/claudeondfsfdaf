@@ -1,8 +1,7 @@
 # cx-everywhere-tracker-mappings: takeover of PR #123 (verified tracker repository mappings)
 
-PR #123 (head `everywhere-tracker-mappings`) was a Codex draft, idle since 2026-11-24. The owner's deadline for all v2
-work is Saturday 2026-11-28, so this run took it over to finish and merge it. The feature is Codex's; this entry records
-what the takeover checked and changed. No flag changes, no public claims: the account routes still answer 404 while
+PR #123 (head `everywhere-tracker-mappings`) was a Codex draft, idle since 2026-11-24, so this run took it over to
+finish and merge it. The feature is Codex's; this entry records what the takeover checked and changed. No flag changes, no public claims: the account routes still answer 404 while
 the platform is off, and the account page is still an unrouted draft (PUB-8).
 
 ## 2026-11-26, merge main and verify the composed tree
