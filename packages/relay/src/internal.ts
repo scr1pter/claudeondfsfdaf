@@ -96,15 +96,25 @@ export async function signInternal(
   }
 }
 
-/**
- * Checks the timestamp and the signature over the method, path, timestamp, nonce and raw body. The nonce is returned
- * for the Durable Object to record; it is checked last, so a forged request cannot use up a real nonce.
- */
+/** The existing verifier result stays compatible with callers that only record the nonce. */
 export async function verifyInternalSignature(
   secret: string,
   request: { method: string; path: string; headers: Headers; body: Uint8Array<ArrayBuffer> },
   now: number,
 ): Promise<{ ok: true; nonce: string } | { ok: false }> {
+  const checked = await verifyInternalRequest(secret, request, now)
+  return checked.ok ? { ok: true, nonce: checked.nonce } : { ok: false }
+}
+
+/**
+ * Checks the timestamp and the signature over the method, path, timestamp, nonce and raw body. The nonce is returned
+ * with its verified signing time for the Durable Object; checked last, so a forged request cannot use up a real nonce.
+ */
+export async function verifyInternalRequest(
+  secret: string,
+  request: { method: string; path: string; headers: Headers; body: Uint8Array<ArrayBuffer> },
+  now: number,
+): Promise<{ ok: true; nonce: string; signedAt: number } | { ok: false }> {
   const timestampText = request.headers.get(INTERNAL_HEADERS.timestamp)?.trim() ?? ""
   const nonce = request.headers.get(INTERNAL_HEADERS.nonce)?.trim() ?? ""
   const provided = request.headers.get(INTERNAL_HEADERS.signature)?.trim() ?? ""
@@ -126,5 +136,5 @@ export async function verifyInternalSignature(
   )
   const given = fromBase64url(provided)
   if (!given || !equalBytes(expected, given)) return { ok: false }
-  return { ok: true, nonce }
+  return { ok: true, nonce, signedAt: timestamp * 1000 }
 }
