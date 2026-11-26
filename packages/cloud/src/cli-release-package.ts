@@ -6,6 +6,8 @@ import { BlobReader, BlobWriter, ZipWriter } from "@zip.js/zip.js"
 import { CliRelease } from "@vectordevai/schema/cli-release"
 import { releaseCatalogText } from "./upload-model-catalog"
 import { assertCleanArtifacts } from "../../../script/artifact-audit"
+import { maximumExecutableBytes, validatePackagedWindowsHolder } from "../../engine/script/windows-holder-binary"
+import { windowsHolderCompanionName } from "../../engine/src/tool/shell/windows-holder-companion-name"
 
 export const cliNotices = ["LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"] as const
 
@@ -66,6 +68,7 @@ export async function packageCliRelease(input: {
   if ((await hashCliFile(catalogFile)).sha256 !== input.catalogSha256)
     throw new Error("The prepared CLI catalog does not match the pinned digest.")
   const notices = new Map<string, string>()
+  const holders = new Map<CliRelease.Target, Awaited<ReturnType<typeof readWindowsHolder>>>()
   for (const target of CliRelease.targets) {
     const root = path.join(input.source, `vector-${target}`)
     await directory(root)
@@ -90,6 +93,9 @@ export async function packageCliRelease(input: {
     const binary = path.join(root, "bin", target.startsWith("windows-") ? "vector.exe" : "vector")
     await regularFile(binary)
     nativeHeader(target, await Bun.file(binary).slice(0, 4096).bytes())
+    if ("vectorWindowsHolder" in metadata) {
+      holders.set(target, await readWindowsHolder(root, target, metadata.vectorWindowsHolder))
+    }
     for (const name of cliNotices) {
       await regularFile(path.join(root, name))
       const digest = (await hashCliFile(path.join(root, name))).sha256
@@ -98,6 +104,12 @@ export async function packageCliRelease(input: {
       notices.set(name, digest)
     }
   }
+
+  const windowsTargets = CliRelease.targets.filter((target) => target.startsWith("windows-"))
+  if (holders.size && holders.size !== windowsTargets.length)
+    throw new Error("A CLI release must include a Windows holder for every Windows target or for none.")
+  if (new Set(Array.from(holders.values(), (holder) => holder.wire)).size > 1)
+    throw new Error("A CLI release must use one Windows holder format across every Windows target.")
 
   await mkdir(input.output, { recursive: true })
   const temporary = await mkdtemp(path.join(os.tmpdir(), "vector-cli-package-"))
@@ -108,10 +120,13 @@ export async function packageCliRelease(input: {
       const staging = path.join(temporary, target)
       await mkdir(staging)
       const binary = target.startsWith("windows-") ? "vector.exe" : "vector"
-      const entries = [binary, ...cliNotices]
+      const holder = holders.get(target)
+      const entries = [binary, ...cliNotices, ...(holder ? [holder.name] : [])]
       for (const name of entries) {
-        await copyFile(path.join(root, name === binary ? `bin/${name}` : name), path.join(staging, name))
-        await chmod(path.join(staging, name), name === binary ? 0o755 : 0o644)
+        const staged = path.join(staging, name)
+        if (holder?.name === name) await Bun.write(staged, holder.bytes)
+        else await copyFile(name === binary ? path.join(root, "bin", name) : path.join(root, name), staged)
+        await chmod(staged, name === binary || holder?.name === name ? 0o755 : 0o644)
       }
       const archive = path.join(temporary, CliRelease.filename(target))
       await writeArchive(archive, staging, binary, entries)
@@ -156,7 +171,7 @@ async function writeArchive(archive: string, staging: string, binary: string, en
       await writer.add(name, new BlobReader(Bun.file(path.join(staging, name))), {
         useWebWorkers: false,
         msDosCompatible: false,
-        externalFileAttributes: ((name === binary ? 0o100755 : 0o100644) << 16) >>> 0,
+        externalFileAttributes: ((name.endsWith(".exe") ? 0o100755 : 0o100644) << 16) >>> 0,
       })
     await Bun.write(archive, await writer.close())
     return
@@ -165,6 +180,41 @@ async function writeArchive(archive: string, staging: string, binary: string, en
     { cwd: staging, file: archive, gzip: { level: 9 }, portable: true, noPax: true, mtime: new Date(0) },
     entries,
   )
+}
+
+async function readWindowsHolder(root: string, target: CliRelease.Target, value: unknown) {
+  const arch = target === "windows-arm64" ? "arm64" : target.startsWith("windows-x64") ? "x64" : undefined
+  if (
+    !arch ||
+    !value ||
+    typeof value !== "object" ||
+    Object.keys(value).length !== 3 ||
+    !("arch" in value) ||
+    value.arch !== arch ||
+    !("size" in value) ||
+    typeof value.size !== "number" ||
+    !Number.isSafeInteger(value.size) ||
+    value.size <= 0 ||
+    value.size > maximumExecutableBytes ||
+    !("sha256" in value) ||
+    typeof value.sha256 !== "string" ||
+    value.sha256.length !== 64 ||
+    !/^[a-f0-9]{64}$/.test(value.sha256)
+  )
+    throw new Error("Invalid Windows holder descriptor in the prepared CLI build.")
+
+  const name = windowsHolderCompanionName(arch, value.sha256)
+  const file = path.join(root, "bin", name)
+  await regularFile(file)
+  const bytes = Buffer.from(
+    await Bun.file(file)
+      .slice(0, maximumExecutableBytes + 1)
+      .arrayBuffer(),
+  )
+  if (bytes.length !== value.size || new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== value.sha256)
+    throw new Error("The Windows holder does not match the prepared CLI build descriptor.")
+  const wire = validatePackagedWindowsHolder(bytes, arch)
+  return { name, bytes, wire }
 }
 
 async function regularFile(file: string) {

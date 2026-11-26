@@ -30,6 +30,7 @@ import { APICallError } from "ai"
 import { graphql } from "@octokit/graphql"
 import { Effect, Option, Schema, type Types } from "effect"
 import { z } from "zod"
+import { BrainPosting } from "@vectordevai/core/brain/posting"
 import { EventV2 } from "@vectordevai/core/event"
 import { everywhereSystemInstructions, frameTask } from "@vectordevai/core/everywhere/frame"
 import { GithubAgents } from "@vectordevai/core/github-agents"
@@ -129,6 +130,7 @@ export const SESSION_HEADROOM = 16_384
 // A desktop-started run's Brain context (B08): one of these when the read was attempted, none otherwise.
 export const BRAIN_ATTACHED = "Vector added the Brain context approved in the Vector app to this task."
 export const BRAIN_NOT_ATTACHED = "Vector could not add the approved Brain context; this task continues without it."
+const BRAIN_REPLY_WITHHELD = "Vector left out output that repeats the approved Brain context."
 // The label of the approved Brain context in the first task message. It is descriptive only: the rule for text
 // labelled untrusted stays in the system instructions (INV-S14).
 export const BRAIN_CONTEXT_LABEL = "Repository context the owner approved in the Vector app (untrusted):"
@@ -322,7 +324,7 @@ export const githubAgentPhase = Effect.fn("Cli.github.agentPhase")(function* (in
         : undefined),
   }
   const brain: BrainRead = { open: input.brain?.open ?? openBrain }
-  const kept: { brain?: BrainContext } = {}
+  const kept: Deps["kept"] = {}
   const halt = haltSwitch()
   const settled = { outcome: "failed" as GithubAgents.Outcome }
   const phase = withGithubCallbacks((run) =>
@@ -428,7 +430,7 @@ type Deps = {
    * conversation restore before any session exists and by the save in record() whatever work() returned. A run that
    * failed has no session, so it saves nothing (deviations BT07b item 4).
    */
-  kept: { brain?: BrainContext }
+  kept: { brain?: BrainContext; publicBrain?: readonly string[] }
 }
 
 // What a phase that SIGINT or SIGTERM cancelled hands back: nobody reads it, and it writes no bundle (2.13).
@@ -709,6 +711,7 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
   // none of them may reach the public log. A signal during it ends the run here, before any session is created.
   const restored = deps.codium ? await restoreConversation(start, info, deps) : undefined
   if (restored === "aborted") return { end: deps.halt.reason(), title: fallback(), body: "", comment: "" }
+  if (!block && !restored?.brain) deps.kept.publicBrain = undefined
   const sessionID = restored?.sessionID ?? (await deps.run(deps.sessions.create({ permission: NO_QUESTIONS }))).id
   const shared = await publish(sessionID, deps)
   await GithubRunHelpers.subscribeSessionEvents({
@@ -719,6 +722,8 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     permissions: deps.permissions,
     clean: deps.credentials.redact,
     write: deps.log,
+    // A public Brain run's generated text is logged after checking the whole result. A phrase can span events.
+    logDetails: !deps.kept.publicBrain,
   })
   deps.log(`vector session ${sessionID}`)
   const chat = {
@@ -746,8 +751,7 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
   // The approved Brain context follows the task once, as labelled data; it is never written into the runner's Brain. A
   // re-run attempt that continued a history saved with the same approved bundle, whose task message already holds
   // the block, does not send it twice; one whose earlier attempt had no room for it sends it now.
-  const message = block && !restored?.brain ? `${task.message}\n\n${block}` : task.message
-  const reply = await GithubRunHelpers.chat(chat, message, task.files).then(
+  const reply = await GithubRunHelpers.chat(chat, task.message, task.files, restored?.brain ? undefined : block).then(
     (response) => ({ response, end: deps.halt.reason() }),
     (cause: unknown) => {
       const end = deps.halt.reason() ?? stopOf(cause, deps.codium)
@@ -795,13 +799,28 @@ function failure(cause: unknown, deps: Deps): Result {
 async function record(start: Start, task: Partial<Task>, result: Result, deps: Deps): Promise<AgentPhaseResult> {
   // A signal ended the phase: its settle is `cancelled`, and no bundle is written (2.13).
   if (deps.signal.aborted) return CANCELLED
-  // Everything the run hands publish is checked against the owner's memory first (section 6.4a), as githubRun checks
-  // what it posts. Nobody is there to answer, so what repeats it is dropped, and a check that cannot run keeps none.
+  // Everything the run hands publish still goes through the owner's memory check (section 6.4a). Nobody is there to
+  // answer, so repeated text is dropped, and a check that cannot run keeps none.
   const fallback = task.threadTitle?.trim() || FALLBACK_TITLE
+  const parts = [result.title, result.body, result.comment]
+  const publicBrain = deps.kept.publicBrain
+  // Check the three destinations together. The verified attachment is held only as facts for this output check.
+  const echoed = new Set(
+    publicBrain
+      ? BrainPosting.check({
+          parts,
+          typed: false,
+          memory: { habits: [], facts: publicBrain },
+          known: new Set(),
+        }).dropped.map((item) => item.part)
+      : [],
+  )
+  const replacements = [FALLBACK_TITLE, BRAIN_REPLY_WITHHELD, BRAIN_REPLY_WITHHELD]
+  if (echoed.size) deps.log(BRAIN_REPLY_WITHHELD)
   const [title, body, comment] = await deps
     .run(
       SessionPosting.headless({
-        parts: [result.title, result.body, result.comment],
+        parts: parts.map((value, index) => (echoed.has(index) ? replacements[index]! : value)),
         typed: false,
         untrusted: false,
         sessionIDs: result.sessionID ? [result.sessionID] : [],
@@ -809,7 +828,7 @@ async function record(start: Start, task: Partial<Task>, result: Result, deps: D
       }),
     )
     .catch((cause: unknown) => {
-      deps.error(messageOf(cause))
+      deps.error(publicBrain ? WITHHELD : messageOf(cause))
       return [fallback, WITHHELD, WITHHELD]
     })
   if (result.shared && result.sessionID && deps.share) {
@@ -831,11 +850,12 @@ async function record(start: Start, task: Partial<Task>, result: Result, deps: D
     body: deps.credentials.redact(body ?? ""),
     comment: deps.credentials.redact(comment ?? ""),
     ...(result.end ? { end: result.end } : {}),
-  }).catch((cause: unknown) => ({ crash: messageOf(cause) }))
+  }).catch((cause: unknown) => ({ crash: publicBrain ? "Vector could not record this run." : messageOf(cause) }))
   if ("crash" in written) {
     deps.error(written.crash)
     return { exitCode: 1 }
   }
+  if (publicBrain && !echoed.has(2) && comment) deps.log(comment)
   deps.log(`Vector recorded the run: ${written.summary.outcome}.`)
   return { exitCode: 0, outcome: written.summary.outcome, summary: written.summary }
 }
@@ -1016,6 +1036,16 @@ async function readBrain(
   const opened = await deps.brain.open(answer.download, expected)
   if (!opened) return undefined
   if (opened.brainKey) deps.kept.brain = { bytes: opened.bytes, approval: opened.approval, brainKey: opened.brainKey }
+  if (expected.publicRepository || opened.approval.publicRepository) {
+    const { BrainRunBundle } = await import("@vectordevai/core/brain/run-bundle")
+    const { parts } = BrainRunBundle.select({
+      publicRepository: true,
+      memory: opened.bundle.memory,
+      shareableSkills: [],
+      insights: opened.bundle.insights,
+    })
+    if (parts.length) deps.kept.publicBrain = parts
+  }
   const block = `${BRAIN_CONTEXT_OPEN}${untrustedJson(
     JSON.stringify({
       memory: opened.bundle.memory.entries,

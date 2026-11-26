@@ -642,6 +642,7 @@ export type ComputerSmokeDriverUiaFailure = {
   actor: (typeof COMPUTER_SMOKE_DRIVER_UIA_ACTORS)[number]
   expiry: (typeof COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES)[number]
   hresult: (typeof COMPUTER_SMOKE_DRIVER_UIA_HRESULTS)[number]
+  rootAttempt?: "initial" | "replacement"
 }
 export type ComputerSmokeDriverFailure = {
   stage: ComputerSmokeDriverStage
@@ -677,17 +678,21 @@ export function computerSmokeDriverFailure(value: Record<string, unknown>): Comp
   }
 }
 
-// All five closed facts or none. A healthy actor never expired a ticket, so it cannot name an expiry side.
+// An attempt label is optional on the first root only. A healthy actor cannot name an expiry side.
 function computerSmokeDriverUiaFailure(value: unknown): ComputerSmokeDriverUiaFailure {
   if (
     !record(value) ||
-    !exact(value, ["lookup", "call", "actor", "expiry", "hresult"]) ||
+    !exact(value, ["lookup", "call", "actor", "expiry", "hresult", "rootAttempt"]) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS as readonly unknown[]).includes(value.lookup) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_CALLS as readonly unknown[]).includes(value.call) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_ACTORS as readonly unknown[]).includes(value.actor) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES as readonly unknown[]).includes(value.expiry) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_HRESULTS as readonly unknown[]).includes(value.hresult) ||
-    (value.actor === "healthy" && value.expiry !== "none")
+    (value.actor === "healthy" && value.expiry !== "none") ||
+    (value.rootAttempt !== undefined &&
+      (value.lookup !== "first" ||
+        value.call !== "root" ||
+        (value.rootAttempt !== "initial" && value.rootAttempt !== "replacement")))
   )
     throw new Error("The native driver UIA failure facts are invalid.")
   return {
@@ -696,6 +701,7 @@ function computerSmokeDriverUiaFailure(value: unknown): ComputerSmokeDriverUiaFa
     actor: value.actor as ComputerSmokeDriverUiaFailure["actor"],
     expiry: value.expiry as ComputerSmokeDriverUiaFailure["expiry"],
     hresult: value.hresult as ComputerSmokeDriverUiaFailure["hresult"],
+    ...(value.rootAttempt === undefined ? {} : { rootAttempt: value.rootAttempt }),
   }
 }
 
