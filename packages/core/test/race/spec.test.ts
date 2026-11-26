@@ -18,3 +18,10 @@ test("duplicate labs, unrecognized labs and unbounded requests are refused befor
   expect(() => RaceSpec.build({ ...input, steps: 501 })).toThrow("500")
   expect(() => RaceSpec.build({ ...input, prompt: "" })).toThrow("Describe")
 })
+
+test.each(["constructor/unknown", "openrouter/constructor/unknown"])(
+  "an inherited provider or vendor name in %s is not a model lab",
+  (ref) => {
+    expect(() => RaceSpec.build({ ...input, lanes: [{ ref }, input.lanes[1]!] })).toThrow("know the lab")
+  },
+)
