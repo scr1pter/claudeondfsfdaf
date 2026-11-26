@@ -1,6 +1,6 @@
 # cx-polish-connected-reviews: accurate review readiness and finished titles (PR #162 takeover)
 
-Branch `cx-polish-connected-reviews`, cut from origin/polish-connected-reviews `f897d970b` (Codex's draft PR #162). This v2 run took the PR over on 2026-11-26 because the draft had been idle for more than a day before the Saturday deadline. Nothing here turns on: connected reviews stay behind `VECTOR_EXPERIMENTAL_CONNECT`, which stays off. No public claims.
+Branch `cx-polish-connected-reviews`, cut from origin/polish-connected-reviews `f897d970b` (Codex's draft PR #162). This v2 run took the PR over on 2026-11-26 because the draft had been idle for more than a day, and every open engineering item has to land in main before the redesign starts (the owner's 2027-01-01 date covers the redesign, go-to-market, Stripe, signing and the rest of the launch work). Nothing here turns on: connected reviews stay behind `VECTOR_EXPERIMENTAL_CONNECT`, which stays off. No public claims.
 
 ## 2026-11-26, takeover: merge main and verify
 
@@ -20,6 +20,12 @@ Branch `cx-polish-connected-reviews`, cut from origin/polish-connected-reviews `
 - the commit from PR #159 (`ceeddfc01`, refusing hand-offs to list-only members before any work starts). #159 was closed without merging, so that change lands here instead.
 
 Merge this PR after #128, or together with it. Open PRs #163, #167 and #170 already contain this PR's title commit (`4c7c43489`), and #161 contains the #128 base. Each of those resolves against this PR when it lands.
+
+## 2026-11-26, before marking ready: merge main again
+
+Merged `origin/polish-connected-reviews` (no new commits; the head was still `f897d970b`) and `origin/main` `b57b8d53a` (10 commits: Codium estimates, playbook validation, race model labs, brain command allowlist). No conflicts and no shared files with this branch. None of main's changed files is in the review pipeline's source list, so the digest stays `219a1a25bf3251df`.
+
+Re-run after this merge, one file at a time: core review/model-evidence 37 pass, brain/brain 59 pass, brain/knowledge-recall 11 pass, permission 29 pass; engine connect/background 12 pass, 4 skip. `bun typecheck` is clean for core, schema and engine. No source change; the review returned no must-fix items.
 
 ## Tests
 
@@ -59,6 +65,7 @@ The background title cases run locally.
 
 - Codex's placement of the non-Git check stays as it is: one exact-context predicate, used by the adapter for the member list and by `ConnectGit.use` for the refusal. It is the narrowest option that closes the item. It changes nothing for empty Git checkouts or linked folders, and the generic hand-off path keeps its existing tests.
 - The red-before proof uses both the stacked base and `origin/main`, because the branch also carries #128 and #159. Reverting to the stacked base isolates this PR's own change.
+- `REVIEW_PIPELINE_REVISION` stays at 5 and only the pinned source digest (`REVIEW_PIPELINE_SOURCES`) changes. The pipeline sources changed, but what a review finds or posts did not: the title fix only renames a finished background card, and the non-Git check refuses a review that could never have run. A bump would stop every certificate made before it from applying, with no change in review output to justify that.
 
 ## Left for others
 
