@@ -582,12 +582,22 @@ export function createRemoteLink(deps: LinkDependencies) {
     if (lapsed) void refresh()
   }
 
+  const ticketToken = async () => {
+    try {
+      return await deps.token()
+    } catch {
+      return undefined
+    }
+  }
+
   const refresh = async (retryJobs = false, eligible?: () => boolean) => {
     const socket = state.socket
     const identity = state.identity
     const jobsRefresher = state.jobsRefresher
     if (!socket || !identity || eligible?.() === false) return
-    const ticket = await mint(identity).catch(() => undefined)
+    const token = await ticketToken()
+    if (state.socket !== socket || socket.readyState !== 1 || eligible?.() === false) return
+    const ticket = await mint(identity, token).catch(() => undefined)
     if (eligible?.() === false) return
     if (ticket && "ticket" in ticket && state.socket === socket && socket.readyState === 1) {
       socket.send(JSON.stringify({ t: "refresh", ticket: ticket.ticket }))
@@ -619,8 +629,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     | { ticket: string; url: string }
     | { refused: RemoteState; message?: string; retryMs: number; refreshRetryMs?: number }
 
-  const mint = async (identity: RemoteIdentity): Promise<Minted> => {
-    const token = await deps.token().catch(() => undefined)
+  const mint = async (identity: RemoteIdentity, token: string | undefined): Promise<Minted> => {
     if (!token) return { refused: "signed-out", retryMs: 0 }
     const name = (deps.relayName?.() ?? "").slice(0, 64)
     const response = await deps
@@ -718,7 +727,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     if (!identity || state.socket || state.opening) return
     state.opening = true
     setStatus("connecting")
-    const minted = await mint(identity)
+    const minted = await mint(identity, await ticketToken())
     state.opening = false
     if (state.socket) return
     if (!wanted()) return void setStatus(deps.enabled.get() ? "ready" : "off")

@@ -343,6 +343,7 @@ describe("jobs (R-C2)", () => {
     relay: MemoryRelay,
     timing?: LinkDependencies["timing"],
     reply?: (attempt: number) => Response | undefined,
+    token: LinkDependencies["token"] = async () => "vct_desktop",
   ) {
     const stored: { value?: RemoteIdentity } = {}
     const enabled = { value: false }
@@ -353,7 +354,7 @@ describe("jobs (R-C2)", () => {
     const link = createRemoteLink({
       store: { read: async () => stored.value, write: async (identity) => void (stored.value = identity) },
       enabled: { get: () => enabled.value, set: (value) => void (enabled.value = value) },
-      token: async () => "vct_desktop",
+      token,
       api: async () => {
         attempts.push(Date.now())
         const refusal = reply?.(attempts.length)
@@ -564,6 +565,43 @@ describe("jobs (R-C2)", () => {
       expect(env.attempts).toHaveLength(2)
       expect(relay.texts.some((text) => text.includes('"refresh"'))).toBe(false)
     } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test("a pending token lookup cannot mint a retry after Remote is disabled", async () => {
+    const relay = createMemoryRelay()
+    let tokenReads = 0
+    const pending = Promise.withResolvers<string>()
+    const env = jobsComputer(
+      relay,
+      {},
+      (attempt) => (attempt === 2 ? renewing() : undefined),
+      async () => (++tokenReads === 3 ? pending.promise : "vct_desktop"),
+    )
+    env.jobs.want = false
+    await env.link.setEnabled(true)
+    env.jobs.want = true
+    jest.useFakeTimers()
+    try {
+      await env.link.jobsChanged()
+      await turns(() => env.link.status().state === "online")
+      jest.advanceTimersByTime(RELAY_LIMITS.computerTicketMaxAgeMs / 2)
+      await flush()
+      expect(env.attempts).toHaveLength(2)
+
+      jest.advanceTimersByTime(30_000)
+      await turns(() => tokenReads === 3)
+      await env.link.setEnabled(false)
+      pending.resolve("vct_desktop")
+      await flush()
+
+      expect(env.link.status().state).toBe("off")
+      expect(env.attempts).toHaveLength(2)
+      expect(relay.texts.some((text) => text.includes('"refresh"'))).toBe(false)
+    } finally {
+      pending.resolve("vct_desktop")
       env.link.stop()
       jest.useRealTimers()
     }
