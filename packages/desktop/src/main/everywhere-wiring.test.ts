@@ -25,6 +25,8 @@ import { setDesktopWorkBlocker } from "./keep-awake"
 import { createRemoteLink, type LinkDependencies, type RemoteStatus } from "./remote-link"
 import type { RemoteIdentity } from "./remote-pairing"
 import { createMemoryRelay, ticketFor } from "./remote-relay.fixture"
+import { requestMessage, SESSION_MESSAGE, sessionRequester } from "./everywhere-preference-bridge"
+import type { EverywhereSessionWire } from "@vectordevai/core/everywhere/session-binding"
 
 // VE-21's desktop wiring (EV-17): the jobs module on the real Remote link and the in-memory relay, composed exactly as
 // startRemote composes them (jobsForLink), with fakes for the engine's config route, the jobs service and git.
@@ -383,6 +385,8 @@ function computer(
     /** The engine's other routes (EV-18's probes, the worktree route, the trust route). */
     engine?: Record<string, EngineRoute>
     power?: Parameters<typeof createEverywhereJobs>[0]["power"]
+    preferences?: Parameters<typeof createEverywhereJobs>[0]["preferences"]
+    createEverywhereSession?: Parameters<typeof createEverywhereJobs>[0]["createEverywhereSession"]
     now?: () => number
   } = {},
 ) {
@@ -400,6 +404,8 @@ function computer(
   const memory = memoryLedger()
   const wiring = createEverywhereJobs({
     engine: { url: ENGINE, password: "owner-secret" },
+    preferences: options.preferences,
+    createEverywhereSession: options.createEverywhereSession,
     token: options.token ?? (async () => TOKEN),
     events: (signal) => events.events(signal),
     ledgerPath: "/fixture/user-data/everywhere/runner.json",
@@ -410,9 +416,11 @@ function computer(
     git: fakeGit(gitCalls, options.git),
     runnerEngine:
       options.runnerEngine ??
-      (() => {
-        throw new Error("No unattended session may be created without the safe worktree")
-      }),
+      (options.createEverywhereSession
+        ? undefined
+        : () => {
+            throw new Error("No unattended session may be created without the safe worktree")
+          }),
     safeWorktree: options.safeWorktree,
     ...(options.localPolicy === "process" ? {} : { localPolicy: () => LocalPolicy.OFF }),
     ...(options.power ? { power: options.power } : {}),
@@ -511,6 +519,110 @@ test("an offer frame reaches the runner, and without the safe worktree its claim
     expect((await env.memory.ledger.inspect()).jobs).toEqual([])
   } finally {
     env.stop()
+    await folders.cleanup()
+  }
+})
+
+test("the runner checks the new checkout before using the private session broker or explicit legacy fallback", async () => {
+  const folders = await folderFixture()
+  const bound = { version: 1, kind: "created", sessionID: "ses_bound" } as const
+  const unavailable = { version: 1, kind: "unavailable" } as const
+  const unsupported = { version: 1, kind: "unsupported" } as const
+  const refused = { version: 1, kind: "refused" } as const
+  const scenarios = [
+    { trust: untrusted, replies: [unavailable, bound], path: "/session/ses_bound/prompt_async", legacy: false },
+    { trust: untrusted, replies: [refused], path: undefined, legacy: false },
+    { trust: untrusted, replies: [unavailable, unsupported], path: undefined, legacy: false },
+    { trust: untrusted, replies: [unsupported], path: "/session/ses_legacy/prompt_async", legacy: true },
+    { trust: answer({ trusted: true }), replies: [], path: undefined, legacy: false },
+    { trust: answer({}, 503), replies: [], path: undefined, legacy: false },
+  ] as const
+  try {
+    for (const scenario of scenarios) {
+      const sent: EverywhereSessionWire.Request[] = []
+      const listeners = new Set<(message: unknown) => void>()
+      const sequence: string[] = []
+      const broker = sessionRequester({
+        send(message) {
+          sequence.push("bind")
+          const incoming = requestMessage(message, SESSION_MESSAGE)!
+          const result = scenario.replies[sent.length]
+          sent.push(incoming.request as EverywhereSessionWire.Request)
+          for (const listener of listeners) listener({ type: SESSION_MESSAGE, id: incoming.id, result })
+        },
+        listen(listener) {
+          listeners.add(listener)
+          return () => {
+            listeners.delete(listener)
+          }
+        },
+      })
+      const env = computer(on(folders.project), {
+        createEverywhereSession: broker,
+        engine: {
+          ...CAPABLE,
+          "POST /experimental/worktree/unattended": (url, init) => {
+            sequence.push("place")
+            return created(url, init)
+          },
+          "GET /config/trust": (url, init) => {
+            sequence.push("trust")
+            expect(url.searchParams.get("directory")).toBe(SANDBOX)
+            return scenario.trust(url, init)
+          },
+          "POST /session": () => {
+            sequence.push("legacy create")
+            return Response.json({ id: "ses_legacy" })
+          },
+          "GET /event": (_url, init) => {
+            sequence.push("events")
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  init?.signal?.addEventListener("abort", () => controller.close(), { once: true })
+                },
+              }),
+            )
+          },
+          "POST /session/ses_bound/prompt_async": () => new Response(null, { status: 503 }),
+          "POST /session/ses_legacy/prompt_async": () => new Response(null, { status: 503 }),
+          "POST /session/ses_bound/abort": () => Response.json(true),
+          "POST /session/ses_legacy/abort": () => Response.json(true),
+        },
+      })
+      try {
+        await env.link.setEnabled(true)
+        env.begin()
+        await until(() => env.link.status().state === "online")
+        const jid = createJobId(Date.now())
+        expect(env.relay.offer(signed(jid))).toBe(1)
+        await until(() => env.service.of("settle").length === 1)
+        expect(sent).toHaveLength(scenario.replies.length)
+        expect(sequence).toEqual([
+          "place",
+          "trust",
+          ...scenario.replies.map(() => "bind"),
+          ...(scenario.legacy ? ["legacy create"] : []),
+          ...(scenario.path ? ["events"] : []),
+        ])
+        for (const message of sent) {
+          expect([message.version, message.jid, message.directory, message.branch]).toEqual([
+            1,
+            jid,
+            SANDBOX,
+            branchFor(jid),
+          ])
+          expect(message.claim).toMatch(/^[a-f0-9]{64}$/)
+        }
+        expect(new Set(sent.map((message) => message.claim)).size).toBe(sent.length ? 1 : 0)
+        expect(env.config.calls.some((call) => call.path === "/session")).toBe(scenario.legacy)
+        expect(env.config.calls.find((call) => call.path.endsWith("/prompt_async"))?.path).toBe(scenario.path)
+        expect(listeners.size).toBe(0)
+      } finally {
+        env.stop()
+      }
+    }
+  } finally {
     await folders.cleanup()
   }
 })
@@ -806,6 +918,36 @@ test("with the setting off, locked, malformed or unreadable, nothing connects, a
       }
     }
   } finally {
+    await folders.cleanup()
+  }
+})
+
+test("the runner uses the supported sidecar settings and only falls back for explicit version skew", async () => {
+  const folders = await folderFixture()
+  type Preference = Awaited<ReturnType<NonNullable<Parameters<typeof createEverywhereJobs>[0]["preferences"]>>>
+  let value: Preference = {
+    version: 1,
+    kind: "ready",
+    snapshot: { revision: 1, everywhere: { enabled: false }, locked: [] },
+  }
+  const env = computer(on(folders.project), { preferences: async () => value })
+  try {
+    env.begin()
+    expect(await env.wiring.refresh()).toBe("off")
+    value = { version: 1, kind: "unavailable" }
+    expect(await env.wiring.refresh()).toBe("off")
+    value = { version: 1, kind: "unsupported" }
+    expect(await env.wiring.refresh()).toBe("needs-remote")
+    value = {
+      version: 1,
+      kind: "ready",
+      snapshot: { revision: 2, everywhere: { enabled: true }, locked: ["everywhere"] },
+    }
+    expect(await env.wiring.refresh()).toBe("off")
+    expect(env.sockets()).toBe(0)
+    expect(env.service.requests).toEqual([])
+  } finally {
+    env.stop()
     await folders.cleanup()
   }
 })

@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
 import { HttpRouter } from "effect/unstable/http"
+import { ConfigManaged } from "@vectordevai/core/config/managed"
 import { GUEST_REQUEST_HEADER } from "@vectordevai/core/free-model-guests"
 import { GIT_HARDENING, fetchRef, runnerGitEnvironment } from "@vectordevai/core/everywhere/git"
 import { branchFor } from "@vectordevai/core/everywhere/publish"
@@ -17,6 +18,7 @@ import { AppProcess } from "@vectordevai/core/process"
 import { createJobId } from "@vectordevai/schema/everywhere"
 import { GlobalBus } from "../../src/bus/global"
 import { Config } from "../../src/config/config"
+import { EverywherePreferences } from "../../src/config/everywhere-preferences"
 import { AppLayer } from "../../src/effect/app-runtime"
 import { InstanceState } from "../../src/effect/instance-state"
 import { Git } from "../../src/git"
@@ -25,6 +27,7 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { Event } from "../../src/server/event"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+import type { EverywhereSession } from "../../src/server/everywhere-session"
 import { FileLock } from "../../src/tool/file-lock"
 import { Worktree } from "../../src/worktree"
 import { resetDatabase } from "../fixture/db"
@@ -90,6 +93,8 @@ const layer = LayerNode.compile(
 const it = testEffect(layer)
 
 const sha256 = (file: string) => readFile(file).then((bytes) => createHash("sha256").update(bytes).digest("hex"))
+const receiptRoot = path.join(Global.Path.state, "everywhere-worktree-reservations")
+const receiptFor = (jid: string) => path.join(receiptRoot, `${jid}.json`)
 const present = (file: string) =>
   lstat(file).then(
     () => true,
@@ -224,6 +229,18 @@ describe("Worktree.createUnattended", () => {
         const directory = FSUtil.realpath(path.join(f.root, input.jid))
         expect(result).toEqual({ directory, branch: input.branch, base: input.base })
         expect(result.base).toBe(f.base)
+        const receipt = receiptFor(input.jid)
+        expect(yield* Effect.promise(() => readFile(receipt, "utf8").then(JSON.parse))).toEqual({
+          version: 1,
+          jid: input.jid,
+          project: f.ctx.project.id,
+          branch: input.branch,
+          base: input.base,
+        })
+        if (process.platform !== "win32") {
+          expect((yield* Effect.promise(() => lstat(receiptRoot))).mode & 0o077).toBe(0)
+          expect((yield* Effect.promise(() => lstat(receipt))).mode & 0o077).toBe(0)
+        }
         expect(yield* Effect.promise(() => readFile(path.join(directory, "a.txt"), "utf8"))).toBe("base\n")
         expect(yield* git(directory, ["rev-parse", "HEAD"])).toBe(f.base)
         expect(yield* git(directory, ["symbolic-ref", "--short", "HEAD"])).toBe(input.branch)
@@ -295,6 +312,7 @@ describe("Worktree.createUnattended", () => {
         yield* git(f.ctx.directory, ["branch", branched.branch, f.base])
         expect(yield* refusal(branched)).toBe(RESERVED)
         expect(yield* Effect.promise(() => present(path.join(f.root, branched.jid)))).toBe(false)
+        expect(yield* Effect.promise(() => present(receiptFor(branched.jid)))).toBe(false)
 
         // An empty folder is already there.
         const folder = yield* job(f.base)
@@ -303,6 +321,7 @@ describe("Worktree.createUnattended", () => {
         )
         expect(yield* refusal(folder)).toBe(RESERVED)
         expect(readdirSync(path.join(f.root, folder.jid))).toEqual([])
+        expect(yield* Effect.promise(() => present(receiptFor(folder.jid)))).toBe(false)
         expect(
           (yield* Git.Service.use((service) =>
             service.run(["show-ref", "--verify", "--quiet", `refs/heads/${folder.branch}`], { cwd: f.ctx.directory }),
@@ -457,6 +476,7 @@ describe("Worktree.createUnattended", () => {
         const smudge = yield* job(base)
         expect(yield* refusal(smudge)).toBe(UNSAFE)
         expect(yield* Effect.promise(() => present(filter))).toBe(false)
+        expect(yield* Effect.promise(() => present(receiptFor(smudge.jid)))).toBe(false)
         yield* untouched(smudge)
         yield* git(f.ctx.directory, ["config", "--unset", "filter.mark.smudge"])
 
@@ -472,6 +492,52 @@ describe("Worktree.createUnattended", () => {
         const rewritten = yield* job(base)
         expect(yield* refusal(rewritten)).toBe(UNSAFE)
         yield* untouched(rewritten)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "rechecks config and checkout identity after reservation and stops before mutating Git",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture()
+        const recorder = yield* Recorder
+        const file = path.join(f.ctx.directory, ".git", "config")
+        const original = yield* Effect.promise(() => readFile(file, "utf8"))
+        const redirected = JSON.stringify(f.markers.replaceAll("\\", "/"))
+        for (const [change, reason] of [
+          ['[filter "late"]\n\tsmudge = cat\n', UNSAFE],
+          [`[core]\n\tworktree = ${redirected}\n`, OWN],
+        ] as const) {
+          const input = yield* job(f.base)
+          const receipt = receiptFor(input.jid)
+          recorder.calls.length = 0
+          recorder.before.push((call) => {
+            // The final read before the durable reservation, after the original config and checkout checks.
+            if (call.marked && call.args.includes(`refs/heads/${input.branch}`))
+              writeFileSync(file, `${original}\n${change}`)
+          })
+          const result = yield* refusal(input).pipe(
+            Effect.ensuring(
+              Effect.promise(async () => {
+                recorder.before.length = 0
+                await writeFile(file, original)
+              }),
+            ),
+          )
+          expect(result).toBe(reason)
+          expect(
+            recorder.calls.some(
+              (call) => call.marked && (call.args.includes("worktree") || call.args.includes("reset")),
+            ),
+          ).toBe(false)
+          expect(readdirSync(path.join(f.root, input.jid))).toEqual([])
+          expect(yield* Effect.promise(() => readFile(receipt, "utf8").then(JSON.parse))).toMatchObject({
+            version: 1,
+            jid: input.jid,
+            project: f.ctx.project.id,
+          })
+        }
       }),
     { git: true },
   )
@@ -537,7 +603,7 @@ describe("Worktree.createUnattended", () => {
   )
 
   it.instance(
-    "keeps the reservation when git fails after it, so the job id is never reused",
+    "keeps a reservation after git fails, even when the folder and branch are lost and the service restarts",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture()
@@ -570,6 +636,40 @@ describe("Worktree.createUnattended", () => {
           service.run(["show-ref", "--verify", "--quiet", `refs/heads/${input.branch}`], { cwd: f.ctx.directory }),
         )
         expect(ref.exitCode).toBe(1)
+
+        yield* Effect.promise(() => removeFolder(folder))
+        yield* git(f.ctx.directory, ["worktree", "prune", "--expire", "now"])
+        const receipt = receiptFor(input.jid)
+        expect(yield* refusal(input).pipe(Effect.provide(Layer.fresh(layer)))).toBe(RESERVED)
+        yield* untouched(input)
+        expect(yield* Effect.promise(() => readFile(receipt, "utf8").then(JSON.parse))).toEqual({
+          version: 1,
+          jid: input.jid,
+          project: f.ctx.project.id,
+          branch: input.branch,
+          base: input.base,
+        })
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "a partial receipt blocks the same job with a new base and leaves that receipt untouched",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture()
+        const input = yield* job(f.base, f.head)
+        const receipt = receiptFor(input.jid)
+        yield* Effect.promise(async () => {
+          await mkdir(receiptRoot, { mode: 0o700, recursive: true })
+          await writeFile(receipt, '{"version":', { flag: "wx", mode: 0o600 })
+        })
+        const replay = { ...input, base: f.head }
+        expect(yield* refusal(replay)).toBe(RESERVED)
+        yield* untouched(replay)
+        expect(yield* Effect.promise(() => readFile(receipt, "utf8"))).toBe('{"version":')
+        const independent = yield* job(f.head)
+        expect((yield* create(independent)).base).toBe(f.head)
       }),
     { git: true },
   )
@@ -586,15 +686,25 @@ describe("ordinary worktree mutations preserve unattended reservations", () => {
         const input = yield* job(f.base)
         const checkout = yield* create(input)
         const alias = path.join(f.markers, "checkout-alias")
+        const receiptAlias = path.join(f.markers, "receipt-alias")
         const service = yield* Worktree.Service
-        yield* Effect.promise(() => symlink(checkout.directory, alias, process.platform === "win32" ? "junction" : "dir"))
+        const linkType = process.platform === "win32" ? "junction" : "dir"
+        yield* Effect.promise(async () => {
+          await symlink(checkout.directory, alias, linkType)
+          await symlink(receiptRoot, receiptAlias, linkType)
+        })
 
-        for (const directory of [alias, f.root]) {
+        for (const directory of [alias, f.root, receiptAlias, Global.Path.state]) {
           const error = yield* Effect.flip(service.remove({ directory }))
           expect(error).toBeInstanceOf(Worktree.RemoveFailedError)
           expect(error.message).toBe("Cannot remove a Vector Everywhere worktree through this command.")
         }
 
+        const nearby = `${alias}-nearby`
+        yield* git(f.ctx.directory, ["worktree", "add", "--detach", "--", nearby, f.base])
+        expect(yield* service.remove({ directory: nearby })).toBe(true)
+        expect(yield* Effect.promise(() => present(nearby))).toBe(false)
+        expect(yield* Effect.promise(() => present(receiptFor(input.jid)))).toBe(true)
         expect(yield* git(checkout.directory, ["rev-parse", "HEAD"])).toBe(f.base)
         expect(yield* git(checkout.directory, ["symbolic-ref", "--short", "HEAD"])).toBe(input.branch)
       }),
@@ -644,12 +754,14 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
   const guest = { authorization: basic("guest", GUEST_PASSWORD) }
   const forwarded = { ...owner, [GUEST_REQUEST_HEADER]: "1" }
   const managedDirectory = process.env.VECTOR_TEST_MANAGED_CONFIG_DIR!
+  const preferencesPath = path.join(Global.Path.state, "everywhere-preferences.fixture.json")
   const globalFiles = () =>
     ["config.json", "vector.json", "vector.jsonc"].map((name) => path.join(Global.Path.config, name))
 
   const memo = Layer.makeMemoMapUnsafe()
+  let privateSession: EverywhereSession.Handler | undefined
   const web = HttpRouter.toWebHandler(
-    HttpApiApp.routes.pipe(
+    HttpApiApp.createRoutes(undefined, preferencesPath, (handler) => { privateSession = handler }).pipe(
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromUnknown({
@@ -778,6 +890,7 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     for (const file of globalFiles()) originals.push((await present(file)) ? await readFile(file, "utf8") : undefined)
   })
   afterEach(async () => {
+    await rm(preferencesPath, { force: true, recursive: true })
     await Promise.all(
       globalFiles().map((file, index) => {
         const original = originals[index]
@@ -910,6 +1023,193 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     await allow([f.repo], false)
     refusedWith(await post(f.input), 403, OFF)
     await untouched(f)
+  }, 30_000)
+
+  test("the sidecar's versioned preferences take precedence without changing global config", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    // No sidecar preference means the legacy allowlist applies, as shown by a refusal at a later check.
+    const wrongBase = { ...f.input, base: "0".repeat(40) }
+    const baseError = "The base is not this job's fetched commit."
+    refusedWith(await post(wrongBase), 400, baseError)
+    const block = { enabled: true, projects: [{ directory: f.repo, repository: "acme/widgets" }] }
+    for (const value of [
+      { version: 1, revision: 1, settings: { enabled: false } },
+      { version: 2, revision: 1, settings: block },
+      { version: 1, revision: 0, settings: block },
+      { version: 1, revision: 1, settings: { ...block, pushh: true } },
+    ]) {
+      await writeFile(preferencesPath, JSON.stringify(value))
+      refusedWith(await post(f.input), 403, OFF)
+      await untouched(f)
+    }
+    await writeFile(preferencesPath, "{invalid json")
+    refusedWith(await post(f.input), 403, OFF)
+    await rm(preferencesPath)
+    await mkdir(preferencesPath)
+    refusedWith(await post(f.input), 403, OFF)
+    await rm(preferencesPath, { recursive: true })
+    // A supported preference can admit the folder only after the owner and project checks.
+    await allow([f.repo], false)
+    const file = path.join(Global.Path.config, "vector.json")
+    const original = await readFile(file, "utf8")
+    await run(Config.Service.use((config) => config.invalidate()))
+    await writeFile(preferencesPath, JSON.stringify({ version: 1, revision: 2, settings: block }))
+    for (const headers of [guest, forwarded]) expect((await post(f.input, headers)).status).toBe(403)
+    refusedWith(await post(wrongBase), 400, baseError)
+    expect(await readFile(file, "utf8")).toBe(original)
+    expect((await call("/global/config", { headers: owner })).body.everywhere).toEqual({ ...block, enabled: false })
+    // Apply the managed-policy wire independently of this machine's native file ownership.
+    const agent = process.env.VECTOR_AGENT_SESSION
+    delete process.env.VECTOR_AGENT_SESSION
+    ConfigManaged.useTestPolicies([
+      { source: "fixture policy", text: JSON.stringify({ local: { lock: true, locked_keys: ["everywhere"] } }) },
+    ])
+    try {
+      Config.refreshLocal()
+      Config.confirmLocal()
+      expect(Config.lockedKeys()).toContain("everywhere")
+      refusedWith(await post(f.input), 403, OFF)
+      const access = EverywherePreferences.access(preferencesPath)
+      expect(await run(access({ version: 1, kind: "update", revision: 2, settings: { enabled: false } }))).toEqual({
+        version: 1,
+        kind: "locked",
+      })
+    } finally {
+      ConfigManaged.useTestPolicies(undefined)
+      Config.refreshLocal()
+      Config.confirmLocal()
+      if (agent !== undefined) process.env.VECTOR_AGENT_SESSION = agent
+    }
+    await untouched(f)
+  }, 30_000)
+
+  test("durable preference writes compare revisions and immediately stop legacy-enabled admission", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const file = path.join(Global.Path.config, "vector.json")
+    const original = await readFile(file, "utf8")
+    const access = EverywherePreferences.access(preferencesPath)
+    const read = { version: 1, kind: "read" }
+    const update = { version: 1, kind: "update", revision: 0, settings: { enabled: false } }
+    expect(await run(access(read))).toMatchObject({ kind: "ready", snapshot: { revision: 0, everywhere: { enabled: true } } })
+    expect(await run(access({ ...update, version: 2 }))).toEqual({ version: 1, kind: "invalid" })
+    expect(await run(access({ ...update, consent: true }))).toEqual({ version: 1, kind: "invalid" })
+    const writes = await Promise.all([run(access(update)), run(access(update))])
+    expect(writes.map((result) => result.kind).sort()).toEqual(["ready", "stale"])
+    expect(await run(access(read))).toMatchObject({ kind: "ready", snapshot: { revision: 1, everywhere: { enabled: false } } })
+    expect(JSON.parse(await readFile(preferencesPath, "utf8"))).toEqual({ version: 1, revision: 1, settings: { enabled: false } })
+    const name = path.basename(preferencesPath)
+    expect(readdirSync(path.dirname(preferencesPath)).filter((item) => item.startsWith(name))).toEqual([name])
+    expect(await readFile(file, "utf8")).toBe(original)
+    refusedWith(await post(f.input), 403, OFF)
+    await untouched(f)
+  }, 30_000)
+
+  test("only the listener's private creator can bind an unattended session after the scoped checkout trust probe", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const result = await post(f.input)
+    expect(result.status).toBe(200)
+    const directory = result.body.directory as string
+    const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
+    const intent = path.join(folder, `${f.input.jid}.session-intent.json`)
+    const placedPath = path.join(folder, `${f.input.jid}.placed.json`)
+    const receipt = path.join(folder, `${f.input.jid}.session.json`)
+    const command = {
+      ...f.input, directory, version: 1, platform: "slack", title: "Slack: Fixture setting", permission: [], claim: "a".repeat(64),
+    }
+    const bind = (payload: unknown) => Effect.runPromise(privateSession!(payload))
+    // Placement never loads a checkout. A direct broker request cannot use the session creator to bootstrap it.
+    expect(await loaded()).not.toContain(FileLock.key(directory))
+    expect(await bind(command)).toEqual({ version: 1, kind: "refused" })
+    expect(await bind({ ...command, directory: f.repo })).toEqual({ version: 1, kind: "refused" })
+    expect(await loaded()).not.toContain(FileLock.key(directory))
+    expect(await present(intent)).toBe(false)
+    expect(await present(receipt)).toBe(false)
+
+    // Use the same scoped HTTP request the Desktop worktree adapter makes before sending a broker command.
+    const scoped = (route: string) => `${route}?${new URLSearchParams({ directory })}`
+    const trust = await call(scoped("/config/trust"), { headers: owner })
+    expect(trust.status).toBe(200)
+    expect(trust.body).toMatchObject({ trusted: false, ignored: true })
+    expect(await loaded()).toContain(FileLock.key(directory))
+    // Older reservations lack a positive Engine placement, even when the checkout has been opened.
+    const placedBody = await readFile(placedPath)
+    await rm(placedPath)
+    expect(await bind(command)).toEqual({ version: 1, kind: "refused" })
+    expect(await present(receipt)).toBe(false)
+    await writeFile(placedPath, placedBody, { mode: 0o600 })
+    await allow([f.repo], false)
+    expect(await bind(command)).toEqual({ version: 1, kind: "refused" })
+    expect(await present(intent)).toBe(false)
+    await allow([f.repo])
+    const created = await bind(command)
+    expect(created.kind).toBe("created")
+    if (created.kind !== "created") throw new Error("Missing binding from the real session service")
+    expect(await bind(command)).toEqual(created)
+    expect(await bind({ ...command, claim: "b".repeat(64) })).toEqual({ version: 1, kind: "refused" })
+    expect(await bind({ ...command, terminal: true })).toEqual({ version: 1, kind: "refused" })
+    const details = await call(scoped(`/session/${created.sessionID}`), { headers: owner })
+    expect(details.status).toBe(200)
+    expect(details.body.metadata["vector.unattended"]).toEqual({ by: "everywhere", jid: f.input.jid, platform: "slack" })
+    const saved = JSON.parse(await readFile(receipt, "utf8"))
+    expect(saved).toMatchObject({ version: 1, sessionID: created.sessionID, directory, jid: f.input.jid, claim: command.claim })
+    expect(saved).not.toHaveProperty("terminal")
+  }, 30_000)
+
+  test("an ordinary session cannot bind itself using unattended metadata", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const placed = await post(f.input)
+    expect(placed.status).toBe(200)
+    const directory = placed.body.directory as string
+    const request = {
+      ...f.input, directory, version: 1, platform: "slack", title: "Slack: Fixture", permission: [], claim: "a".repeat(64),
+    }
+    const inline = await call(`/session?${new URLSearchParams({ directory })}`, {
+      method: "POST", headers: owner,
+      body: { title: request.title, metadata: { "vector.unattended": { by: "everywhere", jid: f.input.jid, platform: "slack" } } },
+    })
+    expect(inline.status).toBe(200)
+    expect(await Effect.runPromise(privateSession!({ ...request, sessionID: inline.body.id })))
+      .toEqual({ version: 1, kind: "refused" })
+    const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
+    expect(await present(path.join(folder, `${f.input.jid}.session-intent.json`))).toBe(false)
+    expect(await present(path.join(folder, `${f.input.jid}.session.json`))).toBe(false)
+  }, 30_000)
+
+  test("a checkout that changes while the Engine creates the session gets no binding", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const created = await post(f.input)
+    expect(created.status).toBe(200)
+    const directory = created.body.directory as string
+    expect(await loaded()).not.toContain(FileLock.key(directory))
+    const trust = await call(`/config/trust?${new URLSearchParams({ directory })}`, { headers: owner })
+    expect(trust.body.trusted).toBe(false)
+    const folder = path.join(Global.Path.state, "everywhere-worktree-reservations")
+    const placement = JSON.parse(await readFile(path.join(folder, `${f.input.jid}.placed.json`), "utf8"))
+    const receipt = path.join(folder, `${f.input.jid}.session.json`)
+    let switched = false
+    const on = (event: { directory?: string; payload: { type: string } }) => {
+      if (event.directory !== directory || event.payload.type !== "session.created") return
+      // Simulate an outside Git writer after the session's durable creation. The proof rechecks the branch before publication.
+      writeFileSync(path.join(placement.gitDirectory, "HEAD"), `${f.base}\n`)
+      switched = true
+    }
+    GlobalBus.on("event", on)
+    const reply = await Effect.runPromise(privateSession!({
+      ...f.input, directory, version: 1, platform: "slack", title: "Slack: Fixture", permission: [], claim: "a".repeat(64),
+    })).finally(() => GlobalBus.off("event", on))
+    expect(switched).toBe(true)
+    expect(reply).toEqual({ version: 1, kind: "refused" })
+    expect(await present(receipt)).toBe(false)
   }, 30_000)
 
   test("a company lock on everywhere is off, with the project open and trusted", async () => {

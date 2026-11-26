@@ -353,8 +353,14 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       if (placed.from !== from || placed.branch !== branch || !placed.directory || placed.directory === project.directory || !await git.unchanged(original)) throw new Error("Invalid unattended worktree authority")
       const snapshot = await git.snapshot(placed.directory)
       if (snapshot.baseSha !== from) throw new Error("The unattended worktree has a different base")
+      if (controller.signal.aborted) throw new Error("Everywhere job stopped")
       engine = deps.engine(placed.directory)
-      session = await engine.create(job, unattendedRules(settings.rules, settings.shell))
+      session = await engine.create(job, unattendedRules(settings.rules, settings.shell), {
+        jid,
+        directory: placed.directory,
+        branch,
+        base: from,
+      })
       await deps.ledger.update({ jid, lease: job.lease.id, sessionID: session, startedAt: now() })
       const sessions = new Set([session])
       let ready!: () => void

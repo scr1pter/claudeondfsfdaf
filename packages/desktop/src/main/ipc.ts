@@ -25,7 +25,11 @@ import { getStore, removeStoreFileIfEmpty } from "./store"
 import { isRendererStoreName } from "./store-keys"
 import { write } from "./logging"
 import { listReports, reportStatuses, sendBugReport } from "./bug-report"
-import { REMOTE_STARTING, remoteLink, remoteNotify } from "./remote-runtime"
+import { REMOTE_STARTING, refreshEverywhereJobs, remoteLink, remoteNotify } from "./remote-runtime"
+import { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
+import { READ_EVERYWHERE_PREFERENCES, updateEverywherePreferences } from "./everywhere-preference-control"
+import { broadcastRendererStatus } from "./renderer-status"
+import type { SidecarListener } from "./server"
 import { vaultBackup, vaultStarting } from "./vault-runtime"
 import { createDesktopOps } from "./ops"
 import { createHostedClient } from "./hosted-client"
@@ -232,6 +236,7 @@ const pickedFiles = createPickedFileAuthorizations()
 
 type Deps = {
   killSidecar: () => Promise<void> | void
+  everywherePreferences: () => SidecarListener["everywherePreferences"] | undefined
   relaunch: () => void
   awaitInitialization: () => Promise<ServerReadyData>
   consumeInitialDeepLinks: () => Promise<string[]> | string[]
@@ -432,6 +437,48 @@ export function registerIpcHandlers(deps: Deps) {
   }
   handle("remote-status", () => remoteLink()?.status() ?? REMOTE_STARTING)
   handle("remote-set-enabled", (_event, enabled: unknown) => remote().setEnabled(enabled === true))
+  handle("everywhere-preferences-read", async () => {
+    await deps.awaitInitialization()
+    return deps.everywherePreferences()?.(READ_EVERYWHERE_PREFERENCES) ?? { version: 1, kind: "unsupported" }
+  })
+  let updatingEverywhere = false
+  handle("everywhere-preferences-update", async (event, request: unknown) => {
+    if (updatingEverywhere) return { version: 1, kind: "stale" } as const
+    updatingEverywhere = true
+    return updateEverywherePreferences(request, {
+      transport: deps.everywherePreferences,
+      authorityRevision: vectorAccountAuthorityRevision,
+      offered: async () => EverywherePreferenceWire.offered(await vectorAccount.codium()),
+      confirm: async (withRemote) => {
+        const window = BrowserWindow.fromWebContents(event.sender)
+        if (!window) return false
+        const answer = await dialog.showMessageBox(window, {
+          type: "question",
+          message: "Allow this computer to take Vector everywhere jobs?",
+          detail: withRemote
+            ? "Vector Remote will turn on so jobs can reach this computer. Jobs can run only in the repositories you allow. Vector can stay open in the background while it waits for jobs."
+            : "Jobs can run only in the repositories you allow. Vector can stay open in the background while it waits for jobs.",
+          buttons: ["Cancel", withRemote ? "Turn on Remote and take jobs" : "Take jobs"],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        })
+        assertTrustedRenderer(event)
+        return answer.response === 1
+      },
+      remote: () => {
+        const link = remoteLink()
+        if (link) return { enabled: link.status().enabled, enable: async () => (await link.setEnabled(true)).enabled }
+      },
+      refresh: async () => {
+        try {
+          await refreshEverywhereJobs()
+        } finally {
+          broadcastRendererStatus(BrowserWindow.getAllWindows(), "everywhere-preferences-changed", true)
+        }
+      },
+    }).finally(() => { updatingEverywhere = false })
+  })
   handle("remote-pair-start", () => remote().startPairing())
   handle("remote-pair-confirm", (_event, code: unknown) =>
     remote().confirmPairing(typeof code === "string" ? code : undefined),
