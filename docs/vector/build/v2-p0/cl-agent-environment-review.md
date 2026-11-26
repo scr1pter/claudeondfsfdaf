@@ -250,6 +250,87 @@ limit instead of lengthening it.
 
 No tripwire flipped, no test skipped or loosened, no deadline changed, no generated file touched, no flag turned on.
 
+## 2026-11-25: verified on cl-agent-environment-review
+
+The runs owed above, made by the verifier in this branch's worktree, one Bun process at a time, after
+`bun install --ignore-scripts`. Bun 1.3.14 on macOS.
+
+**Merge and recheck.** `fdde5fbbe` merges origin/main `b57b8d53a` (#160 the newest merge) with no conflict; main
+touched no file of this branch since `c89a69bd1`, and no `package.json` or lockfile. Open PRs rechecked live before
+the first commit and again before the last: 38 open (the held owner draft #68 and Codex's #98 to #171), and
+`gh pr diff --name-only` for each names no file of this branch. Of the merged PRs, none since #32 (agent-environment)
+touches a terminal or browser tool file, so no Codex PR covers this item. Nothing dropped.
+
+**Runs.** Each red run restored the source and was followed by `git checkout HEAD -- <file>`, a clean `git status`,
+and the sha256 below.
+
+| Repair | Red-before | Green | Mutation | sha256 after restore |
+| --- | --- | --- | --- | --- |
+| S2 non-web address | red (see below) | 27/27 | red | `browser.ts` `d1290e72fe0c2e9833041e2a542a7653886d3fbda5146394fa2f4a84dfe0af96` |
+| S1 guested session | red (see below) | 27/27 | red | `browser.ts` as above |
+| P1 agent tabs | red | 22/22 | red | `browser-agent.ts` `10c8ee4341f6f34b27024add0fe35519a822d7439957175f7b6f13a9588193cd` |
+| P1 bridge | red | 3/3 | red (two) | `browser-bridge.ts` `5e8f45edb871e51af9847b5a8720ecc150de100c5fe14fbc7c4307c87f703835` |
+| S3 terminal reveal | red | 1/1 | red (two) | `terminal.ts` `d8f6043a5d477f173f68335bd9efe6e039297ee224908e13c33d6e28baa7cd15` |
+
+- S2 and S1, `test/tool/browser.test.ts` from `packages/engine`. Restoring `browser.ts` whole from origin/main fails
+  the file at load (`Export named 'GUESTED' not found`). So the red run used origin/main's `browser.ts` with only the
+  two exported messages appended: 25 pass, 2 fail, each for its own reason. The guest case: `read` sent
+  `inspectDom` and `readPage` and answered with the page. The address case: `file:///etc/passwd` asked
+  `browser_external`. Mutation S2: the drafted text `params.action === "open_tab" || ` matches two lines, the new check
+  (`:595`) and the older ask (`:705`). Dropped at `:595` only: the address case alone is red (26 pass, 1 fail).
+  Dropped at both, "tab actions go straight to the desktop and ask nothing, and open_tab asks as open_url does" is red
+  too, so the mutation is the one at `:595`. Mutation S1: `guests.marked(ctx.sessionID)` to
+  `guests.marked(ctx.parentID)` at `:589`: the guest case alone is red.
+- P1 tabs, `./src/main/browser-agent-tabs.test.ts` from `packages/desktop` (`bun --no-env-file test --timeout 30000`).
+  Red-before with origin/main's `browser-agent.ts`: "a command still waiting for its page when its call ended never
+  runs; the one running finishes" is red at `report.ok` (true: the waiting `openUrl` ran). The first red run also
+  showed the existing "the user's own Preview navigation follows a redirect to another site; the agent's does not"
+  timed out, reported at 294 s against the 30 s limit. A machine stall, not this change: that case sends no signal, so
+  both sources take the same path. A rerun of the same red source passed it (21 pass, 1 fail: the new case only), and
+  every green run passes it. Mutation `gone?.aborted ?` to `false ?` at `browser-agent.ts:1661`: the new case alone is
+  red.
+- P1 bridge, `./src/main/browser-bridge-agent-review.test.ts`. The two drafted cases proved `callerGone` but not that
+  the bridge hands its signal to `runBrowserAgent`: dropping that third argument at `browser-bridge.ts:68` left every
+  test green. Fixed in `24b05a2cd` with a third case, "over the bridge, each agent command is handed the end of its
+  call". It starts the desktop's own bridge on 127.0.0.1 (no outside host), sends one agent command with the address
+  and the random token the bridge makes for itself, and checks that `runBrowserAgent` received a live `AbortSignal`.
+  Red-before with origin/main's `browser-bridge.ts`: 0 pass, 3 fail. The two `callerGone` cases fail with "callerGone
+  is not a function", and the new case because nothing was handed (`undefined`). Mutation A: drop `gone` from the
+  `runBrowserAgent` call: the new case alone is red. Mutation B: drop the `if (!response.writableFinished)` guard: the
+  "whose response was sent has not" case and the new case are red.
+- S3, `test/tool/terminal-agent-review.test.ts` from `packages/engine`. Red-before with origin/main's `terminal.ts`:
+  red at the user's terminal's output, which has no focus sentence. Mutation `params.focus === true && own(info, ctx)`
+  to `params.focus === true` at `:673`: red at the same output. A second mutation keeps the sentence and passes the
+  asked-for focus through, `pty.reveal(info.id, { focus: params.focus === true })` at `:674`. It is red at the
+  `revealed` list: the user's and the other session's terminals were revealed with `focus: true`.
+
+**Lead ruling (2026-11-25): what the bridge case can prove under Bun.** A probe in Bun 1.3.14 showed its `node:http`
+server never emits a response's `close` when the client aborts mid-request (only after a sent answer). Node, which
+Electron's main process runs, emits it on a connection terminated early, as `callerGone` expects. A second probe
+showed Bun's `fetch` closes the connection at once when its signal aborts, which is how the engine calls the bridge.
+So the abort itself stays proven on `callerGone` with Node's event contract. The over-the-wire case proves the
+hand-over and that a sent answer does not abort. It does not attempt an abort Bun's server cannot report. No test
+waits on it, and no timeout changed.
+
+**Typecheck.** `bun typecheck` in `packages/engine` (`tsgo --noEmit`) and in `packages/desktop` (`tsgo -b`): clean.
+
+**Existing tests of the changed modules, one file at a time, all green.**
+
+- Engine: `test/tool/terminal.test.ts` 55/55, `test/tool/browser-actions.test.ts` 9/9,
+  `test/tool/browser-cleanup.test.ts` 2/2, `test/tool/browser-format.test.ts` 11/11, `test/tool/parameters.test.ts`
+  62/62, `test/question/expire.test.ts` 3/3, `test/local-mode/local-run.test.ts` 31/31.
+- Desktop: `browser-bridge.test.ts` 14/14, `browser-agent-input.test.ts` 24/24, `browser-agent-permissions.test.ts`
+  14/14, `research-browser.test.ts` 26/26.
+- Root: `bun test --timeout 30000 ./test/no-personal-paths.test.ts` from the repository root 1/1, with both docs as
+  committed here (the `./` matters: the root `bunfig.toml` points a bare name at an empty test root).
+
+**CI only.** The Windows engine shards and the Linux and Windows desktop runs of these files run in `test.yml`
+(#77's 18 Windows engine shards; the new engine file reshuffles them). A shard over the 45-minute step limit is
+reported, never answered with a longer limit.
+
+**Still owed.** Push, open the PR (not draft), and read its `test.yml` run shard by shard. Owner item unchanged:
+OWN-RELEASE-ACCEPT.
+
 ## Done
 
 The item's own Done is a full green `test.yml` run on this branch's PR, on CI. The Bun-holding builder runs it.

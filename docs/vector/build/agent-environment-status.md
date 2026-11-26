@@ -167,12 +167,12 @@ Every other point read holds; each is listed under its angle with what was read 
   of one message, or one behind a slow `wait_for_selector`) ran when its turn came, after the Stop, with the asks it
   carried.
 - **Fix.** `callerGone` (`browser-bridge.ts:23`) aborts a signal when the response closes before it was sent, and the
-  bridge passes it on (`:37`). A queued command whose signal is aborted when its turn comes is not run
-  (`browser-agent.ts:1661`). It reports that it did not run (`abandonedReport :1955`). Commands that run at once (the
-  panel's, the user's, `closeBrowser`) are unchanged.
+  bridge makes one per request (`:37`) and passes it on (`:68`). A queued command whose signal is aborted when its
+  turn comes is not run (`browser-agent.ts:1661`). It reports that it did not run (`abandonedReport :1955`). Commands
+  that run at once (the panel's, the user's, `closeBrowser`) are unchanged.
 - **Tests.** Desktop `browser-agent-tabs.test.ts`, "a command still waiting for its page when its call ended never
-  runs; the one running finishes". New `browser-bridge-agent-review.test.ts`, the two "a call to the agent browser"
-  cases.
+  runs; the one running finishes". New `browser-bridge-agent-review.test.ts`, the three "a call to the agent browser"
+  cases: `callerGone`'s two, and the bridge handing each agent command its signal.
 
 ### P2. A terminal program after an engine crash (low, deferred)
 
