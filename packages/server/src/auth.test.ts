@@ -132,6 +132,28 @@ describe("server authentication", () => {
       expect(ServerAuth.isOwnerOnlyRoute(method!, route!)).toBe(true)
     expect(ServerAuth.isOwnerOnlyRoute("GET", "/experimental/session/ses_review/review/ses_run")).toBe(true)
   })
+  test("local review fix routes, and any route added under /review, are owner-only; lookalikes are not claimed", () => {
+    for (const method of ["GET", "HEAD", "POST", "DELETE"])
+      for (const route of [
+        "/experimental/session/:sessionID/review/fix",
+        "/experimental/session/:sessionID/review/fix/:fixID/preview",
+        "/experimental/session/:sessionID/review/fix/:fixID/execute",
+        "/experimental/session/:sessionID/review/fix/:fixID/cancel",
+        "/experimental/session/:sessionID/review/fix/:fixID/other",
+        "/experimental/session/:sessionID/review/fix/:fixID",
+        "/experimental/session/:sessionID/review/a/b/c/d",
+        "/experimental/session/ses_review/review/fix/fix_1/execute",
+      ])
+        expect(ServerAuth.isOwnerOnlyRoute(method, route)).toBe(true)
+    for (const route of [
+      "/experimental/session/:sessionID/reviewx",
+      "/experimental/session/:sessionID/reviews/fix",
+      "/experimental/session/:sessionID/review-fix",
+      "/experimental/session/review/fix",
+      "/experimental/session/:sessionID/x/review/fix",
+    ])
+      for (const method of ["GET", "POST"]) expect(ServerAuth.isOwnerOnlyRoute(method, route)).toBe(false)
+  })
   test("an empty owner password cannot bypass guest authentication", () => {
     const config = {
       password: Option.some(""),

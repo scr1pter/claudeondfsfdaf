@@ -10,6 +10,7 @@ import { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { buildReviewPrompt, SCOPE, type PromptInput } from "@vectordevai/core/review/prompt"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
+import { reviewPermissionRules } from "@vectordevai/core/review/permission"
 import { DEFAULT_REVIEW_CONFIG } from "@vectordevai/core/review/types"
 import { FreeModels } from "@vectordevai/core/free-models"
 import { Global } from "@vectordevai/core/global"
@@ -446,6 +447,50 @@ it.instance(
       expect(trusted.body).toContain(DECISION)
     }),
   90_000,
+)
+
+it.instance("holdback redacts rendered owner recall on the first and later review requests", () =>
+  Effect.gen(function* () {
+    const { llm, brain, place } = yield* setup()
+    const fs = yield* FSUtil.Service
+    const sessions = yield* Session.Service
+    const relative = "src/payments/charge.ts"
+    const file = path.join((yield* TestInstance).directory, relative)
+    const token = `ghp_${"0".repeat(36)}`
+    const note = "Prefer focused assertions for payment retries"
+    yield* fs.writeWithDirs(file, "export const retries = 3\n")
+    // The note itself passes the outward screen. Its rendered scope includes a second path.
+    yield* brain.propose(place, {
+      kind: "preference",
+      text: note,
+      scope: "personal",
+      origin: "user",
+      evidence: { type: "user" },
+      paths: [relative, `src/payments/${token}.ts`],
+    })
+    for (const holdback of [undefined, "off", "secrets"] as const) {
+      const session = yield* sessions.create({
+        title: "Scoped review",
+        internal: "vectorscope.review",
+        permission: reviewPermissionRules({ holdback }),
+      })
+      yield* llm.tool("read", { filePath: file })
+      yield* llm.text("Reviewed.")
+      const requests = yield* send({
+        sessionID: session.id,
+        agent: "review",
+        text: buildReviewPrompt(reviewInput()),
+        metadata: { [SCOPE]: { paths: [relative], trust: "untrusted" } },
+      })
+      expect(requests).toHaveLength(2)
+      for (const body of requests) {
+        const recall = blocks(body, "how_the_owner_reviews")[0] ?? ""
+        if (holdback === "secrets") expect(body.includes(token)).toBe(false)
+        expect(recall).toContain(`(${relative}, src/payments/${holdback === "secrets" ? "[redacted]" : token}.ts): ${note}`)
+      }
+      expect(JSON.stringify(yield* sessions.messages({ sessionID: session.id }))).not.toContain(token)
+    }
+  }),
 )
 
 it.instance(

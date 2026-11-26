@@ -36,6 +36,11 @@ export function packChanges(input: {
   }
 }
 
+/** Canonical repository path used to select the head file cited by a model evidence reference. */
+export function evidencePath(reference: string): string {
+  return reference.replace(/:\d+(?:-\d+)?$/, "").replace(/^(\.\/|\/)+/, "")
+}
+
 // The head files a double-check needs: the files its candidates sit in and the files their evidence cites, annotated.
 // Every other changed file is left out; the checker can still open files from the working tree.
 export function verifyHeadFiles(
@@ -44,12 +49,7 @@ export function verifyHeadFiles(
   candidates: Pick<Finding, "path" | "evidence">[],
 ): HeadFile[] | undefined {
   if (!headFiles) return undefined
-  const cited = new Set(
-    candidates.flatMap((finding) => [
-      finding.path,
-      ...(finding.evidence ?? []).map((entry) => entry.replace(/:\d+(?:-\d+)?$/, "").replace(/^(\.\/|\/)+/, "")),
-    ]),
-  )
+  const cited = new Set(candidates.flatMap((finding) => [finding.path, ...(finding.evidence ?? []).map(evidencePath)]))
   return annotate(
     changed,
     headFiles.filter((file) => cited.has(file.path)),

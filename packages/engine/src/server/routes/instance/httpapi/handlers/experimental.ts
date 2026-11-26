@@ -374,6 +374,8 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         vectorscopeRuns: true,
         // Owner data controls only; this does not advertise automatic review-context consumption.
         vectorscopeReviewMemoryControls: true,
+        // The routes exist; the owner setting, the platform and a CI job are checked on every call.
+        vectorscopeLocalFixes: true,
         // A prompt's codeReview field asks for a VectorScope review once the run that changed files is done.
         codeReviewAfterTask: true,
         connections: flags.experimentalConnect,

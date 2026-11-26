@@ -5,6 +5,7 @@ import { FSUtil } from "@vectordevai/core/fs-util"
 import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { assertExternalDirectoryEffect, filterReadListing } from "./external-directory"
 import { ProcessIsolation } from "@vectordevai/core/process-isolation"
+import { holdbackLines } from "@vectordevai/core/review/holdback"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"
 
@@ -64,14 +65,15 @@ export const GlobTool = Tool.define(
           const output = []
           if (shown.length === 0) output.push("No files found")
           if (shown.length > 0) {
-            output.push(
-              ...shown.map((file) => {
-                const absolute = path.resolve(search, file.path)
-                const relative = path.relative(ins.directory, absolute)
-                // Relative to the working directory when inside it: a third of the tokens of absolute paths.
-                return relative.startsWith("..") || path.isAbsolute(relative) ? absolute : relative
-              }),
-            )
+            const names = shown.map((file) => {
+              const absolute = path.resolve(search, file.path)
+              const relative = path.relative(ins.directory, absolute)
+              // Relative to the working directory when inside it: a third of the tokens of absolute paths.
+              return relative.startsWith("..") || path.isAbsolute(relative) ? absolute : relative
+            })
+            // VS-34's tool half (SF-14): in a review session under holdback "secrets" a name is redacted as the read
+            // tool redacts a directory's entries, so a file named after a token does not spell it out.
+            output.push(...(ctx.extra?.holdback === "secrets" ? holdbackLines(names) : names))
             if (truncated) {
               output.push("")
               output.push(

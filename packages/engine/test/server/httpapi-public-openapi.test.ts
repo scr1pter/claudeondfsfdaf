@@ -106,6 +106,32 @@ describe("PublicApi OpenAPI v2 errors", () => {
     expect(capability?.properties).not.toHaveProperty("vectorscopeReviewMemoryContext")
   })
 
+  test("registers the owner local fix routes with owner refusals, and their optional capability", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const instance = OpenApi.fromApi(InstanceHttpApi) as OpenApiSpec
+    const fix = "/experimental/session/{sessionID}/review/fix"
+    const operations = Object.entries(spec.paths).flatMap(([path, item]) =>
+      path === fix || path.startsWith(`${fix}/`)
+        ? methods.flatMap((method) => (item[method] ? [[method, path] as const] : []))
+        : [],
+    )
+    expect(operations.map((operation) => operation.join(" ")).sort()).toEqual([
+      `get ${fix}`,
+      `post ${fix}`,
+      `post ${fix}/{fixID}/cancel`,
+      `post ${fix}/{fixID}/execute`,
+      `post ${fix}/{fixID}/preview`,
+    ])
+    for (const [method, path] of operations) {
+      expect(instance.paths[path]?.[method]?.responses?.["401"]).toBeDefined()
+      expect(instance.paths[path]?.[method]?.responses?.["403"]).toBeDefined()
+      expect(spec.paths[path]?.[method]?.responses?.["403"]).toBeDefined()
+    }
+    const capability = spec.components.schemas.ExperimentalCapabilities
+    expect(capability?.properties?.vectorscopeLocalFixes).toEqual({ type: "boolean" })
+    expect(capability?.required).not.toContain("vectorscopeLocalFixes")
+  })
+
   test("Teams Personal selection is nullable and its typed recovery error is documented", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const operation = spec.paths["/experimental/console/switch"].post!

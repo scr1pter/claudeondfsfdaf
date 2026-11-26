@@ -12,20 +12,11 @@
 // $GITHUB_OUTPUT and exits 1 on not-reviewed, incomplete and blocking. It closes unfinished reviews only: it does not
 // hold against a same-repository author who edits the workflow, and a job the workflow's `if:` skips never reaches it.
 
-import type { HeldFile } from "./holdback"
 import type { SkipReason } from "./skip"
-import type { ReviewOutcome, Severity, SkippedFile } from "./types"
+import type { HeldFile, ReviewOutcome, Severity, SkippedFile } from "./types"
 
-// In the order reviewVerdict tests them. They move to types.ts with ReviewState.verdict when the job stores one.
-export const REVIEW_VERDICTS = [
-  "not-reviewed",
-  "policy-skip",
-  "incomplete",
-  "blocking",
-  "findings",
-  "clean-complete",
-] as const
-export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number]
+import { REVIEW_VERDICTS, type ReviewVerdict } from "./types"
+export { REVIEW_VERDICTS, type ReviewVerdict } from "./types"
 
 export interface PostingPlan {
   createReview: boolean
@@ -61,20 +52,22 @@ export function postingPlan(
 // - `specialists[].name` also takes the contract's `lens` and `repro` and codium's `judge`, likewise;
 // - `trivial` marks VS-24's zero-attempt trivial outcome from Review.run;
 // - `strict` is VS-27a's StrictResult, which no runner sets before VS-27c;
-// - `held` is VS-34's held-back files.
+// - `held` is VS-34's held-back files, which Review.run sets under `holdback: "secrets"` (SF-13b). `skipped` and
+//   `held` take a path, so a held deletion accounts for its own `held-back` skip only; fixtures without one keep the
+//   count rule (unfinishedCauses).
 // The unions repeated below are redundant since VS-27a and harmless; VS-32 wiring may simplify them.
 export interface VerdictOutcome {
   partial?: NonNullable<ReviewOutcome["partial"]> | "privacy" | "budget-estimate"
   unreviewed: readonly string[]
-  skipped: readonly Pick<SkippedFile, "reason">[]
+  skipped: readonly (Pick<SkippedFile, "reason"> & { path?: string })[]
   specialists: readonly {
     name: ReviewOutcome["specialists"][number]["name"] | "lens" | "repro" | "judge"
     status: ReviewOutcome["specialists"][number]["status"]
   }[]
   selection: Record<VerdictList, readonly { severity: Severity }[]>
   trivial?: true
-  strict?: { complete: boolean }
-  held?: readonly Pick<HeldFile, "status">[]
+  strict?: { complete: boolean; incomplete?: readonly string[] }
+  held?: readonly (Pick<HeldFile, "status"> & { path?: string })[]
 }
 
 // What a run covered, without what it found: the parts of a VerdictOutcome that unfinishedCauses reads apart from the
@@ -156,8 +149,17 @@ export function reviewVerdict(input: VerdictInput): VerdictResult {
   // unfinished, or a pass that ran, means the marker does not describe the outcome, and the verdict reads the outcome
   // instead. What it lists (an earlier finding still open) is read as on any other outcome, so a trivial commit never
   // passes a still-open blocking finding that failOn "blocking" fails on.
+  // The strict result also records the missing reviewer on a proved skip. A missing or different
+  // explanation remains an incomplete review, even when the adapter supplied a trivial marker.
+  const skippedStrict =
+    outcome.strict?.complete === false &&
+    Array.isArray(outcome.strict.incomplete) &&
+    outcome.strict.incomplete.length === 1 &&
+    outcome.strict.incomplete[0] === "no-reviewer"
   const trivial =
-    outcome.trivial === true && !outcome.specialists.length && unfinished.every((cause) => cause === "no-reviewer")
+    outcome.trivial === true &&
+    !outcome.specialists.length &&
+    unfinished.every((cause) => cause === "no-reviewer" || (cause === "strict-incomplete" && skippedStrict))
   if (trivial && !listed.length) return { verdict: "policy-skip", causes: ["trivial"], notes }
   if (unfinished.length && !trivial) return { verdict: "incomplete", causes: unfinished, notes }
   // A severity this module does not name reads as blocking.
@@ -195,8 +197,9 @@ const SKIP_VERDICTS: Record<Exclude<VerdictSkip, StoredSkip>, "not-reviewed" | "
 }
 
 // What a skipped file leaves unfinished, or null when skipping it is part of a complete review. Exhaustive, so a new
-// SkippedFile reason (VS-34 wiring's `held-back`) fails typecheck here until it is classified; until then, a file that
-// arrives with it at runtime reads as `skipped-unknown`.
+// SkippedFile reason fails typecheck here until it is classified; a reason this map does not name at runtime reads as
+// `skipped-unknown`. VS-34's `held-back` leaves the review incomplete (I-7) unless `held` accounts for it as a deletion
+// only, with nothing sent (unfinishedCauses).
 const SKIPPED_FILE_CAUSES: Record<SkippedFile["reason"], UnfinishedCause | null> = {
   ignored: null,
   lockfile: null,
@@ -206,6 +209,7 @@ const SKIPPED_FILE_CAUSES: Record<SkippedFile["reason"], UnfinishedCause | null>
   binary: null,
   deleted: null,
   "size-limit": "size-limit",
+  "held-back": "held-back",
 }
 
 // The verdicts a gate fails on, which an earlier review can hand on unchanged.
@@ -238,18 +242,29 @@ function storedVerdict(reason: StoredSkip, stored: ReviewVerdict | undefined): V
 // Every reason the run is unfinished, in a fixed order. guardrail.ts reads the same causes for StrictResult.complete
 // (VS-27b), so strict completeness and VS-32's verdict cannot disagree about what finished.
 export function unfinishedCauses(outcome: VerdictCoverage & Pick<VerdictOutcome, "strict">): UnfinishedCause[] {
+  const skipped = outcome.skipped.flatMap((file) =>
+    Object.hasOwn(SKIPPED_FILE_CAUSES, file.reason) ? (SKIPPED_FILE_CAUSES[file.reason] ?? []) : [],
+  )
+  // VS-32: a held-back file whose change is a deletion only, with nothing sent, adds a note and leaves the review
+  // complete. A `held-back` skip carries no status, so each one counts unless a held deletion accounts for it, and any
+  // held file that is not a deletion counts. When every held-back skip and held deletion names its path, as Review.run
+  // records them (SF-13b), a skip counts unless a held deletion has its path. An input without paths keeps the count
+  // rule: one without `held`, or with more held-back skips than held deletions, fails closed.
+  const heldBack = outcome.skipped.filter((file) => file.reason === "held-back")
+  const deletions = outcome.held?.filter((file) => file.status === "deleted") ?? []
+  const keyed = [...heldBack, ...deletions].every((file) => typeof file.path === "string")
+  const deleted = new Set(deletions.map((file) => file.path))
+  const held =
+    outcome.held?.some((file) => file.status !== "deleted") ||
+    (keyed ? heldBack.some((file) => !deleted.has(file.path)) : heldBack.length > deletions.length)
   return [
     ...(outcome.partial ? [outcome.partial] : []),
     ...(outcome.unreviewed.length ? ["unreviewed" as const] : []),
-    ...new Set(
-      outcome.skipped.flatMap((file) =>
-        Object.hasOwn(SKIPPED_FILE_CAUSES, file.reason) ? (SKIPPED_FILE_CAUSES[file.reason] ?? []) : [],
-      ),
-    ),
+    ...new Set(skipped.filter((cause) => cause !== "held-back")),
     ...(outcome.skipped.some((file) => !Object.hasOwn(SKIPPED_FILE_CAUSES, file.reason))
       ? ["skipped-unknown" as const]
       : []),
-    ...(outcome.held?.some((file) => file.status !== "deleted") ? ["held-back" as const] : []),
+    ...(held ? ["held-back" as const] : []),
     // oxlint-disable-next-line no-unnecessary-boolean-literal-compare -- a decoded strict result can carry a non-boolean
     ...(outcome.strict && outcome.strict.complete !== true ? ["strict-incomplete" as const] : []),
     ...(outcome.specialists.some((entry) => entry.status !== "ok") ? ["specialist" as const] : []),
