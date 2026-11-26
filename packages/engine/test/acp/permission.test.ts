@@ -196,6 +196,20 @@ describe("acp permissions", () => {
     expect(harness.replies).toEqual([{ requestID: "perm_1", reply: "once", directory: "/workspace" }])
   })
 
+  it("denies protected Connect requests when the editor cannot distinguish explicit approval", async () => {
+    const harness = createHarness()
+    await createSession(harness.session, "ses_a")
+    for (const permission of ["connect_write", "connect_cloud"]) {
+      harness.subscription.handle(permissionAsked("ses_a", `perm_${permission}`, { permission }))
+    }
+    await pollUntil(() => harness.replies.length === 2, "protected permissions were never denied")
+    expect(harness.requests).toEqual([])
+    expect(harness.replies).toEqual([
+      { requestID: "perm_connect_write", reply: "reject", directory: "/workspace" },
+      { requestID: "perm_connect_cloud", reply: "reject", directory: "/workspace" },
+    ])
+  })
+
   it("offers no 'always' where Vector's permission policy never remembers an approval", async () => {
     const harness = createHarness()
     await createSession(harness.session, "ses_a")

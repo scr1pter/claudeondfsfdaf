@@ -256,7 +256,13 @@ const launch = (sessionID: SessionID, parentID: MessageID) =>
   })
 
 // What the session processor does once the call returns: it keeps the call's metadata on its completed tool part.
-const settlePart = (sessionID: SessionID, messageID: MessageID, callID: string, metadata: Record<string, unknown>) =>
+const settlePart = (
+  sessionID: SessionID,
+  messageID: MessageID,
+  callID: string,
+  metadata: Record<string, unknown>,
+  output = "",
+) =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     yield* sessions.updatePart({
@@ -269,7 +275,7 @@ const settlePart = (sessionID: SessionID, messageID: MessageID, callID: string, 
       state: {
         status: "completed",
         input: {},
-        output: "",
+        output,
         title: BACKGROUND_TITLE,
         metadata,
         time: { start: 1, end: 2 },
@@ -277,14 +283,15 @@ const settlePart = (sessionID: SessionID, messageID: MessageID, callID: string, 
     })
   })
 
-// The run the call's part holds now.
-const partRun = (sessionID: SessionID, callID: string) =>
+// Read the title and ended run from the same stored card.
+const terminalPart = (sessionID: SessionID, callID: string) =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const part = (yield* sessions.messages({ sessionID }))
       .flatMap((message) => message.parts)
-      .find((item) => item.type === "tool" && item.callID === callID)
-    return part ? ConnectHub.fromPart(part) : undefined
+      .find((item): item is SessionV1.ToolPart => item.type === "tool" && item.callID === callID)
+    const run = part && ConnectHub.fromPart(part)
+    return part && run?.status === "done" ? { part, run } : undefined
   })
 
 const review = (sessionID: SessionID, directory: string, extra: Partial<Connect.ReviewRequest> = {}) =>
@@ -401,11 +408,8 @@ describe("a background review", () => {
         expect(part?.text.trim().endsWith(`</${ConnectNote.TAG}>`)).toBe(true)
 
         // The ended run is written into the part that started it.
-        const saved = yield* pollWithTimeout(
-          partRun(requester.id, callID).pipe(Effect.map((found) => (found?.status === "done" ? found : undefined))),
-          "the part never got the ended run",
-        )
-        expect(saved.result?.findings.map((item) => item.id)).toEqual(["f1", "f2"])
+        const saved = yield* pollWithTimeout(terminalPart(requester.id, callID), "the part never got the ended run")
+        expect(saved.run.result?.findings.map((item) => item.id)).toEqual(["f1", "f2"])
         expect((yield* jobs.get(run.id))?.status).toBe("completed")
         // It counts toward the request's reviews like any other.
         expect((yield* hub.request(requester.id)).reviews).toBe(1)
@@ -479,6 +483,13 @@ describe("a background review", () => {
           call: { ...asker(), promptOps: ops, part: { messageID: call.id, callID: "call_cancel" } },
         })
         expect(going.status).toBe("running")
+        yield* settlePart(
+          requester.id,
+          call.id,
+          "call_cancel",
+          ConnectHub.metadata(going),
+          "Original background output",
+        )
         expect(yield* hub.cancel(going.id, { sessionID: requester.id })).toBe(true)
         expect((yield* hub.get(going.id))?.result?.state).toBe("cancelled")
         yield* arrived(notes, 1)
@@ -488,6 +499,15 @@ describe("a background review", () => {
           quiet: true,
         })
         expect(notes[0]!.noReply).toBe(true)
+        const saved = yield* pollWithTimeout(
+          terminalPart(requester.id, "call_cancel"),
+          "the part never got the cancelled run",
+        )
+        expect(saved.part.state).toMatchObject({
+          status: "completed",
+          title: "VectorScope review cancelled",
+          output: "Original background output",
+        })
 
         // Stopping the job itself, as deleting its session does, cancels the run too.
         const second = yield* hub.run({
@@ -768,15 +788,19 @@ describe("the connect tool", () => {
       // Nothing a reviewer wrote reaches the model before the run ends.
       expect(result.output).not.toContain("Finding f1")
       expect(seen[0]?.request.background).toBe(true)
-      yield* settlePart(requester.id, call.id, "call_tool", result.metadata)
+      yield* settlePart(requester.id, call.id, "call_tool", { ...result.metadata, fixture: true }, result.output)
       yield* Deferred.succeed(gate, undefined)
       yield* arrived(notes, 1)
       expect(noteOf(notes[0]!)?.text).toContain("Finding f1")
-      const saved = yield* pollWithTimeout(
-        partRun(requester.id, "call_tool").pipe(Effect.map((found) => (found?.status === "done" ? found : undefined))),
-        "the part never got the ended run",
-      )
-      expect(saved.id).toBe(run.id)
+      const saved = yield* pollWithTimeout(terminalPart(requester.id, "call_tool"), "the part never got the ended run")
+      expect(saved.run.id).toBe(run.id)
+      expect(saved.part.state).toMatchObject({
+        status: "completed",
+        title: "VectorScope review: findings",
+        output: result.output,
+        metadata: { fixture: true },
+        time: { start: 1, end: 2 },
+      })
 
       const fix = yield* tool.execute(
         { action: "fix", run: run.id, findings: ["f1"], background: true },

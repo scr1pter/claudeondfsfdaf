@@ -6,7 +6,10 @@ const CLOUD_WRITES = new Set([
   "vector_cloud_environment",
   "vector_cloud_hosting",
 ])
-const CONNECT_ALWAYS = new Set(["connect_write", "connect_cloud"])
+
+export function requiresConnectConfirmation(permission?: string) {
+  return permission === "connect_write" || permission === "connect_cloud"
+}
 
 // Account mutations must ask again even when configuration or a client normally auto-accepts tools.
 export function requiresCloudApproval(permission?: string, always?: readonly string[]) {
@@ -170,7 +173,7 @@ export function requiresApproval(permission?: string, always?: readonly string[]
     permission === MEMORY_SOURCE ||
     permission === PROMPT_SOURCE ||
     permission === AGENT_MARKER ||
-    CONNECT_ALWAYS.has(permission ?? "") ||
+    requiresConnectConfirmation(permission) ||
     permission === RESEARCH_KEEP ||
     permission === NETWORK_COMMAND ||
     Boolean(

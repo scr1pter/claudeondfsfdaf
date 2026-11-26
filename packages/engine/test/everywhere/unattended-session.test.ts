@@ -153,6 +153,9 @@ const SCREENED = "Keep each billing fix in its own small commit with a regressio
 const PARTICULAR = "Move the Initech billing retry to the new queue before Q3."
 const RECALLED = "The billing retry backoff broke Initech checkout in March."
 const ATTACHED = "Retrying a Globex invoice twice charged that customer two times."
+const SAFE_RECALL = "Review billing retry backoff with a small deterministic fixture."
+const SAFE_ATTACHMENT = "Check the retry result before scheduling another attempt."
+const REPOSITORY_FACT = "The billing retry backoff has a secret-free fixture label."
 const PERSONAL = "Personal fixture fact: the owner's badge reads cobalt-heron-quartz."
 const MEMORY_FOR = "Vector's memory for src/billing/retry.ts"
 
@@ -172,21 +175,42 @@ function memories(h: Harness) {
       expect(response.status).toBe(200)
       expect(((await response.json()) as { entry: unknown }).entry).toMatchObject({ status: "active", ...expected })
     }
-    const entries = [["decision", "repository", SCREENED, true], ["decision", "repository", PARTICULAR, true],
-      ["lesson", "repository", RECALLED, false], ["fact", "personal", PERSONAL, true]] as const
+    const ids = new Map<string, string>()
+    const entries = [
+      ["decision", "repository", SCREENED, true],
+      ["decision", "repository", PARTICULAR, true],
+      ["lesson", "repository", RECALLED, false],
+      ["lesson", "repository", SAFE_RECALL, false],
+      ["fact", "repository", REPOSITORY_FACT, false],
+      ["fact", "personal", PERSONAL, true],
+    ] as const
     for (const [kind, scope, text, pinned] of entries) {
       const added = await h.send("/memory", "POST", { kind, scope, text })
       expect(added.status).toBe(200)
       const id = ((await added.json()) as { id: string }).id
+      ids.set(text, id)
       if (pinned) expect((await h.send(`/memory/${id}`, "PATCH", { pinned: true })).status).toBe(200)
       await read(id, { kind, scope, text, pinned })
     }
-    const imported = await h.send("/memory/import", "POST", { text: `## Lessons\n- ${ATTACHED} _(repository)_\n  - paths: \`src/billing/retry.ts\`\n` })
+    const imported = await h.send("/memory/import", "POST", {
+      text: `## Lessons\n${[ATTACHED, SAFE_ATTACHMENT].map((text) => `- ${text} _(repository)_\n  - paths: \`src/billing/retry.ts\`\n`).join("")}`,
+    })
     expect(imported.status).toBe(200)
-    const held = ((await imported.json()) as { entries: { id: string; text: string }[] }).entries.filter((entry) => entry.text === ATTACHED)
-    expect(held).toHaveLength(1)
-    expect((await h.send(`/memory/${held[0]!.id}`, "PATCH", { action: "approve" })).status).toBe(200)
-    await read(held[0]!.id, { kind: "lesson", scope: "repository", text: ATTACHED, pinned: false, paths: ["src/billing/retry.ts"] })
+    const held = ((await imported.json()) as { entries: { id: string; text: string }[] }).entries
+    for (const text of [ATTACHED, SAFE_ATTACHMENT]) {
+      const [entry] = held.filter((entry) => entry.text === text)
+      expect(entry).toBeDefined()
+      expect((await h.send(`/memory/${entry.id}`, "PATCH", { action: "approve" })).status).toBe(200)
+      await read(entry.id, {
+        kind: "lesson",
+        scope: "repository",
+        text,
+        pinned: false,
+        paths: ["src/billing/retry.ts"],
+      })
+      ids.set(text, entry.id)
+    }
+    return ids
   })
 }
 
@@ -314,35 +338,74 @@ it.live("a session without the unattended mark still hears the owner's particula
   expect(heard(guestRows).recall).toContain(RECALLED)
 }), 30_000)
 
-it.live("an unattended session hears only the screened digest, with no recall and no memory beside a file it reads", () => Effect.gen(function* () {
-  const llm = yield* TestLLMServer
-  const h = yield* harness(llm)
-  yield* memories(h)
-  const job = { ...h.job(), task: TASK }
-  const session = yield* Effect.promise(() => h.client.create(job, unattendedRules()))
-  yield* llm.tool("read", { filePath: path.join(h.directory, "src", "billing", "retry.ts") })
-  yield* llm.text("Unattended done.")
-  yield* Effect.promise(() => h.client.prompt(session, job, 1, MODEL))
-  const unattended = heard(yield* finished(h, session))
-  expect(unattended.recall).toBeUndefined()
-  // The read itself ran: what is missing is the memory that would have come with it.
-  expect(unattended.read).toContain("export const attempts = 3")
-  expect(unattended.read).not.toContain(MEMORY_FOR)
-  const inputs = yield* llm.inputs
-  for (const text of ["<vector_memory>", SCREENED]) expect(system(inputs)).toContain(text)
-  for (const text of [PARTICULAR, RECALLED, ATTACHED, PERSONAL]) expect(JSON.stringify(inputs)).not.toContain(text)
-  const info = (yield* Effect.promise(async () => await (await h.send(`/session/${session}`, "GET")).json())) as { metadata: Record<string, unknown> }
-  expect(info.metadata[UNATTENDED_KEY]).toMatchObject({ by: "everywhere", jid: job.jid })
+it.live(
+  "an authenticated unattended request recalls screened repository notes without saving them",
+  () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const h = yield* harness(llm)
+      const ids = yield* memories(h)
+      const job = { ...h.job(), task: TASK }
+      const session = yield* Effect.promise(() => h.client.create(job, unattendedRules()))
+      const response = Promise.withResolvers<void>()
+      yield* Effect.addFinalizer(() => Effect.sync(() => response.resolve()))
+      yield* llm.push(
+        reply()
+          .wait(response.promise)
+          .tool("read", { filePath: path.join(h.directory, "src", "billing", "retry.ts") }),
+      )
+      yield* llm.text("Unattended done.")
+      yield* Effect.promise(() => h.client.prompt(session, job, 1, MODEL))
+      const first = yield* pollWithTimeout(
+        llm.inputs.pipe(
+          Effect.map((items) =>
+            items.map((body) => JSON.stringify(body)).find((body) => body.includes("<vector_memory>")),
+          ),
+        ),
+        "The laptop job did not reach the fixture model",
+      )
+      expect(first.includes(SAFE_RECALL)).toBe(true)
+      const archived = yield* Effect.promise(() =>
+        h.send(`/memory/${ids.get(SAFE_RECALL)}`, "PATCH", { action: "archive" }),
+      )
+      expect(archived.status).toBe(200)
+      response.resolve()
+      const unattended = heard(yield* finished(h, session))
+      expect(unattended.read).toContain("export const attempts = 3")
+      expect(unattended.read).not.toContain(MEMORY_FOR)
+      const inputs = yield* llm.inputs
+      const sent = inputs.map((body) => JSON.stringify(body)).filter((body) => body.includes("<vector_memory>"))
+      expect(sent[0]?.includes(SAFE_RECALL)).toBe(true)
+      expect(sent[0]?.includes(SAFE_ATTACHMENT)).toBe(false)
+      expect(sent.length).toBeGreaterThanOrEqual(2)
+      expect(sent.at(-1)?.includes(SAFE_RECALL)).toBe(false)
+      expect(sent.at(-1)?.includes(SAFE_ATTACHMENT)).toBe(false)
+      expect(unattended.recall).toBeUndefined()
+      expect(unattended.read).not.toContain(SAFE_ATTACHMENT)
+      for (const text of ["<vector_memory>", SCREENED]) expect(system(inputs)).toContain(text)
+      for (const text of [PARTICULAR, RECALLED, ATTACHED, PERSONAL, REPOSITORY_FACT])
+        expect(JSON.stringify(inputs)).not.toContain(text)
+      const info = (yield* Effect.promise(async () => await (await h.send(`/session/${session}`, "GET")).json())) as {
+        metadata: Record<string, unknown>
+      }
+      expect(info.metadata[UNATTENDED_KEY]).toMatchObject({ by: "everywhere", jid: job.jid })
 
-  // The owner prompts it later without the guest header: the mark still decides the audience.
-  yield* llm.reset
-  yield* llm.text("Still unattended.")
-  expect((yield* Effect.promise(() => h.send(`/session/${session}/message`, "POST", { model: MODEL, parts: [{ type: "text", text: TASK }] }))).status).toBe(200)
-  const later = yield* llm.inputs
-  expect(system(later)).toContain(SCREENED)
-  for (const text of [PARTICULAR, RECALLED, ATTACHED, PERSONAL]) expect(JSON.stringify(later)).not.toContain(text)
-  expect(heard(yield* history(h, session)).recall).toBeUndefined()
-}), 30_000)
+      // The owner prompts it later without the guest header. The mark still applies and archived notes do not replay.
+      yield* llm.reset
+      yield* llm.text("Still unattended.")
+      expect(
+        (yield* Effect.promise(() =>
+          h.send(`/session/${session}/message`, "POST", { model: MODEL, parts: [{ type: "text", text: TASK }] }),
+        )).status,
+      ).toBe(200)
+      const later = yield* llm.inputs
+      expect(system(later)).toContain(SCREENED)
+      for (const text of [PARTICULAR, RECALLED, ATTACHED, PERSONAL, REPOSITORY_FACT, SAFE_RECALL, SAFE_ATTACHMENT])
+        expect(JSON.stringify(later)).not.toContain(text)
+      expect(heard(yield* history(h, session)).recall).toBeUndefined()
+    }),
+  30_000,
+)
 
 // EV-18: the desktop's ruleset with the user's own rules as GET /global/config really answers them, and the shell it
 // allows on `offline-v1`, run end to end in a session the desktop client creates.

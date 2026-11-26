@@ -31,6 +31,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { connectedReviews } from "./smoke-connect-node.ts"
+import { prepareConnectSmokeRepository } from "./smoke-connect-fixture.ts"
 import { deflateSync } from "node:zlib"
 import type { Computer } from "@vectordevai/schema/computer"
 
@@ -87,10 +88,11 @@ async function smokeConnect(bundle: string) {
   await mkdir(project, { recursive: true })
   const model = await startFakeModel(path.join(project, "notes.txt"))
   try {
+    const connectProject = await prepareConnectSmokeRepository(path.join(root, "connect-project"))
     const engine = await startEngine(bundle, root, model.url)
     try {
-      await connectedReviews(engine, project, `${PROVIDER}/${MODEL}`)
-      if (model.requests.length !== 0) throw new Error("a refused or cancelled non-Git review reached the model")
+      await connectedReviews(engine, connectProject, `${PROVIDER}/${MODEL}`, project)
+      if (model.requests.length !== 0) throw new Error("a refused, unchanged or cancelled review reached the model")
       console.log(
         `connect owner transport smoke passed on node ${process.version}: explicit approval, concurrent-start refusal, peer-disconnect cancellation and durable settlement`,
       )
@@ -122,6 +124,7 @@ async function smoke(bundle: string) {
     throw error
   })
   try {
+    const connectProject = await prepareConnectSmokeRepository(path.join(root, "connect-project"))
     const engine = await startEngine(bundle, root, model.url, computer)
     const turn = await runTurn(engine, project, marker, PROVIDER)
       .then(async (failures) => [
@@ -131,7 +134,9 @@ async function smoke(bundle: string) {
         ...(await runComputerTurn(engine, project, computer, model.requests)).map((failure) => `computer: ${failure}`),
         ...(await searchModel(engine, project, bundle)).map((failure) => `search model: ${failure}`),
         ...(await localRecommendation(engine, project)).map((failure) => `local recommendation: ${failure}`),
-        ...(await connectedReviews(engine, project, `${PROVIDER}/${MODEL}`)).map((failure) => `connected review: ${failure}`),
+        ...(await connectedReviews(engine, connectProject, `${PROVIDER}/${MODEL}`, project)).map(
+          (failure) => `connected review: ${failure}`,
+        ),
       ])
       .catch((error) => [`the turn could not run: ${String(error)}`])
       .finally(engine.stop)

@@ -1,6 +1,7 @@
-import type { Connect } from "@vectordevai/schema/connect"
+import { Connect } from "@vectordevai/schema/connect"
 import { destinationLabel, metadataRunID, verdictLabel } from "@/features/connect/connect-model"
 import { connectConsentDetails, connectConsentDiff } from "@/features/connect/consent"
+import { PermissionPolicy } from "@vectordevai/schema/permission-policy"
 import { goingFirst, runState, type TaskRow } from "@/features/connect/task-rows"
 import type { EngineEvent, RemoteState, RemoteView } from "./client"
 
@@ -331,6 +332,7 @@ export type PermissionView = {
   directory: string
   title: string
   detail?: string
+  denyOnly?: true
 }
 export type QuestionView = {
   id: string
@@ -366,12 +368,16 @@ export function permissionView(value: unknown, directory: string): PermissionVie
     : []
   const command = typeof metadata.command === "string" ? metadata.command : undefined
   const detail = consentDetail(permission, metadata) ?? (command ?? patterns.join("\n")).slice(0, 2_000)
+  const denyOnly =
+    PermissionPolicy.requiresConnectConfirmation(permission) &&
+    (permission !== "connect_write" || !Connect.writeApprovalDetails(metadata, Connect.MAX_PHONE_APPROVAL_DIFF))
   return {
     id: request.id,
     sessionID: request.sessionID,
     directory,
     title: TITLES[permission] ?? `Use ${permission}`,
     ...(detail ? { detail } : {}),
+    ...(denyOnly ? { denyOnly: true } : {}),
   }
 }
 
@@ -502,7 +508,6 @@ export type ConnectRunView = {
 /** The finding lines a card shows; the rest stay in Vector on the computer. */
 const SHOWN = 5
 /** The most of a fix's change an approval shows. */
-const MAX_DIFF = 12_000
 // As the computer's run rule (desktop remote-routes.ts `isRun`, Connect.RunID within its id rule); model.test.ts
 // checks that it keeps every id RunID.create() makes and nothing that is not a Connect.RunID.
 const RUN_ID = /^cr_[A-Za-z0-9_-]{1,61}$/
@@ -704,8 +709,8 @@ function consentDetail(permission: string, metadata: Record<string, unknown>) {
   if (sentence === undefined || permission !== "connect_write") return sentence
   const diff = connectConsentDiff({ permission, metadata })
   if (diff === undefined) return `${sentence}\n\nThe change itself is shown only in Vector on your computer.`
-  if (diff.length <= MAX_DIFF) return `${sentence}\n\n${visible(diff)}`
-  return `${sentence}\n\n${visible(head(diff, MAX_DIFF))}\n\nThe rest of this change is shown only in Vector on your computer.`
+  if (diff.length <= Connect.MAX_PHONE_APPROVAL_DIFF) return `${sentence}\n\n${visible(diff)}`
+  return `${sentence}\n\n${visible(head(diff, Connect.MAX_PHONE_APPROVAL_DIFF))}\n\nThe rest of this change is shown only in Vector on your computer.`
 }
 
 /** Model-written text as one plain line: format characters removed, control characters and runs of space as one. */
