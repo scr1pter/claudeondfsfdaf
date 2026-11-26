@@ -189,7 +189,8 @@ describe("allowed services", () => {
     )
     expect(rows[0]).toMatchObject({
       name: "GitHub pull requests",
-      hosts: "github.com, api.github.com and vectordev.ai",
+      // No hosts in the entry: it covers every host GitHub's requests go to, not only the registry's.
+      hosts: "Any host it reaches, usually github.com, api.github.com and vectordev.ai",
       reason: "Our pull requests",
       by: "Added in the app",
       when: "Oct 21, 2026",

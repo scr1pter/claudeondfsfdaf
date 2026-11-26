@@ -6,6 +6,7 @@ import {
   SERVER_KINDS,
   SHARED_MACHINE,
   WEB_ACCESS,
+  allowHosts,
   hostOf,
   list,
   sourceName,
@@ -122,16 +123,18 @@ const BY: Record<Policy["allow"][number]["added_by"], string> = {
   managed: "Set by your company",
 }
 
-/** The services the user or the company allowed, each with what it sends, its hosts, the reason, who and when. */
+/**
+ * The services the user or the company allowed, each with what it sends, where it may go, the reason, who and when.
+ * An entry with no hosts covers every host its source reaches, which `hosts` says.
+ */
 export function allowedRows(status: Pick<LocalStatus, "policy" | "locked" | "sources">) {
   return status.policy.allow.map((entry) => {
     const source = status.sources.find((item) => item.id === entry.source)
-    const hosts = entry.hosts?.length ? entry.hosts : (source?.hosts ?? [])
     return {
       source: entry.source,
       name: sourceName(entry.source, status.sources),
       sends: source?.sends ?? "Unknown to this version of Vector",
-      hosts: hosts.length ? list(hosts) : "The addresses set for it",
+      hosts: allowHosts(entry.hosts, source?.hosts ?? []),
       reason: entry.reason,
       by: BY[entry.added_by],
       when: entry.added_at ? new Date(entry.added_at).toLocaleDateString("en-US", { dateStyle: "medium" }) : "",

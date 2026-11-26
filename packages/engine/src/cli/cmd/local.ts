@@ -274,7 +274,11 @@ export const LocalAllowCommand = effectCmd({
         demandOption: true,
       })
       .option("reason", { describe: "why you allow it; shown beside it", type: "string" })
-      .option("host", { describe: "only these hosts of it", type: "string", array: true })
+      .option("host", {
+        describe: "only these hosts (without --host it covers every host the service reaches)",
+        type: "string",
+        array: true,
+      })
       .option("remove", { describe: "take the allowance back", type: "boolean", default: false }),
   handler: Effect.fn("Cli.local.allow")(function* (args) {
     if (args.remove) return describe(yield* change({ allow: { remove: [args.source] } }))

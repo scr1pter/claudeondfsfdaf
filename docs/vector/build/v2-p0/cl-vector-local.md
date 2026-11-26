@@ -1,0 +1,41 @@
+# cl-vector-local: Vector Local loose ends
+
+Branch `cl-vector-local`, cut from origin/main `dbeb06661` (feat(everywhere): verify repositories through sponsor bindings, #117). It closes the Vector Local loose ends for Vector v2: the meaning of an allow entry with no hosts (VL-1), the company's `local.recommend` table (VL-2), which Vector a Vector Local switch is for (VL-3), the Windows identity failure (VL-4, record only), stale comments (VL-5) and the guard's Octokit note (VL-6). No flag changes, no generated file changes (no Effect Schema annotation, HTTP schema or route is touched, so `packages/web/public/config.json`, the SDK and `packages/client` stay as they are), and no public docs page is edited.
+
+Open-PR check (live, 2026-11-25, 42 open PRs, `gh pr diff <n> --name-only` for each): no file this branch edits is held by an open PR. `packages/engine/src/tool/shell/sandbox.ts` (#128, #161, #162, #163, #167, #170) and the `vector github` command files (#98, #106, #160) are read only.
+
+Test runs: the drafting step may not run a test runner or a typechecker, so every "fails without it" and mutation line below is the check to run, with the expected result. The verifier runs each and records what it saw.
+
+## 2026-11-25, VL-1: an allow entry with no hosts
+
+**What it closes.** `LocalPolicy.allowEntry` (`packages/core/src/local-mode/policy.ts`) lets an entry with no `hosts` match every host for its source, and the app's Always allow always adds such an entry. But the schema comment said "without hosts the source's own registry hosts apply", the Allow dialog's "To" line and Settings → Vector Local → Allowed services showed the registry hosts as if they were the limit ("github.com, api.github.com and vectordev.ai"), and `vector local allow --host` said "only these hosts of it". The held-change text was already right ("allows github for any host").
+
+**Lead ruling (R1-0): keep the behaviour, make every text say it exactly.** The item's rule was to restrict host-less entries to each service's own hosts only if the policy knows them. It does not. The registry's `hosts` (`packages/core/src/local-mode/sources.ts`) are the hosts a source usually reaches, written for the log and the dialog, and they are incomplete for allowable sources. Each of these works today and would break silently under a "registry hosts only" rule, with no fake-only test able to catch it (`Egress.fetch` decides every redirect hop):
+
+- `embedding-model` lists `huggingface.co`; the download follows redirects to `*.hf.co` (`packages/core/src/brain/embed-manifest.ts`).
+- `github` lists `github.com`, `api.github.com`, `vectordev.ai`; attachments redirect to `*.githubusercontent.com` (`packages/engine/src/cli/cmd/github.attachment.ts`).
+- `lsp-install` lists `registry.npmjs.org`, `proxy.golang.org`, `rubygems.org`, `github.com`; `packages/engine/src/lsp/server.ts` also reaches `api.github.com`, `api.nuget.org`, `www.eclipse.org`, `download-cdn.jetbrains.com`, `api.releases.hashicorp.com` and GitHub's release-asset hosts.
+- `cloud-computer` lists `vectordev.ai`; the live view loads the https viewer host its link names (`packages/app/src/features/cloud/hosted/hosted-requests.ts`, `packages/desktop/src/main/hosted-window.ts`).
+- `model-catalog` lists `vectordev.ai`; `VECTOR_MODELS_URL` points it at a mirror (`packages/core/src/model-catalog.ts`).
+- Sources whose host the user or company chooses (`mcp-remote`, `git-remote`, `remote-config`, `telemetry`, `crash-reports`, `local-server-check`) list none; `packages/desktop/src/main/everywhere-git.test.ts` relies on a host-less `git-remote` entry.
+
+Narrowing after a registry audit is owner item O5. The public docs page says nothing about allow-entry hosts, so it is not edited.
+
+**Fix.**
+
+- `packages/app/src/features/local/local-model.ts`: new `allowHosts(entry, source)`. With entry hosts it lists them; with none it says `Any host it reaches, usually <registry hosts>`, or `The addresses set for it` when the registry lists none.
+- `packages/app/src/features/local/allow-dialog.tsx`: the "To" line is `allowHosts(undefined, source.hosts)` (the dialog only adds host-less entries); the unused `list` import is dropped.
+- `packages/app/src/components/settings-v2/local-model.ts`: `allowedRows` returns `hosts: allowHosts(entry.hosts, source?.hosts ?? [])`.
+- `packages/app/src/components/settings-v2/local.tsx`: the Allowed services row reads "Sends … to {hosts}." mid-sentence, so it renders `lowerFirst(row.hosts)` ("to any host it reaches, usually …"); `lowerFirst` in `features/local/local-model.ts` is now exported. Lead call: a render-only grammar fix that the new copy makes visible; the row data the tests pin is unchanged.
+- `packages/schema/src/local-mode.ts`: the `Allowed` comment (a plain comment, not an annotation, so nothing regenerates) says hosts limit an entry, and an entry without hosts covers every host the source's labelled requests go to.
+- `packages/core/src/local-mode/policy.ts`: a doc comment on `allowEntry` says the same and why. No code change.
+- `packages/engine/src/cli/cmd/local.ts`: `--host` is "only these hosts (without --host it covers every host the service reaches)". No CLI help snapshot covers `vector local`.
+
+**Tests.**
+
+- Fails without the fix: `packages/app/src/features/local/local-model.test.ts`, new describe "where an allowed service may go" (3 tests): entry hosts give `tools.example.org`; a host-less entry gives `Any host it reaches, usually github.com, api.github.com and vectordev.ai` (from a literal list and from the registry's `github` hosts, with `[]` as the entry); no registry hosts give `The addresses set for it`. Red-before: revert `packages/app/src/features/local/local-model.ts` (no `allowHosts`).
+- Updated, same strictness: `packages/app/src/components/settings-v2/local-model.test.ts`, "allowed services > say what each sends, where, the reason, who added it and when" now expects the new `hosts` for the host-less `github` row; row 2 (`tools.example.org`) is unchanged. It pinned the misleading copy. Red-before: revert `packages/app/src/components/settings-v2/local-model.ts`.
+- Ruling pin (passes before and after): `packages/core/test/local-mode/policy.test.ts`, "an allow entry without hosts opens its source for any host it reaches": a host-less `github` entry allows `https://github.example.com/api/v3` for source `github` (rule `allowed-source`) and still blocks it for `gitlab`.
+- `packages/app/e2e/regression/vector-local.spec.ts`: the Allow dialog under a lock also contains "Any host it reaches" (same locator, no new wait). The existing registry-hosts substring still matches.
+
+**Mutation check.** Make `allowHosts` return `list(source)` for a host-less entry: the new features test ("an entry with no hosts covers any host …") and the settings test fail. Restore with `git checkout`. Not run in the drafting step.

@@ -29,6 +29,7 @@ import {
   SUBTITLE,
   configRoles,
   enginePlace,
+  lowerFirst,
   offInLocal,
   popoverLines,
   refusal,
@@ -737,7 +738,7 @@ function AllowedCard(props: {
               <div data-slot="local-row-copy">
                 <strong>{row.name}</strong>
                 <span data-slot="local-sub">
-                  Sends {row.sends.toLowerCase()} to {row.hosts}.
+                  Sends {row.sends.toLowerCase()} to {lowerFirst(row.hosts)}.
                 </span>
                 <span data-slot="local-sub">Reason: {row.reason}</span>
                 <span data-slot="local-sub">
