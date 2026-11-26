@@ -7,25 +7,15 @@ import ShotWindow from "./shots/ShotWindow.astro"
 import { sectionShots } from "./shots/shots"
 ---
 
-<section id="inside" data-chapter="Inside Vector" class="shots" aria-labelledby="shots-title">
-  <div class="shots-head" data-reveal-group>
-    <p class="shots-kicker" data-reveal>Inside the app</p>
-    <h2 id="shots-title" class="shots-title" data-reveal>More of the app, rebuilt to&nbsp;click.</h2>
-    <p class="shots-sub" data-reveal>
-      Not screenshots: like the window at the top of the page, each one below is the desktop app redrawn in HTML from
-      the app's design and run on sample data, so you can click it. The composer stays a picture — there is no
-      repository or model behind this page.
-    </p>
-  </div>
-
+<section id="inside" data-chapter="Inside Vector" class="shots" aria-label="Inside Vector">
   {
     sectionShots.map((shot) => (
       <article id={shot.id} class="shot" aria-labelledby={`${shot.id}-title`}>
         <div class="shot-copy" data-reveal-group>
           <p class="shot-kicker" data-reveal>{shot.kicker}</p>
-          <h3 id={`${shot.id}-title`} class="shot-title" data-reveal>
+          <h2 id={`${shot.id}-title`} class="shot-title" data-reveal>
             {shot.title}
-          </h3>
+          </h2>
           <p class="shot-text" data-reveal>
             {shot.text}
           </p>
@@ -43,17 +33,7 @@ import { sectionShots } from "./shots/shots"
     padding: clamp(120px, 11vw, 168px) 0 24px;
   }
 
-  .shots-head {
-    position: relative;
-    isolation: isolate;
-    width: min(1180px, calc(100% - 40px));
-    margin-inline: auto;
-    text-align: center;
-  }
-
-  /* A dark pool under the words, as the story sections have, so the glyph
-     field moves around the copy rather than through it. */
-  .shots-head::before,
+  /* Keep the glyph field behind the demo captions readable. */
   .shot-copy::before {
     content: "";
     position: absolute;
@@ -63,40 +43,14 @@ import { sectionShots } from "./shots/shots"
     background: radial-gradient(closest-side, rgba(8, 6, 13, 0.86), rgba(8, 6, 13, 0.62) 55%, rgba(8, 6, 13, 0) 100%);
   }
 
-  .shots-kicker,
-  .shot-kicker {
-    margin: 0 0 18px;
-    color: #aa8cff;
-    font-size: 13px;
-    font-weight: 600;
-    line-height: 1;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .shots-title {
-    margin: 0;
-    color: #f5f5f7;
-    font-size: 64px;
-    font-weight: 500;
-    line-height: 68px;
-    letter-spacing: -1px;
-    text-wrap: balance;
-  }
-
-  .shots-sub {
-    max-width: 640px;
-    margin: 24px auto 0;
-    color: rgba(245, 245, 247, 0.72);
-    font-size: 19px;
-    line-height: 1.6;
-    text-wrap: pretty;
-  }
-
   .shot {
     width: var(--shots-width);
-    margin: clamp(88px, 9vw, 136px) auto 0;
+    margin: 0 auto;
     scroll-margin-top: 96px;
+  }
+
+  .shot + .shot {
+    margin-top: clamp(88px, 9vw, 136px);
   }
 
   /* The words beside each window: the title on the left, the caption on the
@@ -114,8 +68,13 @@ import { sectionShots } from "./shots/shots"
 
   .shot-kicker {
     grid-column: 1 / -1;
-    margin-bottom: 14px;
+    margin: 0 0 14px;
+    color: #aa8cff;
     font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .shot-title {
@@ -138,11 +97,6 @@ import { sectionShots } from "./shots/shots"
   }
 
   @media (max-width: 900px) {
-    .shots-title {
-      font-size: 52px;
-      line-height: 1.06;
-    }
-
     .shot-copy {
       grid-template-columns: minmax(0, 1fr);
       row-gap: 14px;
@@ -160,17 +114,7 @@ import { sectionShots } from "./shots/shots"
       padding-top: 88px;
     }
 
-    .shots-title {
-      font-size: clamp(34px, 10.2vw, 44px);
-      letter-spacing: -0.02em;
-    }
-
-    .shots-sub {
-      margin-top: 18px;
-      font-size: 17px;
-    }
-
-    .shot {
+    .shot + .shot {
       margin-top: 72px;
     }
 
