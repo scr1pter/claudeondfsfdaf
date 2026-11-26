@@ -1270,13 +1270,14 @@ export type RunBodyVerdict =
   | { readonly ok: false; readonly status: 404; readonly code: "NOT_FOUND" }
   | { readonly ok: false; readonly status: 410; readonly code: "EVERYWHERE_BODY_GONE" }
 
-/** What a run's verified `vrt_` token says (the repository id is decimal), and whether a platform is still on. */
+/** Verified run identity and the current platform and repository checks. */
 export type RunBodyRequest = {
   readonly jid: string
   readonly account: string
   readonly rid: string
   readonly repository: string
   readonly platformOn: (platform: PlatformId) => boolean
+  readonly isPrivate: (repository: JobRecord["repository"]) => Promise<boolean>
 }
 
 const RUN_NOT_FOUND = { ok: false, status: 404, code: "NOT_FOUND" } as const
@@ -1287,10 +1288,9 @@ const BODY_GONE = { ok: false, status: 410, code: "EVERYWHERE_BODY_GONE" } as co
  * says (the account, the rid and the repository id, decimal), plus whether a platform is still on (`platformOn` of
  * the route's config). Only the run that `run:<rid>` links to this job gets it, only while that job is a running
  * Actions job of that account, of that repository, from a platform that is still on (not GitHub, whose laptop reads
- * the thread itself) and on a private repository (E11), and only once (410 after): the read and its marker are one
- * fenced EVAL under the job's authority. Every other caller gets the same 404, with the read left unspent, and the
- * link is checked before the record is read, so a run that is not this job's reads none of it. The label is never
- * answered.
+ * the thread itself) and on a repository confirmed live private (E11), and only once (410 after). The read and
+ * its marker are one fenced EVAL under the job's authority. Ineligible callers get the same 404 without spending
+ * the read. The run link is checked before loading the job. The response omits the requester's label.
  */
 export async function readRunBody(ctx: JobsContext, input: RunBodyRequest): Promise<RunBodyVerdict> {
   if (!JOB_ID_PATTERN.test(input.jid) || !RID_PATTERN.test(input.rid)) return RUN_NOT_FOUND
@@ -1299,9 +1299,12 @@ export async function readRunBody(ctx: JobsContext, input: RunBodyRequest): Prom
     const job = await readJob(ctx.store, input.jid)
     if (!job || !linkedRun(job, input)) return RUN_NOT_FOUND
     if (!(ctx.now < job.bodyExpiresAt)) return BODY_GONE
+    const guards = await jobGuards(ctx, job)
+    const privateNow = await Promise.resolve(job.repository).then(input.isPrivate).catch(() => false)
+    if (privateNow !== true) return RUN_NOT_FOUND
     const answer = await authorizedScript(
       ctx.store,
-      await jobGuards(ctx, job),
+      guards,
       READ_BODY_ONCE_SCRIPT,
       [everywhereKeys.job(job.jid), everywhereKeys.jobBody(job.jid), everywhereKeys.runBodyRead(input.rid)],
       [job.version, job.state, KEEP_MS.bodyRead],

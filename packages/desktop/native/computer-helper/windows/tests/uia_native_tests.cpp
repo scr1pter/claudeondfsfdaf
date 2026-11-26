@@ -63,9 +63,143 @@ template<class Body> void refusal(Body body) {
   try { body(); } catch (const Failure& failure) { require(failure.code == L"no_ui_tree", "uia-native.fixed-refusal"); return; }
   throw std::runtime_error("uia-native.missing-refusal");
 }
+struct FirstRootFixture {
+  Fixture first, second;
+  std::shared_ptr<WindowsUiaDiagnostic> first_diagnostic = std::make_shared<WindowsUiaDiagnostic>(), diagnostic = first_diagnostic, fresh;
+  WindowsUiaBackend backend = first.backend;
+  WindowsUiaDeadline deadline = WindowsUiaDeadline::max() - std::chrono::hours(1);
+  WindowsUiaPhase phase = WindowsUiaPhase::root_element;
+  WindowsUiaExpiry expiry = WindowsUiaExpiry::caller_wait;
+  std::wstring code = L"no_ui_tree";
+  int32_t status = 0;
+  bool first_succeeds = false, first_stays_available = false, second_admits = true, second_fails = false, current = true;
+  size_t opened = 0;
+  std::function<void()> during_open, during_second;
+
+  FirstRootFixture() {
+    backend.root = [this](const auto&) {
+      ++first.roots;
+      if (first_succeeds) return first.root;
+      first_diagnostic->phase.store(phase);
+      first_diagnostic->note_root_element_status(status);
+      first_diagnostic->note_timeout(expiry);
+      throw Failure{code, L"first root refusal"};
+    };
+    backend.available = [this] { return first.roots == 0 || first_succeeds || first_stays_available; };
+    second.backend.root = [this](const auto& window) {
+      ++second.roots;
+      require(window.hwnd == first.window.hwnd && window.owner.process.pid == first.window.owner.process.pid,
+        "uia-native.first-root-reuses-validated-window");
+      if (second_admits) fresh->ticket_queued.store(true);
+      if (during_second) during_second();
+      if (second_fails) throw Failure{L"no_ui_tree", L"second root refusal"};
+      return second.root;
+    };
+  }
+  UiaElement observe() {
+    return observe_first_uia_root(backend, diagnostic, first.window, deadline, [&] { return current; },
+      [&](auto next, auto limit) {
+        ++opened;
+        require(next && next != first_diagnostic && !next->timeout_observation.load() && limit == deadline,
+          "uia-native.first-root-fresh-diagnostics-and-original-deadline");
+        require(first.closed == 1, "uia-native.first-root-closes-retired-actor-before-replacement");
+        fresh = next;
+        if (during_open) during_open();
+        return second.backend;
+      });
+  }
+};
 }
 size_t run_uia_native_tests() {
   size_t groups = 0; const auto test = [&](const std::function<void()>& body) { body(); ++groups; };
+  test([] {
+    const auto recovers = [](WindowsUiaPhase phase, WindowsUiaExpiry expiry) {
+      FirstRootFixture fixture; fixture.phase = phase; fixture.expiry = expiry;
+      fixture.during_open = [&] {
+        fixture.first_diagnostic->phase.store(WindowsUiaPhase::security_cache);
+        fixture.first_diagnostic->note_timeout(WindowsUiaExpiry::worker_budget);
+      };
+      const auto root = fixture.observe();
+      require(root == fixture.second.root && root != fixture.first.root && fixture.opened == 1 && fixture.first.roots == 1 && fixture.second.roots == 1,
+        "uia-native.first-root-recovers-once-on-a-distinct-actor");
+      require(fixture.first_diagnostic->failure_phase(false) == phase && fixture.first_diagnostic->failure_expiry(false) == expiry &&
+        fixture.diagnostic->failure_phase(false) == WindowsUiaPhase::none,
+        "uia-native.first-root-late-first-diagnostic-cannot-enter-second");
+      require(fixture.backend.hit(root, POINT{15, 15}) == fixture.second.element && fixture.first.points == 0,
+        "uia-native.first-root-uses-replacement-for-later-observations");
+      fixture.backend.close();
+      require(fixture.first.closed == 1 && fixture.second.closed == 1, "uia-native.first-root-closes-adopted-actor");
+    };
+    for (const auto phase : {WindowsUiaPhase::root_element, WindowsUiaPhase::root_wrap,
+                             WindowsUiaPhase::runtime_id, WindowsUiaPhase::prepare_connection})
+      recovers(phase, WindowsUiaExpiry::caller_wait);
+    recovers(WindowsUiaPhase::runtime_id, WindowsUiaExpiry::worker_current);
+  });
+  test([] {
+    FirstRootFixture fixture; fixture.first_succeeds = true;
+    require(fixture.observe() == fixture.first.root && fixture.opened == 0 && fixture.first.closed == 0,
+      "uia-native.first-root-success-keeps-initial-actor");
+  });
+  test([] {
+    for (const auto phase : {WindowsUiaPhase::security_cache, WindowsUiaPhase::root_current, WindowsUiaPhase::actor_admission}) {
+      FirstRootFixture fixture; fixture.phase = phase;
+      refusal([&] { fixture.observe(); });
+      require(fixture.opened == 0, "uia-native.first-root-other-phase-refused");
+    }
+    FirstRootFixture healthy; healthy.first_stays_available = true;
+    refusal([&] { healthy.observe(); });
+    FirstRootFixture worker; worker.expiry = WindowsUiaExpiry::worker_current;
+    refusal([&] { worker.observe(); });
+    FirstRootFixture wrap_worker; wrap_worker.phase = WindowsUiaPhase::root_wrap; wrap_worker.expiry = WindowsUiaExpiry::worker_current;
+    refusal([&] { wrap_worker.observe(); });
+    FirstRootFixture budget; budget.phase = WindowsUiaPhase::runtime_id; budget.expiry = WindowsUiaExpiry::worker_budget;
+    refusal([&] { budget.observe(); });
+    FirstRootFixture denied; denied.status = E_ACCESSDENIED;
+    refusal([&] { denied.observe(); });
+    FirstRootFixture changed; changed.code = L"changed";
+    try { changed.observe(); throw std::runtime_error("uia-native.first-root-dropped-changed"); }
+    catch (const Failure& failure) { require(failure.code == L"changed", "uia-native.first-root-keeps-changed"); }
+    require(healthy.opened == 0 && worker.opened == 0 && wrap_worker.opened == 0 && budget.opened == 0 && denied.opened == 0 && changed.opened == 0,
+      "uia-native.first-root-unknown-authority-never-retries");
+  });
+  test([] {
+    FirstRootFixture expired; expired.deadline = std::chrono::steady_clock::now();
+    refusal([&] { expired.observe(); });
+    require(expired.opened == 0 && expired.diagnostic == expired.first_diagnostic, "uia-native.first-root-expired-before-open");
+    FirstRootFixture expired_worker; expired_worker.deadline = expired.deadline;
+    expired_worker.phase = WindowsUiaPhase::runtime_id; expired_worker.expiry = WindowsUiaExpiry::worker_current;
+    refusal([&] { expired_worker.observe(); });
+    require(expired_worker.opened == 0, "uia-native.worker-expiry-cannot-extend-stop-deadline");
+    FirstRootFixture stale; stale.during_open = [&] { stale.current = false; };
+    refusal([&] { stale.observe(); });
+    require(stale.opened == 1 && stale.second.roots == 0 && stale.second.closed == 1 && stale.diagnostic == stale.first_diagnostic,
+      "uia-native.first-root-stale-after-open-keeps-original-failure");
+    FirstRootFixture late; late.during_second = [&] { late.current = false; };
+    refusal([&] { late.observe(); });
+    require(late.opened == 1 && late.second.roots == 1, "uia-native.first-root-stale-result-cannot-escape");
+    FirstRootFixture stale_worker; stale_worker.phase = WindowsUiaPhase::runtime_id;
+    stale_worker.expiry = WindowsUiaExpiry::worker_current; stale_worker.current = false;
+    refusal([&] { stale_worker.observe(); });
+    require(stale_worker.opened == 0, "uia-native.worker-expiry-cannot-open-on-stale-authority");
+  });
+  test([] {
+    FirstRootFixture fixture; fixture.second_fails = true;
+    try { fixture.observe(); throw std::runtime_error("uia-native.first-root-missing-second-refusal"); }
+    catch (const Failure& failure) {
+      require(failure.code == L"no_ui_tree" && failure.message == L"second root refusal", "uia-native.first-root-keeps-second-refusal");
+    }
+    require(fixture.opened == 1 && fixture.first.roots == 1 && fixture.second.roots == 1 && fixture.diagnostic != fixture.first_diagnostic,
+      "uia-native.first-root-second-failure-is-terminal");
+  });
+  test([] {
+    FirstRootFixture fixture; fixture.second_admits = false; fixture.second_fails = true;
+    try { fixture.observe(); throw std::runtime_error("uia-native.first-root-missing-original-refusal"); }
+    catch (const Failure& failure) {
+      require(failure.code == L"no_ui_tree" && failure.message == L"first root refusal", "uia-native.first-root-preserves-unadmitted-refusal");
+    }
+    require(fixture.opened == 1 && fixture.second.roots == 1 && fixture.second.closed == 1 && fixture.diagnostic == fixture.first_diagnostic,
+      "uia-native.first-root-keeps-prior-diagnostic-until-admission");
+  });
   test([] {
     PointFixture fixture; fixture.backend.point = {}; fixture.backend.normalize = {};
     for (uint64_t id = 10; id < 5010; ++id) fixture.facts[id] = {101, {static_cast<int>(id)}, WindowsRect{0, 0, 100, 100}};
