@@ -334,6 +334,13 @@ release workflow. These two files run there, in the release workflow's Linux "Te
 on a tag or by hand. So the macOS runs recorded above are their only evidence before merge. A shard over the
 45-minute step limit is reported, never answered with a longer limit.
 
+**After the merge of origin/main c2396f1c0 (2026-11-25).** Main gained only #118 (Vector everywhere files), none of
+this branch's files. Reruns, one file at a time: engine `test/tool/browser.test.ts` 27/27 and
+`test/tool/terminal-agent-review.test.ts` 1/1; desktop `./src/main/browser-agent-tabs.test.ts` 22/22 and
+`./src/main/browser-bridge-agent-review.test.ts` 3/3; root `./test/no-personal-paths.test.ts` 1/1. `bun typecheck`
+in `packages/engine` and `packages/desktop`: clean. A live check of the 38 open PRs found none touching a file of this
+branch, and no merged PR covers this item.
+
 **Still owed.** Push, open the PR (not draft), and read its `test.yml` run shard by shard (it covers the engine
 files only). Owner item unchanged: OWN-RELEASE-ACCEPT.
 
