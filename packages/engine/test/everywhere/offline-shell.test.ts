@@ -4,6 +4,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -17,6 +18,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Effect, Exit, Layer } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -830,7 +832,7 @@ describe("the capability an engine reports", () => {
           const file = path.join(folder, `bwrap-${code}`)
           writeFileSync(
             file,
-            `#!/bin/sh\nprintf '%s\\0' "$@" > '${recorded}'\ncat <&3 > '${policy}' || exit 1\nexit ${code}\n`,
+            `#!/bin/sh\nprintf '%s\\0' "$@" > '${recorded}'\ncat > '${policy}' || exit 1\nexit ${code}\n`,
           )
           chmodSync(file, 0o755)
           return file
@@ -842,7 +844,44 @@ describe("the capability an engine reports", () => {
         expect(yield* UnattendedShell.selfTest(spawner, fake(0), shell)).toBe(true)
       }),
   )
+
+  // Bun closes an extra stdio pipe (fd 3 and up) once more when it collects the child, after the descriptor number
+  // may belong to something else in this process: an HTTP socket, a database, the file watcher's epoll descriptor.
+  ;(process.platform === "win32" || !UnattendedSeccomp.supported() ? tool.live.skip : tool.live)(
+    "hands bubblewrap its policy without leaving a descriptor number to be closed again later",
+    () =>
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner
+        const folder = scratch()
+        yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(folder, { recursive: true, force: true })))
+        const policy = path.join(folder, "policy")
+        // Reads the policy from whichever descriptor `--seccomp` names, as bubblewrap does.
+        const fake = path.join(folder, "bwrap")
+        writeFileSync(
+          fake,
+          `#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != --seccomp ]; do shift; done\neval "cat <&$2" > '${policy}' || exit 1\n`,
+        )
+        chmodSync(fake, 0o755)
+        for (const _ of [1, 2, 3]) expect(yield* UnattendedShell.selfTest(spawner, fake, "/bin/sh")).toBe(true)
+        expect(readFileSync(policy)).toEqual(Buffer.from(UnattendedSeccomp.filter()!))
+        const held = Array.from({ length: 16 }, () => openSync("/dev/null", "r"))
+        yield* Effect.addFinalizer(() => Effect.sync(() => held.filter(isOpen).forEach((fd) => closeSync(fd))))
+        Bun.gc(true)
+        yield* spawner.exitCode(ChildProcess.make("/bin/sh", ["-c", ":"], { stdin: "ignore" }))
+        Bun.gc(true)
+        expect(held.filter((fd) => !isOpen(fd))).toEqual([])
+      }),
+  )
 })
+
+function isOpen(fd: number) {
+  try {
+    fstatSync(fd)
+    return true
+  } catch {
+    return false
+  }
+}
 
 describe("Sandbox.unattended", () => {
   const input = (env: NodeJS.ProcessEnv = process.env, cwd = os.tmpdir()) => ({
@@ -936,7 +975,7 @@ describe("Sandbox.unattended", () => {
         const args = decided.wrapped.args.join("\n")
         for (const expected of [
           "--unshare-net",
-          "--seccomp\n3",
+          "--seccomp\n0",
           "--cap-drop\nALL",
           "--tmpfs\n/tmp",
           `--tmpfs\n${home}/.ssh`,
@@ -1020,7 +1059,7 @@ describe("Sandbox.unattended", () => {
           try {
             return Bun.spawnSync([decided.wrapped.command, ...decided.wrapped.args], {
               env: decided.wrapped.env,
-              stdio: ["ignore", "pipe", "pipe", fd],
+              stdio: [fd, "pipe", "pipe"],
             })
           } finally {
             closeSync(fd)
