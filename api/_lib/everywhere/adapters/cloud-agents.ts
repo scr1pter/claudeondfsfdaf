@@ -4,6 +4,7 @@ import {
   ACTIONS_JOB_PROMPT,
   JOB_ID_PATTERN,
   PLATFORMS,
+  isRepositoryName,
   type PlatformId,
 } from "../../../../packages/schema/src/everywhere.js"
 import type { SwitchState } from "../../../../packages/schema/src/everywhere-policy.js"
@@ -45,7 +46,12 @@ export type CloudPortsDeps = {
   readonly app?: {
     readonly attachmentRepository: (
       binding: RepoBinding,
-    ) => Promise<{ readonly publicRepository: boolean; readonly visibility?: string }>
+      options?: { readonly includeFullName?: true },
+    ) => Promise<{
+      readonly publicRepository: boolean
+      readonly visibility?: string
+      readonly fullName?: string
+    }>
   }
   /** Default: prepareCloudRun (R-A1). */
   readonly prepare?: typeof prepareCloudRun
@@ -150,6 +156,49 @@ export function createRunBodyVisibility(deps: Pick<CloudPortsDeps, "store" | "ap
     )
       return undefined
     return liveVisibility(binding, deps.app)
+  }
+}
+
+/** Verify one mapped repository or the sponsor's own named binding, using metadata-only App access. */
+export function createRepositoryPort(deps: Pick<CloudPortsDeps, "store" | "app"> = {}): NonNullable<Ports["repository"]> {
+  return async ({ fullName, account, id }) => {
+    if (!isRepositoryName(fullName) || !ACCOUNT_ID_PATTERN.test(account)) return undefined
+    const name = fullName.toLowerCase()
+    try {
+      const bindings =
+        id === undefined
+          ? await import("../../cloud-agents-binding.js").then(({ bindingsForAccount }) =>
+              bindingsForAccount(account, deps.store),
+            )
+          : [await currentBinding(id, deps.store)]
+      const [binding, duplicate] = bindings.filter(
+        (candidate): candidate is RepoBinding =>
+          !!candidate?.installationId &&
+          !candidate.suspended &&
+          candidate.account === account &&
+          candidate.repository.toLowerCase() === name,
+      )
+      if (!binding || duplicate) return undefined
+      const current = await (deps.app ?? defaultApp).attachmentRepository(binding, { includeFullName: true })
+      if (current.fullName?.toLowerCase() !== name) return undefined
+      const visibility = current.visibility
+      if (visibility !== "private" && visibility !== "internal" && visibility !== "public") return undefined
+      if (current.publicRepository !== (visibility === "public")) return undefined
+
+      const repositoryId = Number(binding.repositoryId)
+      const active = await currentBinding(repositoryId, deps.store)
+      if (
+        !active ||
+        active.account !== account ||
+        active.generation !== binding.generation ||
+        active.installationId !== binding.installationId ||
+        active.repository.toLowerCase() !== name
+      )
+        return undefined
+      return { id: repositoryId, fullName: current.fullName, shared: visibility !== "private" }
+    } catch {
+      return undefined
+    }
   }
 }
 
@@ -332,9 +381,9 @@ async function liveVisibility(binding: RepoBinding, app: NonNullable<CloudPortsD
 }
 
 const defaultApp: NonNullable<CloudPortsDeps["app"]> = {
-  attachmentRepository: async (binding) => {
+  attachmentRepository: async (binding, options) => {
     const { githubApp } = await import("../../github-app.js")
-    return githubApp.attachmentRepository(binding)
+    return githubApp.attachmentRepository(binding, options)
   },
 }
 
