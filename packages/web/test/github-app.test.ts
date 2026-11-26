@@ -21,17 +21,27 @@ test("desktop attachment visibility comes from current repository metadata with 
     boundAt: Date.now(),
     installationId: "600",
   }
-  expect(await fixture.app.attachmentRepository(binding)).toEqual({
+  const original = {
     repositoryId: fixture.repositoryId,
     generation: 1,
     publicRepository: true,
-  })
-  fixture.state.repository.private = true
-  expect((await fixture.app.attachmentRepository(binding)).publicRepository).toBe(false)
-  expect(fixture.state.minted.map((item) => item.body.permissions)).toEqual([
-    { metadata: "read" },
-    { metadata: "read" },
-  ])
+  }
+  expect(await fixture.app.attachmentRepository(binding)).toEqual(original)
+  for (const [privateRepository, visibility] of [
+    [false, "public"],
+    [true, "private"],
+    [true, "internal"],
+  ] as const) {
+    fixture.state.repository.private = privateRepository
+    fixture.state.repository.visibility = visibility
+    expect(await fixture.app.attachmentRepository(binding)).toEqual({
+      ...original,
+      publicRepository: !privateRepository,
+      visibility,
+    })
+  }
+  expect(fixture.state.minted).toHaveLength(4)
+  for (const mint of fixture.state.minted) expect(mint.body.permissions).toEqual({ metadata: "read" })
   expect(fixture.tokens.size).toBe(0)
 })
 

@@ -824,6 +824,13 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  windows-holder-build:
+    needs: prepare
+    uses: ./.github/workflows/windows-holder-bundle.yml
+    with:
+      source_revision: ${{ github.sha }}
+      targets: x64,arm64
+
   windows:
     name: Windows desktop apps
     needs:
@@ -834,6 +841,7 @@ jobs:
       - test
       - build
       - computer-helper
+      - windows-holder-build
     runs-on: windows-2025
     timeout-minutes: 60
     outputs:
@@ -847,9 +855,23 @@ jobs:
       VECTOR_RELEASE_CATALOG_PATH: ${{ github.workspace }}/release-catalog/api.json
       VECTOR_RELEASE_CATALOG_SHA256: ${{ needs.catalog.outputs.sha256 }}
       RELEASE_UNSIGNED: ${{ needs.prepare.outputs.unsigned }}
+      VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256: ${{ needs.windows-holder-build.outputs.manifest-digest }}
     steps:
       - name: Check out release source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Download the verified Windows holder bundle
+        if: needs.windows-holder-build.outputs.artifact-id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.windows-holder-build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/vector-windows-holder-bundle
+          merge-multiple: true
+      - name: Set the verified holder manifest for the desktop engine build
+        shell: pwsh
+        run: |
+          $manifest = Join-Path $env:RUNNER_TEMP 'vector-windows-holder-bundle/manifest.json'
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw 'Missing verified Windows holder manifest.' }
+          "VECTOR_WINDOWS_HOLDER_MANIFEST=$manifest" >> $env:GITHUB_ENV
       - name: Download the exact release catalog
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
