@@ -1,6 +1,6 @@
 # cx-verify-github-thread: authorize owner GitHub issue reads (#150 takeover)
 
-Branch `cx-verify-github-thread`, from Codex's draft PR #150 (`verify-github-thread`). The draft had been idle for more than a day, so this v2 run took it over to finish it before the Saturday 2026-11-28 deadline. No feature flag changes and no public claims. `VECTOR_EVERYWHERE_ENABLED` stays off, so the new route answers 404 in production, and the desktop still declines laptop jobs under Vector Local. Each entry names the change, the test that fails without it, and the mutation check.
+Branch `cx-verify-github-thread`, from Codex's draft PR #150 (`verify-github-thread`). The draft had been idle for more than a day, so this v2 run took it over to finish it so it lands in main before the redesign starts. No feature flag changes and no public claims. `VECTOR_EVERYWHERE_ENABLED` stays off, so the new route answers 404 in production, and the desktop still declines laptop jobs under Vector Local. Each entry names the change, the test that fails without it, and the mutation check.
 
 ## 2026-11-26, takeover state and merge with main
 
@@ -37,3 +37,21 @@ Branch `cx-verify-github-thread`, from Codex's draft PR #150 (`verify-github-thr
 **CI only.** The Valkey case "R3: R1 on Valkey" and the cloud adapter's Valkey cases need `VECTOR_TEST_REDIS_URL`. They run in the `Vector everywhere tests` job of `vector-everywhere.yml`.
 
 **Known limit, left for platform qualification.** After the proof, the desktop refuses any expiry that is more than the 20-second offer window ahead of its own clock. If the desktop clock runs behind the server's by more than the time already spent since the offer, the read fails closed and the job does not run. This is safe, and live timing is part of the owner's platform qualification.
+
+## 2026-11-26, review: no test held the new public route shut while the feature is off
+
+**Gap.** The PR and this entry say `POST /api/everywhere/jobs/github-thread` answers 404 while `VECTOR_EVERYWHERE_ENABLED` is off, and every push to main deploys that route. But no test mounted `api.githubThread` with the feature off, with GitHub missing from `VECTOR_EVERYWHERE_PLATFORMS`, or with no thread authority wired. The route's code was already correct, so this entry adds tests only and changes no route code.
+
+**Tests.** In web `test/everywhere-jobs-api.test.ts`, `mount()` now mounts `api.githubThread`. Each case sends a well-formed `{jid, lease}` with the device header and a desktop token, so only the route's first guard can refuse it.
+- "while the feature is off every route answers stop, or 404 for the GitHub thread check, before any store read" (the existing feature-off case, extended). With an authority wired and GitHub listed, the check answers 404 `NOT_FOUND`, the authority is never called, and the store sees no command.
+- "with the feature on but GitHub not among the platforms it answers 404 before any store read". The authority is wired and never called, and the store sees no command.
+- "with no thread authority wired it answers 404 before any store read". GitHub is on and the store sees no command.
+- "with GitHub on and an authority wired the same check reads the store, and an unknown job is 404". This is the control: with every guard open, the same request does reach the store, so the empty command lists in the cases above prove something. No such job exists, so it is still 404 and the authority is never called.
+
+**Mutation checks.** Each one removes one part of the route's first guard, `if (started.off || !platformOn(started.config, "github") || !authority)`:
+- Without `started.off ||`, the feature-off case fails: the route answers 500 instead of 404 (25 pass, 1 fail).
+- Without `!platformOn(started.config, "github")`, the platforms case fails (25 pass, 1 fail).
+- Without `|| !authority`, the no-authority case fails: the store sees the revocation, account and job reads (25 pass, 1 fail).
+- Restored, the file has 26 pass (23 before, plus 3 new cases).
+
+**Red before.** Not applicable: this entry adds only tests for code that was already correct. The three mutation checks above are the evidence that each case can fail.
