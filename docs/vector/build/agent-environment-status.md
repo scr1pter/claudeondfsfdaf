@@ -1,9 +1,11 @@
 # Agent environment: review status
 
 The review item P1-3 AE-REVIEW asks for: the agent's terminal and browser tools, read from three angles (security
-and permissions, process ownership, fit with the owner's four criteria in `v2-master-prompt.md` section 8.6). Branch
-`agent-environment-review`, cut from origin/main `edbc4a8c3`, 2026-11-21. Line numbers are this branch's. The dated
-record of the repairs, their tests and their red runs is `v2-p0/agent-environment-review.md`.
+and permissions, process ownership, fit with the owner's four criteria in `v2-master-prompt.md` section 8.6). Read
+on origin/main `edbc4a8c3`, 2026-11-21, and assembled on branch `cl-agent-environment-review` from origin/main
+`c89a69bd1`, 2026-11-25. Line numbers are this branch's (rechecked 2026-11-25: the reviewed terminal, browser and
+desktop files did not change on main in between; the `registry.ts` and `task/isolation.ts` numbers were moved to
+main's). The dated record of the repairs, their tests and their red runs is `v2-p0/cl-agent-environment-review.md`.
 
 The owner's criteria (section 8.6): a visible indicator and stop; permissioned use; separate from the user's own
 terminals and browser profile; built on main's owned processes, isolated checkout terminals and browser panel.
@@ -27,7 +29,7 @@ page or moment, or only misleads; **info** is a note with no defect.
 | S2 | Security | A non-web address was asked about under the origin `null`, offering "always" for all of them | low | fixed on this branch |
 | S3 | Security | A terminal reveal moved the user's keyboard into the user's or another session's terminal | low | fixed on this branch |
 | F1 | Fit | No app-wide sign of a running agent terminal while the terminal panel is closed | medium | app, later branch |
-| D1 | Security | `tool.terminal` is offered to every agent with no flag or per-agent gate | info | after #73 (registry.ts) |
+| D1 | Security | `tool.terminal` is offered to every agent with no flag or per-agent gate | info | follow-up (pinned registry.ts) |
 | D2 | Security | Helpers keep `terminal` and `terminal_input` (owner question OWN-RELEASE-ACCEPT) | owner | after the owner rules |
 | P2 | Ownership | After an engine crash, a terminal program that ignores the hangup outlives it | low | core `pty.ts`, later branch |
 | P3 | Ownership | A browser command already running when its call ended runs to its end | low | later, needs S6 first |
@@ -83,14 +85,16 @@ Every other point read holds; each is listed under its angle with what was read 
 
 ### D1 and D2. Who gets the terminal (deferred)
 
-- `packages/engine/src/tool/registry.ts:408` lists `tool.terminal` among the builtins with no flag. `tool.browser`
-  (`:426`) is offered only when the desktop sets `VECTOR_BROWSER_BRIDGE_URL` and `_TOKEN`.
+- `packages/engine/src/tool/registry.ts:424` lists `tool.terminal` among the builtins with no flag. `tool.browser`
+  (`:442`) is offered only when the desktop sets `VECTOR_BROWSER_BRIDGE_URL` and `_TOKEN`.
 - Helpers: `open` refuses a helper while background subagents are off (`terminal.ts:331`). A helper still types into
   and reads its parent's terminals as its own (`own`, `:890`), under the `own:` pattern, which auto-accept may answer.
-- registry.ts and registry.test.ts are in #73. A flag or a per-agent gate is a post-#73 follow-up and is not built.
+- A flag or a per-agent gate needs `registry.ts`. #73 has merged since the review, but `registry.ts` is a pinned
+  review-pipeline file (`REVIEW_PIPELINE_FILES`), so the gate stays a follow-up and is not built (lead ruling
+  2026-11-25).
 - **Owner question OWN-RELEASE-ACCEPT:** whether helpers keep `terminal` and `terminal_input`. Recommendation: deny
   terminals to helpers by default. Not decided in code. A "deny" ruling lands in the agent and helper defaults
-  (registry.ts or agent config), after #73.
+  (registry.ts or agent config), as a follow-up of its own.
 
 ### S4. `read_html` sends hidden input values (low, proposal)
 
@@ -131,7 +135,7 @@ Every other point read holds; each is listed under its angle with what was read 
 - **Guest sessions** (terminal): only the agent's own terminals are listed or used (`:302`, `:708`).
 - **Unattended and offline sessions**: the terminal refuses every action in an unattended session (`:690`, R-M2), and
   `open`, `type`, `keys` and `signal` under Web access None (`:696`). The browser has no unattended check. It is
-  offered only under the desktop bridge (`registry.ts:426`), and unattended runs are created only on the Everywhere
+  offered only under the desktop bridge (`registry.ts:442`), and unattended runs are created only on the Everywhere
   paths, whose flags stay off (LAPTOP_ROUTE_WIRED false). Note for the day a laptop route is wired: refuse the browser
   in an unattended session there, as the terminal is refused.
 - **Codium step budget**: neither tool calls a model. Each call is a tool call inside a model step, so the step budget
@@ -173,7 +177,7 @@ Every other point read holds; each is listed under its angle with what was read 
 ### P2. A terminal program after an engine crash (low, deferred)
 
 - What holds: a terminal records its owner (`terminal.ts:379`). Deleting a session closes its terminals
-  (`task/isolation.ts:2937`). Stopping a conversation closes its helpers' terminals and browsers
+  (`task/isolation.ts:3424`). Stopping a conversation closes its helpers' terminals and browsers
   (`task/manager.ts:1471-1487`); the main agent's stay, shown in the panel. `close` kills the program's group if it
   ignores the hangup (`pty/process.ts:87`). A location's end tears down every terminal in it (core `pty.ts:151`,
   `:164`), and so does an orderly engine exit.
@@ -217,7 +221,7 @@ Every other point read holds; each is listed under its angle with what was read 
      The guest gap that sharing opened is closed (S1). A profile per session or per conversation would separate
      sessions' sign-ins. That is a design option for later, not a defect.
 4. **Built on main's newer pieces.** Holds. The terminals are core Pty sessions in the location's services, the same
-   the app's panel lists (`registry.ts:647`). They are held alive while they run (`pty/hold.ts`) and closed with
+   the app's panel lists (`registry.ts:689`). They are held alive while they run (`pty/hold.ts`) and closed with
    helper checkouts (`TaskIsolation.closeSessionTerminals`). The browser is the Preview panel's WebContentsView, driven
    through the desktop bridge (`browser-agent.ts:111-115`).
 
