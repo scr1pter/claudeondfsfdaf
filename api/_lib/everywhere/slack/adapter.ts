@@ -191,10 +191,22 @@ export function createSlackAdapter(deps: SlackDeps): PlatformAdapter {
         await ephemeral(view, online ? "Your computer has checked in recently. Task availability also depends on your Remote Control settings, local mapping and caps." : "Your computer has not checked in recently. Open Vector and check Remote Control settings.")
         return true
       }
-      const repository = isRepositoryName(command.argument) ? await deps.ports.repository?.(command.argument) : undefined
-      if (!repository) { await ephemeral(view, "That repository cannot be verified. Connect GitHub and choose a repository in Vector settings."); return true }
-      const mapped = await setMappingByWord(ctx(), { ...identity, place: parsed.place, repository, maySponsor: (account) => deps.ports.perk(account, "everywhere") })
-      await ephemeral(view, mapped.ok ? "The repository mapping for this channel was updated." : "This repository mapping could not be changed. Ask the workspace connector to update it in Vector settings.")
+      const fullName = command.argument
+      const unverified = "That repository cannot be verified. Connect GitHub and choose a repository in Vector settings."
+      if (!isRepositoryName(fullName)) { await ephemeral(view, unverified); return true }
+      const mapped = await setMappingByWord(ctx(), {
+        ...identity,
+        place: parsed.place,
+        repository: { fullName },
+        verifyRepository: async (account) => {
+          const repository = await deps.ports.repository?.({ fullName, account })
+          return repository && { id: repository.id, fullName: repository.fullName }
+        },
+        maySponsor: (account) => deps.ports.perk(account, "everywhere"),
+      })
+      await ephemeral(view, mapped.ok ? "The repository mapping for this channel was updated." :
+        mapped.code === "repository-unverified" ? unverified :
+        "This repository mapping could not be changed. Ask the workspace connector to update it in Vector settings.")
       return true
     },
     progress: async (view, milestone) => {

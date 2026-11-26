@@ -61,6 +61,27 @@ test("counts only the closed, observed first-root signature and validated native
   })
 })
 
+test("reports which first root attempt failed without changing its classification", () => {
+  for (const rootAttempt of ["initial", "replacement"]) {
+    const traced = { ...uia, rootAttempt }
+    expect(observeComputerStop(failed("uia-root-wrap", traced))).toMatchObject({
+      status: "failed",
+      stage: "uia-root-wrap",
+      uia: traced,
+    })
+    expect(observeComputerStop(failed("uia-root-element", traced)).status).toBe("hf7")
+  }
+  const traced = { ...uia, rootAttempt: "replacement" }
+  for (const invalid of [
+    { ...traced, rootAttempt: "third" },
+    { ...traced, lookup: "refresh" },
+    { ...traced, call: "hit" },
+  ]) {
+    expect(observeComputerStop(failed("uia-root-wrap", invalid)).reason).toBe("malformed_evidence")
+  }
+  expect(observeComputerStop(failed("uia-root-wrap")).uia).toEqual(uia)
+})
+
 test("skips, missing evidence, timeouts and malformed or inconsistent reports stay visible", () => {
   const prerun =
     'computer-smoke-unavailable {"protocol":1,"platform":"win32","skipped":true,"reason":"elevated_fixture"}\n'

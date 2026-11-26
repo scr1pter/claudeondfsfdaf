@@ -415,7 +415,7 @@ describe("@vector CI lane", () => {
     )
     expect(steps.at(-1)).toMatchObject({
       if: "always()",
-      run: "node /opt/vector-sandbox-probe.mjs --assert",
+      run: "node /opt/vector-sandbox-runtime/probe.mjs --assert",
       "working-directory": "${{ runner.temp }}",
     })
   })
