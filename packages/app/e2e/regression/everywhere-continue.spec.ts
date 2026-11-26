@@ -84,10 +84,16 @@ test("a cold Everywhere panel verifies the scoped job status before continuing",
   const creates = await mockJobs(page)
   const checked: string[] = []
   let answer: "busy" | "unavailable" | "idle" = "busy"
-  await page.route(/\/session\/status(?:\?|$)/, (route) => {
+  // The first status read waits until the test has seen the button held while it is in flight.
+  let release = () => {}
+  let hold: Promise<void> | undefined = new Promise<void>((resolve) => (release = resolve))
+  await page.route(/\/session\/status(?:\?|$)/, async (route) => {
     const scope = new URL(route.request().url()).searchParams.get("directory")
     if (scope !== active.directory) return route.fallback()
     checked.push(scope)
+    const waiting = hold
+    hold = undefined
+    if (waiting) await waiting
     if (answer === "unavailable") return route.fulfill({ status: 503, json: { message: "Fixture unavailable" } })
     return route.fulfill({ json: answer === "busy" ? { [active.id]: { type: "busy" } } : {} })
   })
@@ -96,7 +102,12 @@ test("a cold Everywhere panel verifies the scoped job status before continuing",
   await page.getByRole("button", { name: "Show Everywhere settings" }).click()
   const button = continueButton(page, active.title)
   await button.click()
+  await expect(button).toBeDisabled()
+  await button.dispatchEvent("click")
+  release()
   await expect(page.getByText(runningNote)).toBeVisible()
+  await expect(button).toBeEnabled()
+  expect(checked).toEqual([active.directory])
   expect(creates).toEqual([])
 
   answer = "unavailable"

@@ -31,7 +31,7 @@ import {
   REPOSITORY_RULE,
   VERSION_NOTE,
   checksLine,
-  continuationState,
+  continueEverywhereJob,
   everywhereJobs,
   everywhereTab,
   everywhereView,
@@ -204,32 +204,22 @@ export const SettingsEverywhereV2: Component<{ offered: boolean }> = (props) => 
 
   const continueJob = async (job: EverywhereJob) => {
     if (continuing() || !ours()) return
-    if (running(job)) return setProblem(JOB_RUNNING)
     const client = sdk().client
-    const sameEngine = () => ours() && sdk().client === client
     setContinuing(true)
     setProblem(undefined)
-    try {
-      const result = await client.session.status({ directory: job.directory }, { throwOnError: false }).catch(() => undefined)
-      if (!sameEngine()) return
-      const state = continuationState(result?.data, job.id, running(job))
-      if (state === "running") return setProblem(JOB_RUNNING)
-      if (state === "unavailable") {
-        return setProblem("Vector could not confirm that this job has finished. Try again.")
-      }
-
-      const created = await client.session.create(
-        { directory: job.directory, title: job.continueTitle },
-        { throwOnError: false },
-      )
-      if (!sameEngine()) return
-      if (!created.data?.id) return setProblem("Vector could not start a new session in that folder.")
-      open(created.data.id)
-    } catch {
-      if (sameEngine()) setProblem("Vector could not start a new session in that folder.")
-    } finally {
-      setContinuing(false)
-    }
+    await continueEverywhereJob({
+      job: job.id,
+      working: () => running(job),
+      current: () => ours() && sdk().client === client,
+      status: () =>
+        client.session.status({ directory: job.directory }, { throwOnError: false }).then((result) => result.data),
+      create: () =>
+        client.session
+          .create({ directory: job.directory, title: job.continueTitle }, { throwOnError: false })
+          .then((result) => result.data?.id),
+      open,
+      problem: setProblem,
+    }).finally(() => setContinuing(false))
   }
 
   return (
