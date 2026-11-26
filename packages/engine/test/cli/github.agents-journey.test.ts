@@ -10,18 +10,16 @@
 import { afterAll, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Context, Effect, Layer } from "effect"
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } from "@zip.js/zip.js"
+import { Effect, Layer } from "effect"
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from "@zip.js/zip.js"
 import type { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainRunBundle } from "@vectordevai/core/brain/run-bundle"
 import { Database } from "@vectordevai/core/database/database"
-import { EventV2 } from "@vectordevai/core/event"
 import { GithubAgents } from "@vectordevai/core/github-agents"
-import { ProjectV2 } from "@vectordevai/core/project"
 import { PublicSessionShare } from "@vectordevai/core/public-session-share"
 import { GITHUB_WORKFLOW_VERSION, buildAgentsWorkflow } from "@vectordevai/core/review/workflow"
 import { SessionAudience } from "@vectordevai/core/session/audience"
-import { SessionArchive } from "@vectordevai/core/share/archive"
+import type { SessionArchive } from "@vectordevai/core/share/archive"
 import { cloudBrainArtifactKey, cloudRunArtifactKey } from "../../../../api/_lib/cloud-agents-artifact"
 import { FakeWeb } from "../../../core/test/lib/fake-web"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
@@ -51,8 +49,6 @@ import {
   encryptConversation,
   type ArtifactKey,
 } from "../../src/cli/cmd/github.session"
-import { InstanceRef } from "../../src/effect/instance-ref"
-import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { SessionRetry } from "../../src/session/retry"
 import { SessionID } from "../../src/session/schema"
@@ -86,6 +82,7 @@ import {
   type FakeArtifact,
   type Recorded,
 } from "./github.agent-fixture"
+import { artifactZip, sessionArchive } from "./github.session-fixture"
 
 type RouteScript = (github: unknown, context: unknown, core: unknown) => Promise<void>
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...args: string[]) => RouteScript
@@ -1305,34 +1302,6 @@ const repository = Effect.fn("AgentsJourney.repository")(function* (test: Test) 
 })
 
 /**
- * The real SessionArchive over this runtime's database, with projects resolving to this instance's own; built as
- * github.agent-codium.test.ts's archiveShare (`:211`) builds it.
- */
-const sessionArchive = Effect.fn("AgentsJourney.sessionArchive")(function* () {
-  const ctx = yield* InstanceRef
-  if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
-  const bridge = yield* EventV2Bridge.Service
-  const built = yield* Layer.build(
-    SessionArchive.node.implementation as Layer.Layer<
-      SessionArchive.Service,
-      never,
-      Database.Service | EventV2.Service | ProjectV2.Service
-    >,
-  ).pipe(
-    Effect.provideService(EventV2.Service, bridge),
-    Effect.provideService(
-      ProjectV2.Service,
-      ProjectV2.Service.of({
-        directories: () => Effect.die(new Error("The archive's import resolves only the project.")),
-        resolve: (directory) => Effect.succeed({ id: ctx.project.id, directory }),
-        commit: () => Effect.die(new Error("The archive's import resolves only the project.")),
-      }),
-    ),
-  )
-  return Context.get(built, SessionArchive.Service)
-})
-
-/**
  * A share service whose methods record their name in `used` and die, except the archive's export, preview and import
  * when `archive` is given: a run may use those for its conversation, and nothing else (2.13).
  */
@@ -1353,17 +1322,6 @@ function share(used: string[], archive?: SessionArchive.Interface) {
     auto: unused("auto"),
     read: unused("read"),
   })
-}
-
-/** The artifact's download as the runner uploads it: a zip that holds session.vsa (github.agent-codium.test.ts `:197`). */
-async function artifactZip(bytes: Uint8Array) {
-  const writer = new ZipWriter(new Uint8ArrayWriter())
-  await writer.add(GithubAgents.SESSION_FILE, new Uint8ArrayReader(Uint8Array.from(bytes)), {
-    level: 0,
-    useWebWorkers: false,
-    useCompressionStream: false,
-  })
-  return writer.close()
 }
 
 /** Back to the checked-out tree: the agent's edits and the bundle directory go, ignored state stays. */

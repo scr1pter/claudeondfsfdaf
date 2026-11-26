@@ -1,0 +1,67 @@
+name: Windows containment holder bundle
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        type: string
+        required: true
+      targets:
+        type: string
+        required: true
+    outputs:
+      artifact-id:
+        value: ${{ jobs.build.outputs.artifact-id }}
+      manifest-digest:
+        value: ${{ jobs.build.outputs.manifest-digest }}
+      revision:
+        value: ${{ jobs.build.outputs.revision }}
+      run:
+        value: ${{ jobs.build.outputs.run }}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: Build the reviewed Windows containment holder
+    runs-on: windows-2025
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+      manifest-digest: ${{ steps.build.outputs.manifest_digest }}
+      revision: ${{ steps.build.outputs.source_revision }}
+      run: ${{ steps.build.outputs.build_run_id }}
+    steps:
+      - name: Check out the exact reviewed revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Configure the pinned MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Compile the holder and pin its manifest
+        id: build
+        env:
+          VECTOR_WINDOWS_HOLDER_PRODUCER: "1"
+          VECTOR_WINDOWS_HOLDER_SOURCE_REVISION: ${{ inputs.source_revision }}
+          VECTOR_WINDOWS_HOLDER_TARGETS: ${{ inputs.targets }}
+        shell: cmd
+        run: node packages/engine/script/build-windows-holder-bundle.mjs
+      - name: Upload the same-run holder bundle
+        id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-holder-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vector-windows-holder-bundle
+          if-no-files-found: error
+          retention-days: 14

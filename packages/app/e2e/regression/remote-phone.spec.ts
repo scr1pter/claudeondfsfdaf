@@ -11,6 +11,8 @@ type Fixture = {
   ask: (id: string, command: string) => void
   replies: () => { path: string; body: unknown }[]
   phones: () => string[]
+  engine: () => { method: string; path: string; query: Record<string, string>; body?: unknown }[]
+  phoneTurn: () => boolean
 }
 
 async function authenticator(page: Page) {
@@ -41,13 +43,12 @@ const call = <K extends keyof Fixture>(page: Page, name: K, ...args: Parameters<
     [name, args] as const,
   ) as Promise<ReturnType<Fixture[K]>>
 
-test("a phone pairs with a passkey, both screens show the same six digits, and a request is allowed once", async ({
-  page,
-  baseURL,
-}) => {
+async function pair(page: Page, baseURL: string | undefined, connectedTools = false) {
   const { cdp, authenticatorId } = await authenticator(page)
   const port = new URL(baseURL ?? "http://127.0.0.1:3000").port || "3000"
-  await page.goto(`http://localhost:${port}/e2e/fixtures/remote-phone.html`)
+  const fixture = new URL(`http://localhost:${port}/e2e/fixtures/remote-phone.html`)
+  if (connectedTools) fixture.searchParams.set("connect", "1")
+  await page.goto(fixture.href)
   const desktop = page.locator("[data-pane='desktop']")
   const phone = page.locator("[data-pane='phone']")
 
@@ -74,6 +75,14 @@ test("a phone pairs with a passkey, both screens show the same six digits, and a
   const { credentials } = await cdp.send("WebAuthn.getCredentials", { authenticatorId })
   expect(credentials).toHaveLength(1)
   expect(credentials[0]!.rpId).toBe("localhost")
+  return { phone, cdp, authenticatorId, credentials }
+}
+
+test("a phone pairs with a passkey, both screens show the same six digits, and a request is allowed once", async ({
+  page,
+  baseURL,
+}) => {
+  const { phone, cdp, authenticatorId, credentials } = await pair(page, baseURL)
 
   // An agent asks; the phone allows it once with the passkey, which the computer verifies.
   await phone.getByRole("button", { name: "Phone: Approvals" }).click()
@@ -97,6 +106,51 @@ test("a phone pairs with a passkey, both screens show the same six digits, and a
     path: "/permission/per_2/reply",
     body: { reply: "reject" },
   })
+})
+
+test("a paired phone starts and cancels a connected branch review", async ({ page, baseURL }) => {
+  const { phone, cdp, authenticatorId, credentials } = await pair(page, baseURL, true)
+  const engine = () => call(page, "engine")
+
+  await phone.getByRole("button", { name: "Open sessions" }).click()
+  await phone.getByRole("button", { name: /^Fix the login/ }).click()
+  const connected = phone.getByRole("region", { name: "Connected tools" })
+  await expect(connected.getByText("No connected runs in this conversation yet.")).toBeVisible()
+  expect(await engine()).toContainEqual({
+    method: "GET",
+    path: "/experimental/connect/runs",
+    query: { sessionID: "ses_1", directory: "/repo" },
+  })
+
+  await connected.getByLabel("Changes to review").selectOption("branch")
+  await connected.getByLabel("Compare with (optional)").fill("main")
+  await connected.getByRole("button", { name: "Review changes" }).click()
+  await expect(connected.getByText("VectorScope review", { exact: true })).toBeVisible()
+  await expect(connected.getByText("Running", { exact: true })).toBeVisible()
+  expect((await engine()).filter(({ path }) => path === "/experimental/session/ses_1/connect")).toEqual([
+    expect.objectContaining({
+      method: "POST",
+      query: { directory: "/repo" },
+      body: { to: "vectorscope", target: { kind: "branch", base: "main" }, background: true },
+    }),
+  ])
+  const { credentials: after } = await cdp.send("WebAuthn.getCredentials", { authenticatorId })
+  expect(after[0]!.signCount).toBeGreaterThan(credentials[0]!.signCount)
+  expect(await call(page, "phoneTurn")).toBe(true)
+  await expect(connected.getByRole("button", { name: /fix|dismiss|worktree/i })).toHaveCount(0)
+
+  const cancel = connected.getByRole("button", { name: "Cancel", exact: true })
+  await cancel.click()
+  await expect(connected.getByText("Cancelled", { exact: true })).toBeVisible()
+  await expect(cancel).toHaveCount(0)
+  expect((await engine()).filter(({ path }) => path.endsWith("/cancel"))).toEqual([
+    {
+      method: "POST",
+      path: "/experimental/connect/runs/cr_phone_review/cancel",
+      query: { sessionID: "ses_1", directory: "/repo" },
+      body: {},
+    },
+  ])
 })
 
 test("a pairing link read on another origin is refused on the phone, and nothing pairs", async ({ page, baseURL }) => {

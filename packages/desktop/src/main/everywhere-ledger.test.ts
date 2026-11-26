@@ -1,6 +1,6 @@
 import { installFetchGuard } from "../../../web/test/lib/everywhere-fetch-guard"
 import { expect, test } from "bun:test"
-import { createJobId, randomId } from "@vectordevai/schema/everywhere"
+import { JOB_RECORD_RETENTION_MS, createJobId, randomId } from "@vectordevai/schema/everywhere"
 import { createLedger, ledgerFile, type RunnerLedger } from "./everywhere-ledger"
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
@@ -59,10 +59,61 @@ test("publication receipts require the exact reserved lease and survive slot rel
   expect((await ledger.inspect()).pending).toEqual([{ jid, lease, outcome: "changes", summary: "Fixed retry handling." }])
   expect(await ledger.reserve(jid, { atOnce: 1, perDay: 20 })).toBe(false)
   expect(await ledger.reserve(createJobId(now), { atOnce: 1, perDay: 20 })).toBe(true)
-  await ledger.acknowledge({ jid, lease: randomId(), outcome: "changes" })
+  await ledger.clearReceipt({ jid, lease: randomId(), outcome: "changes" })
   expect((await ledger.inspect()).pending).toHaveLength(1)
-  await ledger.acknowledge({ jid, lease, outcome: "changes" })
+  await ledger.clearReceipt({ jid, lease, outcome: "changes" })
   expect((await ledger.inspect()).pending).toEqual([])
+})
+
+test("legacy receipts keep a durable recovery window and expire only after a local warning", async () => {
+  const retention = 30 * 24 * 60 * 60_000
+  let now = Date.UTC(2026, 10, 24)
+  const observed = now
+  const old = { jid: createJobId(now - retention - 1), lease: randomId(), outcome: "changes" } as const
+  const ahead = { jid: createJobId(now + 60_000), lease: randomId(), outcome: "changes" } as const
+  let stored: RunnerLedger = { day: "2026-11-24", count: 0, jobs: [], offers: {}, pending: [old, ahead] }
+  let warnings = 0
+  const storage = { read: async () => stored, write: async (state: RunnerLedger) => { stored = state }, now: () => now }
+  const open = () => createLedger({ ...storage, onPublicationExpired: () => { warnings++ } })
+  expect((await open().inspect()).pending).toEqual([old, ahead])
+
+  now = observed + retention - 1
+  expect((await open().inspect()).pending).toEqual([old, ahead])
+  now++
+  expect((await createLedger(storage).inspect()).pending).toEqual([old, ahead])
+  expect((await createLedger({ ...storage, onPublicationExpired: () => { throw new Error("warning unavailable") } }).inspect()).pending)
+    .toEqual([old, ahead])
+  expect((await open().inspect()).pending).toEqual([ahead])
+  expect(warnings).toBe(1)
+  now -= 60_000
+  expect((await open().inspect()).pending).toEqual([ahead])
+  now = observed + retention + 60_000
+  expect((await open().inspect()).pending).toEqual([])
+  expect(warnings).toBe(2)
+})
+
+test("advancing a publication receipt preserves its first observation and an active slot protects it", async () => {
+  let stored: RunnerLedger | undefined
+  let now = Date.UTC(2026, 10, 24)
+  const jid = createJobId(now)
+  const lease = randomId()
+  let warnings = 0
+  const ledger = createLedger({
+    read: async () => stored,
+    write: async (state) => { stored = state },
+    now: () => now,
+    onPublicationExpired: () => { warnings++ },
+  })
+  await ledger.reserve(jid, { atOnce: 1, perDay: 20 })
+  await ledger.update({ jid, lease, startedAt: now })
+  await ledger.remember({ jid, lease, outcome: "failed" })
+  now += JOB_RECORD_RETENTION_MS
+  await ledger.remember({ jid, lease, outcome: "changes" })
+  expect((await ledger.inspect()).pending).toEqual([{ jid, lease, outcome: "changes" }])
+  expect(warnings).toBe(0)
+  await ledger.release(jid)
+  expect((await ledger.inspect()).pending).toEqual([])
+  expect(warnings).toBe(1)
 })
 
 test("malformed or duplicate publication receipts fail closed instead of losing recovery state", async () => {

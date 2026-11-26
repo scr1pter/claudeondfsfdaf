@@ -124,8 +124,9 @@ const posix = process.platform !== "win32"
 const onPosix = posix ? it.instance : it.instance.skip
 const onWindows = posix ? it.instance.skip : it.instance
 
-// Spawn review S6-2 at the spawner layer: the real CrossSpawnSpawner behind a wrapper that records each spawn, and
-// whether the command it was handed carries OwnedProcess's ownership options.
+// Spawn review S6-2 at the real spawner. Track the fixture's argv independently of ownership. Instance setup may
+// launch Git before the test submits the background command.
+const authorityProbe = "console.log('owned after the recheck')"
 const spawns: { owned: boolean }[] = []
 const order: string[] = []
 const recordingSpawner = Layer.effect(
@@ -134,8 +135,16 @@ const recordingSpawner = Layer.effect(
     const inner = yield* ChildProcessSpawner.ChildProcessSpawner
     return ChildProcessSpawner.make((command) =>
       Effect.suspend(() => {
-        order.push("spawn")
-        spawns.push({ owned: command._tag === "StandardCommand" && OwnedProcess.options(command) !== undefined })
+        if (
+          command._tag === "StandardCommand" &&
+          command.command === process.execPath &&
+          command.args.length === 2 &&
+          command.args[0] === "-e" &&
+          command.args[1] === authorityProbe
+        ) {
+          order.push("spawn")
+          spawns.push({ owned: OwnedProcess.options(command) !== undefined })
+        }
         return inner.spawn(command)
       }),
     )
@@ -452,7 +461,7 @@ describe("background shell commands", () => {
         const shell = yield* shells.start({
           sessionID: root.id,
           command: "owned after the recheck",
-          process: script("console.log('owned')"),
+          process: script(authorityProbe),
           ops,
           agent: "build",
           beforeSpawn: Effect.sync(() => {
@@ -636,17 +645,12 @@ describe("background shell commands", () => {
       const { directory } = yield* TestInstance
       const root = yield* sessions.create()
       const pidfile = path.join(directory, "child.pid")
-      const command = [
-        "$p = Start-Process -FilePath ping -ArgumentList '-n','300','127.0.0.1' -PassThru -NoNewWindow",
-        `Set-Content -LiteralPath '${pidfile}' -Value $p.Id`,
-        "Wait-Process -Id $p.Id",
-      ].join("; ")
+      const childScript = `require('node:fs').writeFileSync(${JSON.stringify(pidfile)},String(process.pid));setInterval(()=>{},1000)`
+      const command = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'})`
       const shell = yield* shells.start({
         sessionID: root.id,
-        command: "ping in a child process",
-        process: ChildProcess.make("powershell", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
-          stdin: "ignore",
-        }),
+        command: "keep a child process running",
+        process: script(command),
         ops,
         agent: "build",
       })
