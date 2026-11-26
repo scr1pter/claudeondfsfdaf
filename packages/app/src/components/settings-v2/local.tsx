@@ -3,6 +3,7 @@ import { For, Show, createMemo, createResource, createSignal, onCleanup } from "
 import { useDialog } from "@vectordevai/ui/context/dialog"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { Switch } from "@vectordevai/ui/v2/switch-v2"
+import { useServer } from "@/context/server"
 import { useServerSync } from "@/context/server-sync"
 import { DialogAllowSource, useLocalChange } from "@/features/local/allow-dialog"
 import { DialogEgressLog } from "@/features/local/egress-log"
@@ -74,6 +75,7 @@ const title = (id: (typeof SECTIONS)[number]["id"]) => SECTIONS.find((section) =
 
 export function SettingsLocalV2() {
   const reader = useLocalStatus({ retry: true })
+  const server = useServer()
   const serverSync = useServerSync()
   const local = useLocalChange()
   const dialog = useDialog()
@@ -170,7 +172,7 @@ export function SettingsLocalV2() {
                 pending={pending()}
                 restart={desktop.latest?.restartNeeded === true && status().policy.enabled}
                 mismatch={desktop.latest?.mismatch}
-                surface={surfaceNote({ desktop: desktop.latest !== undefined, remote: reader.remote() !== undefined })}
+                surface={surfaceNote({ desktop: desktop.latest !== undefined, connection: server.current })}
                 onToggle={(enabled) => void run({ enabled }, enabled ? "Vector Local is on." : "Vector Local is off.")}
                 onApplyHeld={(changes) => void run({ held: [...changes] }, "The change in your config applies now.")}
                 onSetup={setup}
