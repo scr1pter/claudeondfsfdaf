@@ -167,6 +167,36 @@ test("the Talk form follows controls.resume and otherwise asks Vector to continu
   await expect(page).toHaveURL(new RegExp(`/session/${rootID}$`))
 })
 
+test("stopping a running subagent keeps its unsent draft", async ({ page }) => {
+  let row = task({ id: "ses_stopping_parser", title: "Check the parser" })
+  const app = await setup(page, {
+    capabilities: { backgroundSubagents: true },
+    sessions: [child(row.id, row.title)],
+    status: { [row.id]: { type: "busy" } },
+    taskList: () => ({ tasks: [row], truncated: false }),
+  })
+  await app.open()
+  const panel = await openTasks(page)
+  const item = card(panel, row.title)
+  const talk = item.getByRole("button", { name: "Talk to this subagent", exact: true })
+  await talk.click()
+  const message = item.getByLabel("Message Check the parser", { exact: true })
+  const draft = "Check the comments too"
+  await message.fill(draft)
+  const send = item.getByRole("button", { name: "Send message", exact: true })
+  await expect(send).toBeEnabled()
+
+  row = { ...row, currentStep: "Stopping", controls: { ...row.controls, message: false, stop: false } }
+  await app.send("session.updated", {
+    info: session(rootID, rootTitle, { time: { created: CREATED, updated: Date.now() } }),
+  })
+  await expect(item.locator(".vector-bg-tasks-activity")).toContainText("Stopping")
+  if ((await talk.getAttribute("aria-expanded")) === "false") await talk.click()
+  await expect(item).toContainText("Messaging is unavailable for this task. Your draft is kept.")
+  await expect(message).toHaveValue(draft)
+  await expect(send).toBeDisabled()
+})
+
 test("the limits line shows the engine's limits, and nothing without them", async ({ page }) => {
   const row = task({ id: "ses_limits_lexer", title: "Port the lexer" })
   let limits: unknown = {
