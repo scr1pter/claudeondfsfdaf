@@ -309,8 +309,20 @@ async function stopBackground(client: Client, sessionID: string, reason?: string
     throw new Error(outdated("stop only its background subagents"))
   const ids = native.filter((task) => task.background === true && task.controls.stop).map((task) => task.id)
   const stopped: (typeof listed.tasks)[number][] = []
-  for (const chunk of chunks(ids, STOP_CHUNK))
-    stopped.push(...(await client.experimental.task.stop({ sessionID, taskIDs: chunk, reason })).data!.tasks)
+  let completed = 0
+  for (const chunk of chunks(ids, STOP_CHUNK)) {
+    const result = await client.experimental.task
+      .stop({ sessionID, taskIDs: chunk, reason })
+      .catch((error: unknown) => {
+        if (!completed) throw error
+        throw new Error(
+          `The server returned results for ${count(stopped.length, "background subagent")} from ${count(completed, "successful Stop request")}. The next request failed. ${errorMessage(error)}`,
+          { cause: error },
+        )
+      })
+    stopped.push(...result.data!.tasks)
+    completed++
+  }
   return { tasks: stopped, ...(listed.truncated ? { truncated: true } : {}) }
 }
 

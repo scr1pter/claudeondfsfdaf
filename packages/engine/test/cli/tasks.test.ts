@@ -175,7 +175,13 @@ function info(input: Partial<Task.Info> & { id: string }): Task.Info {
 
 function server(
   requests: Request[],
-  input: { capabilities?: () => Response; tasks?: Task.Info[]; shells?: Task.Shell[]; truncated?: boolean } = {},
+  input: {
+    capabilities?: () => Response
+    tasks?: Task.Info[]
+    shells?: Task.Shell[]
+    truncated?: boolean
+    stop?: (taskIDs: string[]) => Response
+  } = {},
 ) {
   return createVectorClient({
     baseUrl: "http://fixture.invalid",
@@ -186,10 +192,10 @@ function server(
       const url = new URL(request.url)
       const path = url.pathname
       if (path === "/experimental/capabilities") return input.capabilities?.() ?? Response.json(ALL_FLAGS)
-      if (path.endsWith("/stop") && path.includes("/tasks/"))
-        return Response.json({
-          tasks: ((await request.clone().json()).taskIDs ?? []).map((id: string) => info({ id })),
-        })
+      if (path.endsWith("/stop") && path.includes("/tasks/")) {
+        const { taskIDs = [] } = (await request.clone().json()) as { taskIDs?: string[] }
+        return input.stop?.(taskIDs) ?? Response.json({ tasks: taskIDs.map((id) => info({ id })) })
+      }
       if (path.endsWith("/session/parent/stop"))
         return Response.json({ aborted: true, tasks: [info({ id: "ses_a" })], shells: 1, excluded: 1, skipped: 0 })
       if (path.endsWith("/tasks/resume"))
@@ -456,6 +462,39 @@ test("stop --background reports a partial list and stops only listed background 
   expect(await formatTaskResult(options, stopped)).toStartWith("Stopped 1 background subagent.")
   expect(await formatTaskResult(options, stopped)).toEndWith(warning)
   expect(tasksForOutput(stopped)).toMatchObject({ truncated: true })
+})
+
+test("stop --background reports successful requests before a failure and sends no later batch", async () => {
+  const options = { action: "stop", session: "parent", background: true }
+  const tasks = Array.from({ length: 401 }, (_, index) => info({ id: `ses_${index}`, background: true }))
+  const failure = new Error("Stop response unavailable")
+  const execute = (requests: Request[], failAt: string) =>
+    executeTaskCommand(
+      server(requests, {
+        tasks,
+        stop: (taskIDs) => {
+          if (taskIDs[0] === failAt) throw failure
+          return Response.json({ tasks: taskIDs.map((id) => info({ id, status: "cancelled" })) })
+        },
+      }),
+      options,
+    )
+
+  const first: Request[] = []
+  await expect(execute(first, "ses_0")).rejects.toBe(failure)
+  expect(first).toHaveLength(2)
+
+  const later: Request[] = []
+  await expect(execute(later, "ses_200")).rejects.toMatchObject({
+    message:
+      "The server returned results for 200 background subagents from 1 successful Stop request. The next request failed. Stop response unavailable",
+    cause: failure,
+  })
+  expect(later).toHaveLength(3)
+  const batches = await Promise.all(later.slice(1).map((request) => request.json()))
+  expect(batches.map((batch) => batch.taskIDs)).toEqual(
+    [tasks.slice(0, 200), tasks.slice(200, 400)].map((batch) => batch.map((task) => task.id)),
+  )
 })
 
 test("merge and discard refuse under the agent marker before any request, and need a confirmation", async () => {
