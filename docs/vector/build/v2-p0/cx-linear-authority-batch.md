@@ -1,6 +1,6 @@
 # cx-linear-authority-batch: one atomic read for each installation authority check
 
-Branch `linear-authority-batch` (PR #124, worked locally as `cx-linear-authority-batch`). Codex opened it as a draft on 2026-11-24 and left it idle. For the Saturday 2026-11-28 v2 deadline this run took it over to finish and merge it. Vector everywhere stays dormant: `VECTOR_EVERYWHERE_ENABLED` stays off and no switch changes.
+Branch `linear-authority-batch` (PR #124, worked locally as `cx-linear-authority-batch`). Codex opened it as a draft on 2026-11-24 and left it idle. This run took it over to finish it and land it in main before the redesign. Vector everywhere stays dormant: `VECTOR_EVERYWHERE_ENABLED` stays off and no switch changes.
 
 Files: `api/_lib/everywhere/identity.ts`, `packages/web/test/everywhere-authority.test.ts`, `packages/web/test/everywhere-journey-laptop-tracker.test.ts` and the test FakeStore in `packages/web/test/lib/everywhere-store.ts`.
 
@@ -13,7 +13,7 @@ Files: `api/_lib/everywhere/identity.ts`, `packages/web/test/everywhere-authorit
 **Tests.**
 - web `test/everywhere-authority.test.ts`, "the read-only installation authority check sees changes to each guard at the store boundary": a live installation passes and writes nothing. Then, for the install record, the hold, the account-closed key and the tombstone in turn, a concurrent write lands as the check's EVAL is sent, and the check rejects with `EVERYWHERE_AUTHORITY_CHANGED`. A tombstone stored as a set fails closed with `PERSISTENT_STORE_UNAVAILABLE`.
 - Same file, "the read-only installation authority check requires the fixed success reply": the replies `null`, `true`, `1`, `["current"]`, `"current "` and an object, and a store that goes down during the EVAL, all reject with `PERSISTENT_STORE_UNAVAILABLE`.
-- web `test/everywhere-journey-laptop-tracker.test.ts` (L1 and L2): Linear's first thought now comes after at most 29 store commands. It must land within `min(10 s, ackMs)` on the server's clock, with every store command before it slow.
+- web `test/everywhere-journey-laptop-tracker.test.ts` (L1 and L2): Linear's first thought now comes after at least one and at most 29 store commands; the floor of one proves the slow-store model ran before the thought. It must land within `min(10 s, ackMs)` on the server's clock, with every store command before it slow.
 
 **Red before.** `identity.ts` was put back to origin/main, keeping only the exported constant so the FakeStore import resolves. Both authority cases fail, because the old reads send no EVAL. L1 and L2 fail with "Expected: <= 29, Received: 44". With the fix restored all of them pass.
 

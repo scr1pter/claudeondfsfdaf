@@ -340,6 +340,7 @@ async function linearAdmit(w: LinearWorld) {
   await bounded(Promise.race([w.ack.promise, drainAfter()]))
   expect({ firstThought: w.timing.slow ? "not posted" : "posted" }).toEqual({ firstThought: "posted" })
   // Within Linear's budget on the server's clock, with every store command before it slow, and first of all calls.
+  expect(w.timing.commands).toBeGreaterThan(0)
   expect(w.timing.commands).toBeLessThanOrEqual(29)
   expect(w.timing.signalAt - w.sentAt()).toBeLessThanOrEqual(Math.min(LINEAR_FIRST_ACTIVITY_MS, w.adapter.ackMs))
   expect(linear.calls[0]?.operation).toBe("create")
