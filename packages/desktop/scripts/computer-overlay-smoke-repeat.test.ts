@@ -82,6 +82,32 @@ test("reports which first root attempt failed without changing its classificatio
   expect(observeComputerStop(failed("uia-root-wrap")).uia).toEqual(uia)
 })
 
+test("preserves closed root dispatch and wait facts without reclassifying old or new receipts", () => {
+  const traced = { ...uia, rootAttempt: "replacement" }
+  expect(observeComputerStop(failed("uia-root-element", traced))).toMatchObject({ status: "hf7", uia: traced })
+  for (const rootProgress of ["before-dispatch", "dispatch-started", "dispatch-returned"]) {
+    for (const callerWait of ["pending", "ready"]) {
+      const facts = { ...traced, rootProgress, callerWait }
+      expect(observeComputerStop(failed("uia-root-element", facts))).toMatchObject({ status: "hf7", uia: facts })
+    }
+  }
+  const facts = { ...traced, rootProgress: "dispatch-started", callerWait: "pending" }
+  for (const invalid of [
+    { ...facts, rootProgress: "unknown" },
+    { ...facts, callerWait: "unknown" },
+    { ...facts, callerWait: undefined },
+    { ...facts, rootProgress: undefined },
+    { ...facts, rootAttempt: undefined },
+    { ...facts, lookup: "refresh" },
+    { ...facts, call: "hit" },
+    { ...facts, actor: "healthy", expiry: "none" },
+    { ...facts, expiry: "worker-current" },
+  ]) {
+    expect(observeComputerStop(failed("uia-root-element", invalid)).reason).toBe("malformed_evidence")
+  }
+  expect(observeComputerStop(failed("uia-runtime-id", facts)).reason).toBe("malformed_evidence")
+})
+
 test("skips, missing evidence, timeouts and malformed or inconsistent reports stay visible", () => {
   const prerun =
     'computer-smoke-unavailable {"protocol":1,"platform":"win32","skipped":true,"reason":"elevated_fixture"}\n'

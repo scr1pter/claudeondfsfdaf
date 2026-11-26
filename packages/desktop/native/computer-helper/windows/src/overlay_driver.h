@@ -119,6 +119,7 @@ struct OverlayDriverUiaFailure {
   std::optional<int32_t> status;
   // The first root may adopt a replacement before throwing. Other calls have no attempt label.
   std::optional<OverlayDriverUiaRootAttempt> root_attempt{};
+  std::optional<WindowsUiaRootWait> root_wait{};
 };
 struct OverlayDriverResult {
   bool ok = false, skipped = false;

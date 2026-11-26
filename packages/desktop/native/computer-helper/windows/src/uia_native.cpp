@@ -34,9 +34,10 @@ void desktop_ready() {
     throw Failure{L"secure_desktop", L"The interactive desktop is unavailable."};
 }
 // Only the two expiry phases take a snapshot, and each names the side that observed the deadline.
-void note_uia(const std::shared_ptr<WindowsUiaDiagnostic>& state, WindowsUiaPhase phase, WindowsUiaExpiry expiry = WindowsUiaExpiry::none) noexcept {
+void note_uia(const std::shared_ptr<WindowsUiaDiagnostic>& state, WindowsUiaPhase phase, WindowsUiaExpiry expiry = WindowsUiaExpiry::none,
+  WindowsUiaCallerWait wait = WindowsUiaCallerWait::none) noexcept {
   if (state) {
-    if (phase == WindowsUiaPhase::actor_expired || phase == WindowsUiaPhase::actor_com_expired) state->note_timeout(expiry);
+    if (phase == WindowsUiaPhase::actor_expired || phase == WindowsUiaPhase::actor_com_expired) state->note_timeout(expiry, wait);
     state->phase.store(phase, std::memory_order_relaxed);
   }
 }
@@ -141,7 +142,9 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
   std::wstring mutation_name_;
   std::function<bool()> mutation_gate_;
 
-  void note(WindowsUiaPhase phase, WindowsUiaExpiry expiry = WindowsUiaExpiry::none) const noexcept { note_uia(actor_->diagnostic, phase, expiry); }
+  void note(WindowsUiaPhase phase, WindowsUiaExpiry expiry = WindowsUiaExpiry::none, WindowsUiaCallerWait wait = WindowsUiaCallerWait::none) const noexcept {
+    note_uia(actor_->diagnostic, phase, expiry, wait);
+  }
   void note_budget_failure(const WindowsComCall& budget) const noexcept {
     if (!actor_->diagnostic) return;
     // Only a failed original current() probe samples this existing closed observation. No success
@@ -296,8 +299,11 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
         active_ticket = nullptr;
       }); if (actor_->diagnostic) actor_->diagnostic->ticket_queued.store(true, std::memory_order_relaxed); actor_->condition.notify_one(); }
     const auto deadline = std::chrono::steady_clock::time_point(std::chrono::milliseconds(ticket->deadline));
-    if (result.wait_until(deadline) != std::future_status::ready || now_ms() >= ticket->deadline) {
-      note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait); ticket->cancelled.store(true); actor_->revoked.store(true); DWORD thread = 0; std::deque<std::function<void()>> discarded;
+    const auto wait = result.wait_until(deadline);
+    if (wait != std::future_status::ready || now_ms() >= ticket->deadline) {
+      note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait,
+        wait == std::future_status::ready ? WindowsUiaCallerWait::ready : WindowsUiaCallerWait::pending);
+      ticket->cancelled.store(true); actor_->revoked.store(true); DWORD thread = 0; std::deque<std::function<void()>> discarded;
       { std::lock_guard lock(actor_->mutex); actor_->quarantined = true; discarded.swap(actor_->jobs); thread = actor_->thread; actor_->condition.notify_all(); }
       if (thread) (void)CoCancelCall(thread, 0); unavailable();
     }
@@ -374,10 +380,14 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     winrt::com_ptr<IUIAutomationElement> root;
     note(WindowsUiaPhase::root_element); current_call();
     // Failure path only: keep the first failing status for the driver's closed bucket. The thrown code is unchanged.
-    if (const auto status = automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put()); FAILED(status)) {
+    note(WindowsUiaPhase::root_dispatch_started);
+    const auto status = automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put());
+    if (FAILED(status)) {
       if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));
+      note(WindowsUiaPhase::root_dispatch_returned);
       unavailable();
     }
+    note(WindowsUiaPhase::root_dispatch_returned);
     UIA_HWND handle = nullptr;
     note(WindowsUiaPhase::root_handle);
     if (!root || FAILED(root->get_CurrentNativeWindowHandle(&handle)) || reinterpret_cast<HWND>(handle) != window.surface) unavailable();

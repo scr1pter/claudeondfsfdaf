@@ -24,7 +24,9 @@ enum class WindowsUiaPhase : uint8_t {
   security_classify, security_value_readonly, security_text_readonly, security_bounds, security_current, root_pid,
   hit_setup, hit_loop, hit_cycle, hit_pid, hit_equal, hit_depth, hit_children, hit_enqueue, hit_queue_limit, hit_ambiguous, hit_empty, hit_end, children_limit, children_first, children_loop, children_capacity, children_wrap, children_append, children_next, children_sibling_failed, children_compare, children_cycle, children_end, parent_read, parent_wrap,
   actor_current, actor_current_budget, actor_complete, actor_expired, actor_cancelled, actor_revoked,
-  actor_com_uninitialized, actor_com_cancellation_unavailable, actor_com_timer_unavailable, actor_com_expired
+  actor_com_uninitialized, actor_com_cancellation_unavailable, actor_com_timer_unavailable, actor_com_expired,
+  // Internal checkpoints both report root_element to the existing failure and recovery paths.
+  root_dispatch_started, root_dispatch_returned
 };
 inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
   L"none", L"root-current", L"actor-admission", L"actor-queued", L"actor-budget", L"prepare-desktop",
@@ -42,33 +44,61 @@ inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
 // a worker current_call() check, the worker's COM call budget after the body, or the caller's wait_until().
 // worker_current means the worker itself found the budget spent at a check under the sampled phase. Under
 // root_element the only such check precedes ElementFromHandleBuildCache, so that call was never made.
-// caller_wait means only that the worker had not finished when the caller woke, so a call may be in flight.
+// caller_wait means the wait timed out or the caller saw readiness after the ticket deadline. The
+// dispatch checkpoint names the last worker observation, so dispatch_started alone cannot prove COM entry.
 enum class WindowsUiaExpiry : uint8_t { none, worker_current, worker_budget, caller_wait };
 inline constexpr std::array<std::wstring_view, 4> windows_uia_expiries{L"none", L"worker-current", L"worker-budget", L"caller-wait"};
+enum class WindowsUiaRootProgress : uint8_t { before_dispatch, dispatch_started, dispatch_returned };
+enum class WindowsUiaCallerWait : uint8_t { none, pending, ready };
+struct WindowsUiaRootWait {
+  WindowsUiaRootProgress progress;
+  WindowsUiaCallerWait caller;
+};
 struct WindowsUiaDiagnostic {
   std::atomic<WindowsUiaPhase> phase{WindowsUiaPhase::none};
   // Read only for a fresh actor. A root refused before enqueue leaves the prior diagnosis in place.
   std::atomic_bool ticket_queued{false};
   // Zero means unobserved. Bits 0-15 hold the sampled phase plus one (every sampled phase, including none,
-  // has a distinct nonzero encoding), bits 16-23 the expiry side and bits 32-63 the root lookup HRESULT
-  // seen before the snapshot (zero when none was). One compare-exchange writes all three facts together.
+  // has a distinct nonzero encoding), bits 16-23 the expiry side, bits 24-31 the root dispatch and caller
+  // wait checkpoints, and bits 32-63 the root lookup HRESULT seen before the snapshot (zero if unobserved).
   std::atomic<uint64_t> timeout_observation{0};
   // Failure-path only: the first failing ElementFromHandleBuildCache HRESULT, written by the worker.
   // Zero means unobserved; a failing HRESULT is never zero. Only failure_status() reads it.
   std::atomic<int32_t> root_element_status{0};
+  static WindowsUiaPhase reported_phase(WindowsUiaPhase observed) noexcept {
+    if (observed == WindowsUiaPhase::root_dispatch_started || observed == WindowsUiaPhase::root_dispatch_returned)
+      return WindowsUiaPhase::root_element;
+    return observed;
+  }
   // The first deadline observer samples before expiry/retirement. Late work cannot rewrite this observation.
-  void note_timeout(WindowsUiaExpiry expiry) noexcept {
+  void note_timeout(WindowsUiaExpiry expiry, WindowsUiaCallerWait wait = WindowsUiaCallerWait::none) noexcept {
+    const auto status = root_element_status.load(std::memory_order_relaxed);
+    const auto current = phase.load(std::memory_order_relaxed);
+    const auto progress = current == WindowsUiaPhase::root_dispatch_returned ? WindowsUiaRootProgress::dispatch_returned
+      : current == WindowsUiaPhase::root_dispatch_started ? WindowsUiaRootProgress::dispatch_started
+      : WindowsUiaRootProgress::before_dispatch;
     uint64_t empty = 0;
-    const auto observed = (uint64_t{static_cast<uint32_t>(root_element_status.load(std::memory_order_relaxed))} << 32) |
-      (uint64_t{static_cast<uint8_t>(expiry)} << 16) | (uint64_t{1} + static_cast<uint64_t>(phase.load(std::memory_order_relaxed)));
+    const auto observed = (uint64_t{static_cast<uint32_t>(status)} << 32) |
+      (uint64_t{static_cast<uint8_t>(wait)} << 28) | (uint64_t{static_cast<uint8_t>(progress)} << 24) |
+      (uint64_t{static_cast<uint8_t>(expiry)} << 16) | (uint64_t{1} + static_cast<uint64_t>(reported_phase(current)));
     timeout_observation.compare_exchange_strong(empty, observed, std::memory_order_relaxed);
+  }
+  std::optional<WindowsUiaRootWait> failure_root_wait() const noexcept {
+    const auto observed = timeout_observation.load(std::memory_order_relaxed);
+    if ((observed & 0xffff) != 1 + static_cast<uint64_t>(WindowsUiaPhase::root_element) ||
+        ((observed >> 16) & 0xff) != static_cast<uint8_t>(WindowsUiaExpiry::caller_wait)) return {};
+    const auto wait = static_cast<WindowsUiaCallerWait>((observed >> 28) & 0xf);
+    const auto progress = static_cast<WindowsUiaRootProgress>((observed >> 24) & 0xf);
+    if ((wait != WindowsUiaCallerWait::pending && wait != WindowsUiaCallerWait::ready) ||
+        progress > WindowsUiaRootProgress::dispatch_returned) return {};
+    return WindowsUiaRootWait{progress, wait};
   }
   void note_root_element_status(int32_t status) noexcept {
     int32_t empty = 0;
     if (status) root_element_status.compare_exchange_strong(empty, status, std::memory_order_relaxed);
   }
   WindowsUiaPhase failure_phase(bool available) const noexcept {
-    if (available) return phase.load(std::memory_order_relaxed);
+    if (available) return reported_phase(phase.load(std::memory_order_relaxed));
     const auto observed = timeout_observation.load(std::memory_order_relaxed) & 0xffff;
     if (!observed || observed > windows_uia_phases.size()) return WindowsUiaPhase::none;
     return static_cast<WindowsUiaPhase>(observed - 1);

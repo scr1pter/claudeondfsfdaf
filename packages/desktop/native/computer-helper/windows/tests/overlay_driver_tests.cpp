@@ -320,6 +320,42 @@ size_t run_overlay_driver_tests() {
     }
   });
   test([] {
+    struct Case { WindowsUiaPhase phase; WindowsUiaRootProgress progress; };
+    const Case cases[] = {
+      {WindowsUiaPhase::root_element, WindowsUiaRootProgress::before_dispatch},
+      {WindowsUiaPhase::root_dispatch_started, WindowsUiaRootProgress::dispatch_started},
+      {WindowsUiaPhase::root_dispatch_returned, WindowsUiaRootProgress::dispatch_returned},
+    };
+    for (const auto& item : cases) {
+      for (const auto wait : {WindowsUiaCallerWait::pending, WindowsUiaCallerWait::ready}) {
+        WindowsUiaDiagnostic diagnostic;
+        diagnostic.phase.store(item.phase);
+        diagnostic.note_timeout(WindowsUiaExpiry::caller_wait, wait);
+        const auto first = diagnostic.timeout_observation.load();
+        diagnostic.phase.store(WindowsUiaPhase::root_dispatch_returned);
+        diagnostic.note_root_element_status(-1);
+        diagnostic.note_timeout(WindowsUiaExpiry::caller_wait, WindowsUiaCallerWait::ready);
+        const auto root_wait = diagnostic.failure_root_wait();
+        require(root_wait && root_wait->progress == item.progress && root_wait->caller == wait,
+          "overlay-driver.first-root-dispatch-and-wait-survive-late-work");
+        require(diagnostic.timeout_observation.load() == first && !diagnostic.failure_status(false) &&
+          diagnostic.failure_phase(false) == WindowsUiaPhase::root_element &&
+          diagnostic.failure_expiry(false) == WindowsUiaExpiry::caller_wait,
+          "overlay-driver.root-wait-detail-preserves-original-failure-facts");
+      }
+    }
+    for (const auto side : {WindowsUiaExpiry::worker_current, WindowsUiaExpiry::worker_budget}) {
+      WindowsUiaDiagnostic diagnostic;
+      diagnostic.phase.store(WindowsUiaPhase::root_dispatch_started);
+      diagnostic.note_timeout(side);
+      require(!diagnostic.failure_root_wait(), "overlay-driver.worker-expiry-cannot-report-caller-wait");
+    }
+    WindowsUiaDiagnostic unrelated;
+    unrelated.phase.store(WindowsUiaPhase::root_handle);
+    unrelated.note_timeout(WindowsUiaExpiry::caller_wait, WindowsUiaCallerWait::pending);
+    require(!unrelated.failure_root_wait(), "overlay-driver.non-root-phase-cannot-report-root-dispatch");
+  });
+  test([] {
     // The closed uia object rides beside stage and cause only, and never changes ok, skip, reason or exit.
     const auto stage = overlay_driver_uia_stage(WindowsUiaPhase::root_element);
     require(stage.has_value(), "overlay-driver.root-element-has-a-stage");
@@ -351,6 +387,16 @@ size_t run_overlay_driver_tests() {
         for (const auto banned : {"PRIVATE", "0x", "8007", "-2147"}) require(document.find(banned) == std::string::npos, "overlay-driver.uia-detail-carries-no-hresult-value");
       }
     }
+    const OverlayDriverUiaFailure traced{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false,
+      WindowsUiaExpiry::caller_wait, {}, OverlayDriverUiaRootAttempt::replacement,
+      WindowsUiaRootWait{WindowsUiaRootProgress::dispatch_started, WindowsUiaCallerWait::pending}};
+    const OverlayDriverResult failure{false, false, L"native_failure", L"uia-root-element", L"core_failure:no_ui_tree", traced};
+    const auto detail = failure.wire().GetNamedObject(L"uia");
+    require(detail.Size() == 8 && named(detail, L"rootProgress") == L"dispatch-started" && named(detail, L"callerWait") == L"pending" &&
+      failure.exit_code() == 1, "overlay-driver.root-wait-detail-reaches-the-failure-frame");
+    const OverlayDriverResult wrong_stage{false, false, L"native_failure", L"uia-root-wrap", L"core_failure:no_ui_tree", traced};
+    require(!wrong_stage.wire().HasKey(L"uia") && wrong_stage.exit_code() == 1,
+      "overlay-driver.root-wait-detail-cannot-change-another-phase");
     // Incoherent or out-of-range facts drop the whole object; stage and cause are unchanged.
     for (const auto& failure : {OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::caller_wait, {}},
            OverlayDriverUiaFailure{static_cast<OverlayDriverLookup>(2), OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}},

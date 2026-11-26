@@ -146,15 +146,15 @@ describe("independent overlay source admission", () => {
     expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic, life->deadline)")
     expect(header).toContain("std::atomic<uint64_t> timeout_observation{0}")
     expect(header).toContain("std::atomic<uint64_t>::is_always_lock_free")
-    expect(header).toContain("uint64_t{1} + static_cast<uint64_t>(phase.load(std::memory_order_relaxed))")
+    expect(header).toContain("uint64_t{1} + static_cast<uint64_t>(reported_phase(current))")
     expect(header).toContain("timeout_observation.compare_exchange_strong(empty, observed, std::memory_order_relaxed)")
-    expect(header).toContain("if (available) return phase.load(std::memory_order_relaxed)")
+    expect(header).toContain("if (available) return reported_phase(phase.load(std::memory_order_relaxed))")
     expect(header).toContain("if (!observed || observed > windows_uia_phases.size()) return WindowsUiaPhase::none")
     expect(header).toContain("return static_cast<WindowsUiaPhase>(observed - 1)")
     expect(driver).toContain("diagnostic->failure_phase(available)")
     // HF-7 (1): the side and the root status sampled before retirement ride in that same single snapshot.
     const snapshot = header.slice(
-      header.indexOf("void note_timeout(WindowsUiaExpiry expiry) noexcept"),
+      header.indexOf("void note_timeout(WindowsUiaExpiry expiry,"),
       header.indexOf("void note_root_element_status("),
     )
     expect(snapshot).toContain("root_element_status.load(std::memory_order_relaxed)")
@@ -170,9 +170,16 @@ describe("independent overlay source admission", () => {
       implementation.indexOf("note(WindowsUiaPhase::root_handle);"),
     )
     expect(root).toContain(
-      "FAILED(status)) {\n      if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));\n      unavailable();",
+      "FAILED(status)) {\n      if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));\n      note(WindowsUiaPhase::root_dispatch_returned);\n      unavailable();",
     )
     expect(root.match(/ElementFromHandleBuildCache\(/g)).toHaveLength(1)
+    expect(root.indexOf("current_call()")).toBeLessThan(root.indexOf("note(WindowsUiaPhase::root_dispatch_started)"))
+    expect(root.indexOf("note(WindowsUiaPhase::root_dispatch_started)")).toBeLessThan(
+      root.indexOf("ElementFromHandleBuildCache("),
+    )
+    expect(root.indexOf("ElementFromHandleBuildCache(")).toBeLessThan(
+      root.indexOf("note(WindowsUiaPhase::root_dispatch_returned)"),
+    )
     expect(root.match(/current_call\(\)/g)).toHaveLength(1)
     expect(implementation.match(/note_root_element_status\(/g)).toHaveLength(1)
     expect(implementation).toContain(
@@ -182,13 +189,13 @@ describe("independent overlay source admission", () => {
       "WindowsComObservation::expired: note(WindowsUiaPhase::actor_com_expired, WindowsUiaExpiry::worker_budget)",
     )
     const timeout = implementation.slice(
-      implementation.indexOf("if (result.wait_until(deadline)"),
+      implementation.indexOf("const auto wait = result.wait_until(deadline);"),
       implementation.indexOf("return result.get();"),
     )
     expect(
-      timeout.indexOf("note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait)"),
+      timeout.indexOf("note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait,"),
     ).toBeGreaterThanOrEqual(0)
-    expect(timeout.indexOf("note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait)")).toBeLessThan(
+    expect(timeout.indexOf("note(WindowsUiaPhase::actor_expired, WindowsUiaExpiry::caller_wait,")).toBeLessThan(
       timeout.indexOf("ticket->cancelled.store(true)"),
     )
     const note = implementation.slice(
@@ -197,8 +204,8 @@ describe("independent overlay source admission", () => {
     )
     expect(note).toContain("phase == WindowsUiaPhase::actor_expired || phase == WindowsUiaPhase::actor_com_expired")
     expect(note.match(/note_timeout\(/g)).toHaveLength(1)
-    expect(note.indexOf("state->note_timeout(expiry)")).toBeGreaterThanOrEqual(0)
-    expect(note.indexOf("state->note_timeout(expiry)")).toBeLessThan(note.indexOf("state->phase.store(phase,"))
+    expect(note.indexOf("state->note_timeout(expiry, wait)")).toBeGreaterThanOrEqual(0)
+    expect(note.indexOf("state->note_timeout(expiry, wait)")).toBeLessThan(note.indexOf("state->phase.store(phase,"))
     expect(timeout).toContain("ticket->cancelled.store(true); actor_->revoked.store(true)")
     expect(timeout).toContain("actor_->quarantined = true")
     expect(timeout).toContain("(void)CoCancelCall(thread, 0); unavailable();")

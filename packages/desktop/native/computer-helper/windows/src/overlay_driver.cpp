@@ -231,6 +231,7 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
           failure = OverlayDriverUiaFailure{lookup, OverlayDriverUiaCall::root, available, diagnostic->failure_expiry(available), diagnostic->failure_status(available)};
           if (initial_diagnostic) {
             failure->root_attempt = diagnostic == initial_diagnostic ? OverlayDriverUiaRootAttempt::initial : OverlayDriverUiaRootAttempt::replacement;
+            if (!available) failure->root_wait = diagnostic->failure_root_wait();
           }
         }
       }
@@ -459,7 +460,7 @@ int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<L
 }
 // Every fact must be in range and coherent, or the whole object is dropped: wire() never fabricates one.
 // A healthy actor never expired a ticket, so it cannot carry an expiry side.
-std::optional<JsonObject> uia_failure_wire(const OverlayDriverUiaFailure& value) {
+std::optional<JsonObject> uia_failure_wire(const OverlayDriverUiaFailure& value, std::wstring_view stage) {
   const auto lookup = static_cast<size_t>(value.lookup), call = static_cast<size_t>(value.call), expiry = static_cast<size_t>(value.expiry);
   if (lookup >= overlay_driver_lookups.size() || call >= overlay_driver_uia_calls.size() || expiry >= windows_uia_expiries.size() || (value.available && value.expiry != WindowsUiaExpiry::none)) return {};
   const auto hresult = value.status ? overlay_driver_hresult_class(static_cast<HRESULT>(*value.status)) : std::wstring_view{L"unobserved"};
@@ -473,6 +474,15 @@ std::optional<JsonObject> uia_failure_wire(const OverlayDriverUiaFailure& value)
     const auto attempt = static_cast<size_t>(*value.root_attempt);
     if (value.lookup != OverlayDriverLookup::first || value.call != OverlayDriverUiaCall::root || attempt >= overlay_driver_uia_root_attempts.size()) return {};
     result.Insert(L"rootAttempt", JsonValue::CreateStringValue(winrt::hstring(overlay_driver_uia_root_attempts[attempt])));
+  }
+  if (value.root_wait) {
+    static constexpr std::array<std::wstring_view, 3> progress_names{L"before-dispatch", L"dispatch-started", L"dispatch-returned"};
+    const auto progress = static_cast<size_t>(value.root_wait->progress);
+    const auto caller = value.root_wait->caller;
+    if (stage != L"uia-root-element" || !value.root_attempt || value.available || value.expiry != WindowsUiaExpiry::caller_wait ||
+        progress >= progress_names.size() || (caller != WindowsUiaCallerWait::pending && caller != WindowsUiaCallerWait::ready)) return {};
+    result.Insert(L"rootProgress", JsonValue::CreateStringValue(winrt::hstring(progress_names[progress])));
+    result.Insert(L"callerWait", JsonValue::CreateStringValue(caller == WindowsUiaCallerWait::ready ? L"ready" : L"pending"));
   }
   return result;
 }
@@ -629,7 +639,7 @@ JsonObject OverlayDriverResult::wire() const {
   // driver failure always reported native_failure. Anything else is dropped and nothing else changes.
   if (coherent && !ok && !skipped && overlay_driver_stage(stage) && overlay_driver_cause(cause) && (cause == L"driver_failure" || reason == L"native_failure")) {
     result.Insert(L"stage", JsonValue::CreateStringValue(stage)); result.Insert(L"cause", JsonValue::CreateStringValue(cause));
-    if (uia) if (const auto detail = uia_failure_wire(*uia)) result.Insert(L"uia", *detail);
+    if (uia) if (const auto detail = uia_failure_wire(*uia, stage)) result.Insert(L"uia", *detail);
   }
   return result;
 }
