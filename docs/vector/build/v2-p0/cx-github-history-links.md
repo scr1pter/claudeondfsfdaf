@@ -1,6 +1,6 @@
 # cx-github-history-links: GitHub thread links on the account's job list (PR #108)
 
-Branch `github-history-links` (PR #108), finished from the local branch `cx-github-history-links`. Codex opened the draft on 2026-11-24 and left it idle for more than a day, so this v2 run took it over on 2026-11-26 to finish and merge it before the Saturday deadline. It covers the GitHub part of one EV-23 loose end ("no platform thread links (only the PR link)"). The feature stays dormant: the everywhere pages are unreleased drafts and `VECTOR_EVERYWHERE_ENABLED` stays off. No flag, public claim or production setting changes.
+Branch `github-history-links` (PR #108), finished from the local branch `cx-github-history-links`. Codex opened the draft on 2026-11-24 and left it idle for more than a day, so this v2 run took it over on 2026-11-26 to finish it so it lands in main before the v2 redesign starts (the owner set 2027-01-01 as the deadline for the redesign and the other launch work). It covers the GitHub part of one EV-23 loose end ("no platform thread links (only the PR link)"). The feature stays dormant: the everywhere pages are unreleased drafts and `VECTOR_EVERYWHERE_ENABLED` stays off. No flag, public claim or production setting changes.
 
 The everywhere lane's handoff and deviations files are in other open PRs, so the dated entry lives here. Once those PRs merge, add it to the handoff's "The vectordev.ai pages' loose ends (EV-23, open)", "Small ones" bullet: GitHub thread links are done; Slack, Linear and Jira links are still open.
 
