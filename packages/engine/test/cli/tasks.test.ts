@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { PassThrough } from "node:stream"
 import yargs from "yargs"
-import { createVectorClient } from "@vectordevai/sdk/v2"
+import { createVectorClient, type TaskListResult } from "@vectordevai/sdk/v2"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import type { Task } from "@vectordevai/schema/task"
 import {
@@ -247,7 +247,8 @@ test("tasks list --shells distinguishes an unavailable command list from an empt
   )
 
   const empty = await executeTaskCommand(server([], { shells: [] }), options)
-  expect(tasksForOutput(empty)).toEqual({ tasks: [], truncated: false, shells: [] })
+  const expectedEmpty: TaskListResult = { tasks: [], truncated: false, shells: [] }
+  expect(tasksForOutput(empty)).toEqual(expectedEmpty)
   expect(await formatTaskResult(options, empty)).toBe("No subagent tasks.\nNo background commands.")
   expect(await formatTaskResult({ action: "list" }, unavailable)).toBe("No subagent tasks.")
 })
