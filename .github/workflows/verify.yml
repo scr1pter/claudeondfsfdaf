@@ -7,6 +7,9 @@ on:
     branches:
       - main
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 concurrency:
   group: verify-${{ github.ref }}
   cancel-in-progress: true
@@ -19,11 +22,12 @@ jobs:
     timeout-minutes: 55
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
+          package-manager-cache: false
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
         with:
@@ -67,7 +71,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -89,7 +93,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -107,17 +111,19 @@ jobs:
 
       - name: Run the Vector Local tests with no network
         working-directory: packages/engine
+        # Give the unprivileged runner its own home after the outer sudo starts the namespace as root.
         run: |
           set -euo pipefail
           for file in \
             test/local-mode/air-gap.test.ts \
             test/tool/shell-sandbox-local.test.ts \
             test/tool/research-offline.test.ts \
-            test/local-mode/local-run.test.ts
+            test/local-mode/local-run.test.ts \
+            test/review/fix.test.ts
           do
             echo "::group::$file"
             sudo unshare --net -- sh -c \
-              'ip link set lo up && exec sudo -E -u "$1" env PATH="$2" GITHUB_ACTIONS=false bun test --timeout 30000 "$3"' \
+              'ip link set lo up && exec sudo -E -H -u "$1" env PATH="$2" GITHUB_ACTIONS=false VECTOR_FIX_SANDBOX_CI=1 bun test --timeout 30000 "$3"' \
               sh "$USER" "$PATH" "$file"
             echo "::endgroup::"
           done

@@ -49,6 +49,7 @@ import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionStatus } from "../../src/session/status"
 import { SessionCodiumAuto } from "../../src/session/codium-auto"
+import { SessionTaskSize } from "../../src/session/task-size"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Snapshot } from "../../src/snapshot"
@@ -58,6 +59,8 @@ import { Format } from "../../src/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Auth } from "@/auth"
 import { testEffect } from "../lib/effect"
+import { TestInstance } from "../fixture/fixture"
+import { reply } from "../lib/llm-server"
 import { textStream, toolCallStream } from "../../../core/test/fixture/codium-gateway"
 
 const token = "vct_synthetic-private-account.token"
@@ -87,7 +90,7 @@ const withoutAuto: ModelPlans.Catalog = { enabled: true, models: [middle, floor,
 const state = {
   catalog: withAuto,
   // What each chat request after the queue runs out answers: a plain reply.
-  replies: [] as "tool"[],
+  replies: [] as ("tool" | readonly unknown[])[],
   sent: [] as { purpose: string | null; model: unknown }[],
 }
 afterEach(() => {
@@ -210,7 +213,8 @@ const codium = Layer.succeed(ModelPlans.Service, {
     const body = JSON.parse(String(init.body))
     state.sent.push({ purpose: new Headers(init.headers).get("x-vector-purpose"), model: body.model })
     if (body.model === ModelPlans.AUTO_ID) throw new Error("Codium Auto was sent to the gateway")
-    return sse(state.replies.shift() === "tool" ? toolCallStream : textStream)
+    const next = state.replies.shift()
+    return sse(typeof next === "object" ? next : next === "tool" ? toolCallStream : textStream)
   },
 })
 
@@ -290,6 +294,75 @@ const users = Effect.fn("test.users")(function* (sessionID: Session.Info["id"]) 
     message.info.role === "user" ? [message.info] : [],
   )
 })
+
+for (const secondOpinion of [false, true]) {
+  it.instance(
+    `the full judge gate preserves Second opinion ${secondOpinion ? "on" : "off"} across a repair`,
+    () =>
+      Effect.gen(function* () {
+        state.catalog = { ...withAuto, judges: { [middle.id]: ceiling.id } }
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const fixture = yield* TestInstance
+        const target = `${fixture.directory}/router.ts`
+        const session = yield* sessions.create({ title: "Judge integration" })
+        state.replies = [
+          reply().tool("write", { filePath: target, content: "export const router = 1\n" }),
+          reply().text("Implemented the router.").stop(),
+          reply().text("VERDICT: FAIL\nBLOCKERS:\n- router.ts must export a function").stop(),
+          reply().tool("write", { filePath: target, content: "export const router = () => {}\n" }),
+          reply().text("Repaired the router.").stop(),
+          reply().text("VERDICT: PASS").stop(),
+        ].map((answer) => {
+          const item = answer.item()
+          if (item.type !== "sse") throw new Error("Expected a scripted streaming reply")
+          return [...item.head, ...item.tail]
+        })
+        yield* prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          model: { providerID: auto.providerID, modelID: ModelV2.ID.make(middle.id) },
+          size: "thorough",
+          judge: "thorough",
+          secondOpinion,
+          parts: [{ type: "text", text: "Implement router.ts as an exported function and check the finished work." }],
+        })
+
+        expect(yield* Effect.promise(() => Bun.file(target).text())).toBe("export const router = () => {}\n")
+        const messages = yield* sessions.messages({ sessionID: session.id })
+        const rounds = SessionTaskSize.judgeRuns({ messages })
+        expect(rounds.map((round) => round.part.metadata?.judge)).toEqual([
+          { round: 1, size: "thorough", verdict: "FAIL" },
+          { round: 2, size: "thorough", verdict: "PASS" },
+        ])
+        const children = yield* sessions.children(session.id)
+        expect(children).toHaveLength(2)
+        const judged = yield* Effect.all(children.map((child) => sessions.messages({ sessionID: child.id })))
+        const selected = secondOpinion ? ceiling.id : middle.id
+        expect(judged.map((history) => history.find((message) => message.info.role === "user")?.info)).toMatchObject([
+          { model: { providerID: auto.providerID, modelID: selected } },
+          { model: { providerID: auto.providerID, modelID: selected } },
+        ])
+        const repairs = messages.filter((message) =>
+          message.parts.some(
+            (part) => part.type === "text" && part.text.startsWith('<vector_judge_verdict round="1">'),
+          ),
+        )
+        expect(repairs).toHaveLength(1)
+        expect(repairs[0]?.info.role === "user" && repairs[0].info.secondOpinion === true).toBe(secondOpinion)
+        expect(state.sent.map((request) => [request.purpose, request.model])).toEqual([
+          ["chat", middle.id],
+          ["chat", middle.id],
+          ["judge", selected],
+          ["chat", middle.id],
+          ["chat", middle.id],
+          ["judge", selected],
+        ])
+        expect(state.replies).toEqual([])
+      }),
+    { git: true, trusted: true, config: { formatter: false, lsp: false, snapshot: false } },
+  )
+}
 
 it.instance("each message runs on the model Auto picks for its size; the session and the choice stay on Auto", () =>
   Effect.gen(function* () {

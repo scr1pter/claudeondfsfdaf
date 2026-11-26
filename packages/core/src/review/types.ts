@@ -34,9 +34,11 @@ export interface ModelFinding {
   confidence: number // 0..1
   evidence?: string[] // "path:line" references it read
   rule?: string // the quoted rule sentence
+  citation?: RuleCitation // decoded under ruleCheck; only a checked quote is published
+  ruleProblem?: "not-structured" | "source" | "quote" // malformed model claim, without retaining its content
+  rulesSource?: "base branch" | "working tree" // provenance of the checked quote
   duplicateOf?: string // id of an open earlier finding this repeats
-  // The strict report schema's fields (VS-27a). Only decodeReport under `guardrail: "strict"` reads them, and no runner
-  // asks for that before VS-27c, so legacy output never has them.
+  // The engine's strict report schema uses these fields. Legacy decoding leaves them out.
   failure?: FailureInfo // asked for on every blocking finding; S2 and S5 enforce that, not the schema
   quotes?: Quote[]
   patch?: string // a unified diff against head
@@ -57,10 +59,17 @@ export interface ModelReport {
   priorStatus?: { id: string; status: "fixed" | "open"; reason: string }[]
 }
 
+export interface DiagnosticProvenance {
+  readonly source: "offline-v1"
+  readonly rule: "secret-added" | "manifest-without-lock" | "integrity-removed"
+}
+
 export interface Finding extends ModelFinding {
   id: string
   side: Side
   source: "review" | "security"
+  // Versioned offline rules observed at an anchor this model finding cites. They do not confirm the finding.
+  diagnostics?: DiagnosticProvenance[]
   verified?: boolean
   // Who confirmed it (VS-27a). `verified` stays a boolean, so every `verified === true` check keeps its meaning: a
   // runtime confirmation sets both `verified: true` and `verifiedBy: "runtime"`. No runner sets it before VS-27c or VS-30.
@@ -69,10 +78,8 @@ export interface Finding extends ModelFinding {
   also?: string[]
 }
 
-// VS-27's strict guardrail (contract §1.2). Its types live here, not in guardrail.ts, because ReviewOutcome.strict
-// needs them and this file stays import-free; VS-27b's guardrail.ts adds StrictInput and strictSelect. Nothing produces
-// any of them before VS-27c.
-// The five production-breaking classes. Their definitions wait for VS-27c's prompt (owner questions Q3 and Q4).
+// The five production-breaking classes used by the engine's strict prompt and guardrail. ReviewOutcome.strict
+// shares the result types without importing the guardrail.
 export const FAILURE_CLASSES = ["crash", "data-corruption", "leak", "runaway-loop", "auth-bypass"] as const
 export type FailureClass = (typeof FAILURE_CLASSES)[number]
 export const FAILURE_MECHANISMS = ["logic", "concurrency", "regression", "resource", "access"] as const
@@ -102,8 +109,7 @@ export type FindingScope = (typeof FINDING_SCOPES)[number]
 // VS-43's structured rule citation (addendum A). `repository_instructions` and `review_rules` name the prompt's two
 // trusted blocks; `paths` names a ReviewConfig.paths entry by its 0-based index as parsed; `scoped` names a VS-48
 // nested instruction file, which nothing sends yet. `lines` is carried and never checked. Only schema.ts's
-// decodeRuleCitation builds one, and nothing calls it before VS-43 wiring, so ModelFinding gains no field now and
-// `rule` stays the quoted text.
+// decodeRuleCitation builds the model-side value. Its public quote and provenance are set by the citation gate.
 export type RuleSource =
   | { kind: "repository_instructions" }
   | { kind: "review_rules" }
@@ -116,7 +122,7 @@ export interface RuleCitation {
 }
 // VS-44's verify certificate (addendum A): the verifier's verdict on one finding, with the code that shows it. Produced
 // only under `verifyEvidence: "certificate"` with `guardrail: "strict"`, by schema.ts decodeVerifyCertificates, and
-// checked by guardrail.ts certified(); nothing produces or checks one before VS-44 wiring (with VS-27c).
+// checked by the strict guardrail against the committed blobs.
 export const CERTIFICATE_VERDICTS = ["confirmed", "rejected", "unsure"] as const
 export type CertificateVerdict = (typeof CERTIFICATE_VERDICTS)[number]
 // How the failing path is reached, as the verifier says. Nothing checks the label, so it can only veto (I-2): "assumed"
@@ -138,7 +144,7 @@ export interface VerifyCertificate {
   reach?: CertificateReach // absent when it could not be read, which certified() reads as "assumed"
 }
 // What certified() leaves to attach to a certified finding's StrictFinding [GP3]: its trace and the guards that
-// matched, at the paths they were read from, and its reach. No StrictFinding carries it before VS-44 wiring.
+// matched, at the paths they were read from, and its reach.
 export interface CertificateEvidence {
   trace: Quote[]
   guards: Quote[]
@@ -155,11 +161,12 @@ export const STRICT_FIX_KINDS = ["suggestion", "patch", "unchecked"] as const
 // none (schema.ts), so it reads as `out-of-scope`. VS-42 added `pre-existing` (S9, the introduced-by-change check): it
 // is checked after S5 and before S6, so a finding it drops never has its patch applied or parsed, is produced only
 // under `guardrail: "strict"` with `scopeGate: "introduced"`, and joins the result schema's enum only under that key.
-// VS-44's `verdict-unsure` and `certificate-mismatch` (S1's certificate check) join after `verdict-unreadable` with VS-44
-// wiring, not before: no rule produces them yet (guardrail.ts CertificateDrop).
+// VS-44's S1 drops apply only when checking a verify certificate.
 export const STRICT_DROPS = [
   "unverified",
   "verdict-unreadable",
+  "verdict-unsure",
+  "certificate-mismatch",
   "severity-unreadable",
   "not-blocking",
   "out-of-scope",
@@ -186,6 +193,8 @@ export interface StrictFinding {
   quotes: Quote[]
   fix: { kind: (typeof STRICT_FIX_KINDS)[number]; text: string }
   verifiedBy: VerifiedBy
+  linkedRule?: { source: string; quote: string; rulesSource: "base branch" | "working tree" }
+  certificate?: CertificateEvidence
   verifier: string // the "provider/model" or the runtime check that confirmed it
 }
 export interface StrictResult {
@@ -230,6 +239,7 @@ export type DropReason =
   | "duplicate"
   | "dismissed"
   | "rejected-by-verify"
+  | "rule-unverified"
   | "unconfirmed" // after a triage pass, the review model did not confirm it
   | "nit" // a nit or a style finding, while nits are off
 
@@ -252,7 +262,13 @@ export interface PriorFinding {
   also?: number[]
 }
 
+/** What the posting formatter needs when an adapter forwards the selection alone. */
+export type StrictSummary = Pick<StrictResult, "complete" | "dropped"> & { findingCount: number }
+
 export interface Selection {
+  strict?: StrictSummary
+  /** Whole changed files omitted by graph-mode diff packing. Related context never establishes coverage. */
+  diffIncomplete?: true
   inline: PlacedFinding[]
   outsideDiff: (Finding & { reason: AnchorFailure })[]
   elsewhere: Finding[]
@@ -282,8 +298,30 @@ export interface SummaryFinding {
   also?: number[] // the other lines of this file it names as the same defect
 }
 
+// A prefix of one deterministic batch plan. Its identifiers and count reconstruct the exact
+// batches and covered paths without storing an unbounded path list in a GitHub comment.
+export interface BatchCheckpoint {
+  version: 1
+  head: string
+  plan: string
+  completed: number
+  covered: number
+  last?: string
+}
+
+export const REVIEW_VERDICTS = [
+  "not-reviewed",
+  "policy-skip",
+  "incomplete",
+  "blocking",
+  "findings",
+  "clean-complete",
+] as const
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number]
+
 export interface ReviewState {
   v: 1
+  batch?: BatchCheckpoint // present only while coverage is incomplete
   // Full SHAs of the last completed review.
   head?: string
   base?: string
@@ -294,16 +332,50 @@ export interface ReviewState {
   month?: { key: string; costUsd: number } // key is "2026-09"
   unreviewed: string[] // files a partial run did not cover; added to the next focus
   failed?: boolean
+  // An in-flight or refused budget-gated run can retry the entire diff, even when the head moves.
+  retryFullAfterBudget?: true
+  verdict?: ReviewVerdict // opt-in fail-closed result for verdictHead, independent of findings coverage
+  verdictHead?: string
   notedHead?: string
   inlinePosted: number
   inflight?: { run: string; head: string; at: number; costUsd: number }
   findings: SummaryFinding[] // inline findings live in their own comment markers
 }
 
+// Why a changed file was not reviewed. `held-back` is VS-34's (addendum A, design item 5): a file held back whole from
+// the model because its new or old path names key material or credentials (holdback.ts). It is not reviewed (I-7,
+// verdict.ts), and it never enters ReviewState.unreviewed, so a re-trigger on the same head still takes the
+// `already-reviewed` skip (skip.ts). Review.run records it under `holdback: "secrets"` since SF-13b, with the file's
+// status in ReviewOutcome.held.
+export const SKIPPED_FILE_REASONS = [
+  "ignored",
+  "lockfile",
+  "generated",
+  "vendored",
+  "build-output",
+  "binary",
+  "deleted",
+  "size-limit",
+  "held-back",
+] as const
+
 export interface SkippedFile {
   path: string
-  reason: "ignored" | "lockfile" | "generated" | "vendored" | "build-output" | "binary" | "deleted" | "size-limit"
+  reason: (typeof SKIPPED_FILE_REASONS)[number]
   additions?: number
+}
+
+// Why holdback.ts held a changed file back whole (VS-34 design item 2): its path is one the read tool denies as a
+// secret (SECRET_FILES), an env file, or a credential file only the payload list names.
+export const HOLDBACK_REASONS = ["secret-file", "env-file", "credential-file"] as const
+export type HoldbackReason = (typeof HOLDBACK_REASONS)[number]
+
+// A changed file held back whole, with its change's status, which VS-32's verdict reads: a held deletion sent nothing.
+export interface HeldFile {
+  path: string
+  oldPath?: string // only on renames
+  status: "added" | "modified" | "deleted" | "renamed"
+  reason: HoldbackReason
 }
 
 export interface ReviewCost {
@@ -328,8 +400,23 @@ export interface ReviewCost {
   model: string
 }
 
+export type ClaimedAuthorLab =
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "deepseek"
+  | "moonshot"
+  | "xai"
+  | "mistral"
+  | "alibaba"
+  | "zhipu"
+  | "minimax"
+  | "meta"
+
 export interface ReviewOutcome {
   report: ModelReport
+  // Local metadata only. These bounded claims cannot choose a reviewer.
+  claimedAuthor?: { source: "branch" | "pr-body" | "trailer"; lab: ClaimedAuthorLab }[]
   selection: Selection
   skipped: SkippedFile[]
   cost?: ReviewCost
@@ -339,8 +426,9 @@ export interface ReviewOutcome {
   since?: string
   mode: "full" | "incremental" | "carry"
   forcePushed?: boolean
-  // "privacy" and "budget-estimate" are VS-23's and VS-24's zero-attempt stops, which no runner makes before VS-23b
-  // and VS-24 wiring.
+  // SF-16: only a zero-attempt policy skip carries this marker. The verdict retains earlier open findings.
+  trivial?: true
+  // "privacy" records a route refusal. "budget-estimate" stops before model dispatch with every file unreviewed.
   partial?: "budget" | "steps" | "timeout" | "model-error" | "privacy" | "budget-estimate"
   unreviewed: string[]
   specialists: {
@@ -357,6 +445,9 @@ export interface ReviewOutcome {
   passes?: ReviewPass[]
   // The strict guardrail's result, set only under `guardrail: "strict"` (VS-27c).
   strict?: StrictResult
+  // VS-34: the files Review.run held back under `holdback: "secrets"`, one per `held-back` skip, same path and order.
+  // Absent when nothing was held.
+  held?: HeldFile[]
 }
 
 export interface ReviewPass {
@@ -377,8 +468,8 @@ export interface ReviewPass {
 // it covers. `region` pins an OpenRouter account to eu.openrouter.ai or us.openrouter.ai and attests nothing else.
 // `extendedCache` accepts OpenAI's 24-hour extended prompt caching (gpt-5.5 and later). `verify: "api"` asks admission
 // to check the account itself; absent means "attest". Nothing checks it yet: until a verifier exists (Q20), VS-23b's
-// admission must refuse a route whose decision lists an attestation with `verify: "api"`, and must refuse an OpenAI
-// one unless Q20 approves an admin credential.
+// admission (engine review/route.ts) refuses a route whose decision lists an attestation with `verify: "api"` as
+// "attestation-unverified", an OpenAI one included, which Q20 may later allow with an admin credential.
 export interface ZdrAttestation {
   id: string
   operator: string
@@ -422,21 +513,18 @@ export interface ReviewConfig {
   modelEvidence: "off" | "warn"
   // VS-24's opt-in (D3): "skip" ends a review whose every changed file is trivial (trivial.ts: whitespace, docs, rename
   // or comment-only under strict rules) with zero attempts and a note. Absent means "review" (OPTIONAL_REVIEW_DEFAULTS),
-  // and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they were. Parsed, and read by no
-  // runner until VS-24 wiring (UNAPPLIED_REVIEW_KEYS), so the parser warns that "skip" is not applied; the GitHub skip
-  // waits for the @vector merge.
+  // and DEFAULT_REVIEW_CONFIG leaves it out. The desktop and GitHub review surfaces still review the change.
   trivial?: "review" | "skip"
-  // VS-25's opt-in (D3, Q15). Under "graph", Review.run will build the Tier 1 impact slice (impact.ts) and send it as
-  // <untrusted_impact>. Absent means "grep" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every
-  // config and its digest stay as they were. Parsed, and read by no runner until VS-25b wiring (UNAPPLIED_REVIEW_KEYS),
-  // so the parser warns that "graph" is not applied.
+  // The engine builds graph context from the reviewed Git trees under "graph". The default and the separate
+  // desktop review use grep. Leaving this key absent preserves existing configuration and evidence digests.
   impact?: "grep" | "graph"
-  // VS-27's opt-in (D3, Q3, Q15). Under "strict", the strict guardrail (VS-27b's strictSelect) will keep only verified,
-  // blocking findings in the five failure classes, each anchored, quoted, with its impact and a fix, and report them as
-  // a StrictResult. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every
-  // config and its digest stay as they were. Parsed, and read by no runner until VS-27c (UNAPPLIED_REVIEW_KEYS), so the
-  // parser warns that "strict" is not applied.
+  // Only an owner setting or the CI base can require checked repository citations.
+  ruleCheck?: "off" | "strict"
+  // Under "strict" the engine verifies every candidate and reports verified blocking findings in the five
+  // production-breaking classes. The default and desktop use ordinary review selection.
   guardrail?: "off" | "strict"
+  // Pinned in-process evidence. Only the trusted configuration can select the Linux engine implementation.
+  diagnostics?: "off" | "offline"
   // VS-42's opt-in (Q18). Under "introduced", the strict guardrail drops a finding the model labels pre-existing, or
   // whose quoted code is all unchanged since the base (S9, guardrail.ts preExistingSuspect). It acts inside
   // strictSelect, so it is effective only with `guardrail: "strict"`; set without it, it is ignored with a parser note.
@@ -449,28 +537,44 @@ export interface ReviewConfig {
   // its trace matches the code, touches the change or the anchor, and its reach is not assumed. It acts inside
   // strictSelect, so it is effective only with `guardrail: "strict"`; set without it, it is ignored with a parser note.
   // Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out, so every config and its
-  // digest stay as they were. No environment variable reads it. Parsed, and read by no runner until VS-44 wiring
-  // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "certificate" is not applied.
+  // digest stay as they were. No environment variable reads it. The engine applies it only under strict.
   verifyEvidence?: "off" | "certificate"
   // VS-28's opt-in (D3, Q15), as amended by VS-39 (Q18). Under "auto", Review.run will compute the change's risk band
   // (risk.ts riskOf) and plan its passes by band (plan.ts planDepth): low runs the review, and security only on a
   // sensitive path; medium adds security; high adds security and, with `lenses: "high"`, four single-class lenses.
   // "fixed" runs today's passes. Absent means "fixed" (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it
-  // out, so every config and its digest stay as they were. Parsed, and read by no runner until VS-28 wiring
-  // (UNAPPLIED_REVIEW_KEYS), so the parser warns that "auto" is not applied.
+  // out. Automatic depth and the high-band lens sessions run in the engine.
   depth?: "fixed" | "auto"
   // VS-28's lens opt-in. Under "high", the high band of an automatic depth adds the lenses (REVIEW_LENSES). It is
   // effective only with `depth: "auto"`; set without it, it is ignored with a parser note. Absent means "off"
-  // (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out. Parsed, and read by no runner until VS-28
-  // wiring (UNAPPLIED_REVIEW_KEYS), so the parser warns that "high" is not applied.
+  // (OPTIONAL_REVIEW_DEFAULTS), and DEFAULT_REVIEW_CONFIG leaves it out.
   lenses?: "off" | "high"
+  /** Local CLI context from bounded, source-checked Brain cards. Absent means off. */
+  cards?: "off" | "brain"
   // VS-23's opt-in (D3, Q1): "zdr" sends code only on zero data retention routes (privacy.ts). Raise-only: any source
   // may set it and none may lower it. Absent means "standard", and DEFAULT_REVIEW_CONFIG leaves it out, so every
-  // config and its digest stay as they were. Only mergeReviewConfig reads it, and no runner calls that before VS-23b.
+  // config and its digest stay as they were. Only mergeReviewConfig reads it: `vector review`, the local review service
+  // and the eval's replay call that from VS-23b, whose admission enforces it in model resolution and Review.run. Since
+  // VS-23d (SF-15) the user config's hidden `review.privacy` raises it too, and the desktop reads it: its review
+  // sessions are held to the route rules by the engine server (engine review/route.ts adopt). The GitHub job (SF-37)
+  // still reads parseReviewConfig, which ignores it.
   privacy?: "standard" | "zdr"
+  // VS-34's opt-in (addendum A §1, Q23). Under "secrets", Review.run holds back from the model each changed file whose
+  // new or old path names key material or credentials (holdback.ts holdbackFiles), records it as a `held-back` skip,
+  // and replaces secret-shaped values in every untrusted block it does send with `[redacted]` (SF-13b). Its sessions'
+  // rules then deny the read tool the credential files and the held paths, and the read and grep tools redact what
+  // they return the same way (SF-14).
+  // Raise-only, as `privacy` is: the strictest of the global config (VS-23d's hidden source, SF-15), review.json and
+  // REVIEW_HOLDBACK, and no pull request text sets it. Absent means "off" (OPTIONAL_REVIEW_DEFAULTS), and
+  // DEFAULT_REVIEW_CONFIG leaves it out, so every config and its digest stay as they were. Only mergeReviewConfig reads
+  // it; the desktop does since SF-15 and applies both halves with the same functions (no gitignore check there).
+  // parseReviewConfig ignores it, and so do the GitHub job (SF-37) and connect's consent preview, which read that.
+  // Independent of `privacy`: whether "zdr" requires it is Q23, still open.
+  holdback?: "off" | "secrets"
   // The routes the owner attests are zero data retention (Q2): provider IDs, `openrouter` for an OpenRouter account,
   // and model server hosts. A text entry is the legacy form and keeps its meaning; an attestation object (VS-33) adds
-  // what the owner attests beyond the ID. Read only from a trusted source (mergeReviewConfig); absent means none.
+  // what the owner attests beyond the ID. Read only from a trusted source (mergeReviewConfig): on your own computer
+  // the user config's hidden `review.zdrAttested` (SF-15); absent means none.
   zdrAttested?: ZdrAttestedEntry[]
   // VS-30's opt-in (D10), as proposed: contract §1.1 and §4 VS-30, with owner question Q8 open. Under "ask", a trusted
   // local review would ask, per operation and through `--checks`, before running the project's tests, coverage and
@@ -480,12 +584,13 @@ export interface ReviewConfig {
   // were. Read by no runner until the VS-30 executor (UNAPPLIED_REVIEW_KEYS), so mergeReviewConfig warns that "ask" is
   // not applied.
   runtime?: "off" | "ask"
-  failOn: "never" | "blocking" // "blocking" fails the job while blocking findings are open
+  failOn: "never" | "blocking" | "blocking-or-incomplete" // the last value is accepted only from the trusted base policy
   ignore: string[] // added to the defaults
   ignoreDefaults: boolean
   skipAuthors: string[]
   skipLabels: string[] // vector:paused is always honoured
   skipBranches: string[]
+  largeChanges?: "skip" | "batch" // absent keeps the ordinary size skip
   maxFiles: number
   maxChangedLines: number // after ignores
   maxDiffChars: number // inlined per review session
@@ -494,9 +599,8 @@ export interface ReviewConfig {
   maxCostUsdPerPr: number // across automatic reviews of one PR; 0 = none
   maxCostUsdPerMonth: number // 0 = none; install writes REVIEW_MAX_COST_USD_PER_MONTH=50 for paid models
   // VS-24: a cap on the first-turn input tokens of a review's planned passes, summed (dispatch.ts, decideDispatch); it
-  // counts free, plan and local models too. Absent or 0 means none. A budget, not a policy key, and an estimate: admission
-  // and the dollar caps stay the real bounds. Parsed, and read by no runner until VS-24 wiring (UNAPPLIED_REVIEW_KEYS),
-  // so the parser warns that a cap is not applied.
+  // counts free, plan and local models too. Absent or 0 leaves pre-dispatch estimation off. This budget uses an
+  // estimate; admission and provider limits still bound actual spend.
   maxInputTokens?: number
   timeoutMinutes: number
   model?: string // "provider/model"
@@ -548,15 +652,20 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
 // What an optional key reads as when a config leaves it out. DEFAULT_REVIEW_CONFIG leaves these out, so configs and
 // their digests made before the key existed stay as they were.
 export const OPTIONAL_REVIEW_DEFAULTS = {
+  largeChanges: "skip",
   trivial: "review",
   maxInputTokens: 0,
   impact: "grep",
+  ruleCheck: "off",
   guardrail: "off",
+  diagnostics: "off",
   scopeGate: "off",
   verifyEvidence: "off",
   depth: "fixed",
   lenses: "off",
+  cards: "off",
   runtime: "off",
+  holdback: "off",
 } as const satisfies Partial<ReviewConfig>
 
 // The same, read by any ReviewConfig key, for lookups that do not know which keys have an entry.
@@ -564,17 +673,10 @@ export const OPTIONAL_REVIEW_DEFAULT_OF: Partial<Record<keyof ReviewConfig, unkn
 
 // Keys config.ts parses that no runner applies yet, each optional with a default above. The parser warns when one would
 // change a review, policyDigest reads them as absent whatever their value, so no evidence scope claims a policy its
-// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42, VS-44 or
-// VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it.
+// review did not run under, and the eval replay neither takes nor records them. VS-24, VS-25b, VS-27c, VS-42, VS-44
+// or VS-28 wiring, or the VS-30 executor, takes a key off this list when a runner applies it. VS-34's `holdback` left it
+// with SF-13b, when Review.run applied its payload half.
 export const UNAPPLIED_REVIEW_KEYS = [
-  "trivial",
-  "maxInputTokens",
-  "impact",
-  "guardrail",
-  "scopeGate",
-  "verifyEvidence",
-  "depth",
-  "lenses",
   "runtime",
 ] as const satisfies readonly (keyof typeof OPTIONAL_REVIEW_DEFAULTS)[]
 

@@ -1068,8 +1068,14 @@ it.effect("private conversations keep owner-local archives but cannot be publish
     const database = yield* Database.Service
     const audience = SessionAudience.make(database)
     yield* audience.fenceIsolation({ sessionID: session.sessionID, actor: "owner" })
-    expect((yield* shares.preview(session)).messages).toHaveLength(2)
-    expect((yield* shares.export(session)).privacy).toBe("owner-only")
+    const local = yield* shares.export(session)
+    expect(local.privacy).toBe("owner-only")
+    expect(() => SessionArchive.publicArchive(local)).toThrow("Private conversations cannot be published or publicly exported.")
+    for (const operation of [shares.preview(session), shares.review({ ...session, includeScreenshots: true })]) {
+      const refusal = yield* operation.pipe(Effect.flip)
+      expect(refusal.code).toBe("INVALID")
+      expect(refusal.message).toContain("Private conversations")
+    }
     expect((yield* shares.publish(publish(session.sessionID)).pipe(Effect.flip)).code).toBe("INVALID")
     expect(remote.requests).toEqual([])
   }),
@@ -1118,8 +1124,10 @@ for (const engine of ["v1", "v2"] as const) {
       const imported = yield* archives.import({ archive: portable, location: { directory: AbsolutePath.make("/tmp") } })
       expect(yield* audience.isPrivate(imported.sessionID)).toBe(true)
       expect(observed).toEqual([true, true])
-      expect((yield* shares.preview(imported)).messages).toHaveLength(2)
-      expect((yield* shares.export(imported)).privacy).toBe("owner-only")
+      const retained = yield* shares.export(imported)
+      expect(retained.messages).toHaveLength(2)
+      expect(retained.privacy).toBe("owner-only")
+      expect((yield* shares.preview(imported).pipe(Effect.flip)).code).toBe("INVALID")
       expect((yield* shares.publish(publish(imported.sessionID)).pipe(Effect.flip)).code).toBe("INVALID")
       expect(remote.requests).toEqual([])
     }),

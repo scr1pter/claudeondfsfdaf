@@ -916,11 +916,11 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
       return run(current.confirm)
     },
     /** After a 401: end the browser's session first, so the sign-in page does not send the person straight back. */
-    signInAgain(pathname: string): Promise<void> {
+    signInAgain(pathname: string, focus?: string): Promise<void> {
       const signOut = deps.signOut ?? (() => Promise.resolve())
       return signOut()
         .catch(() => undefined)
-        .then(() => navigate(signInPath(pathname)))
+        .then(() => navigate(signInPath(pathname, focus)))
     },
     /**
      * The page is going away: drop every answer still on its way and the code. A return not sent yet stays, so React's
@@ -1081,12 +1081,15 @@ export function problemOf(status: number, code?: string): EverywhereProblem {
   return "unavailable"
 }
 
-/** The sign-in link: this page's path only, so no query or fragment (an OAuth code included) reaches /login. */
-export function signInPath(pathname: string) {
+/** The sign-in link keeps only the page path and a selected job. OAuth query parameters and fragments stay out. */
+export function signInPath(pathname: string, focus?: string) {
   const base = "https://vectordev.ai"
   const parsed = pathname.startsWith("/") && parses(pathname, base) ? new URL(pathname, base) : undefined
-  const path = parsed?.origin === base ? parsed.pathname : "/everywhere"
-  return `/login?returnTo=${encodeURIComponent(path)}`
+  const path = parsed?.origin === base ? parsed.pathname : undefined
+  const canFocus = path === "/everywhere" || path === "/everywhere/"
+  const returnTo =
+    canFocus && focus && Everywhere.JOB_ID_PATTERN.test(focus) ? `${path}?job=${focus}` : (path ?? "/everywhere")
+  return `/login?returnTo=${encodeURIComponent(returnTo)}`
 }
 
 /**

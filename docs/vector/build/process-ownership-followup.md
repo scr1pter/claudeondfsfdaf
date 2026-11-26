@@ -204,3 +204,18 @@ and the [lane notes](native-qualify-notes.md#nq-8-15-november-2026).
 
 Both native build switches and FLOOR stay false; no production activation is authorized
 by this section.
+
+## Hosted macOS process ownership
+
+The `macos-process-ownership.yml` workflow runs on `macos-15` for changes to
+the process, shell, terminal, task and MCP paths it exercises. It can also be
+dispatched for an exact source revision.
+
+It covers owned POSIX process groups and output cleanup, durable background
+commands, multi-agent terminal disposal, and task-management list, wait and
+stop. The PTY and MCP child fixtures check their parts of S6-5, and the MCP
+fixture checks the policy refusal in S6-7. The foreground and background shell
+ordering cases under required isolation remain separate from this coverage.
+The Linux bubblewrap case is qualified on the Linux lanes.
+
+Record macOS acceptance from the hosted run at the revision being qualified.

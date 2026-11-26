@@ -113,10 +113,28 @@ export const VARIANT_NAME = /^[a-z]+(:[a-z][a-z0-9]*(-[a-z0-9]+)*)?$/
 
 // The settings a variant may set over the base's review.json, per runner. A key joins a runner's list only in the
 // package that makes it change what that runner does, with that package's D3 parity test; adding a ReviewConfig key
-// alone never adds it. The eval's own limits are never a variant's.
+// alone never adds it. The eval's own limits are never a variant's. The engine's `privacy` is VS-23c's (engine:
+// privacy-zdr), which a variant may only raise to "zdr". The desktop's stays out: since VS-23d (SF-15) the desktop
+// asks for it, and the engine server holds its sessions to the route rules, which a desktop replay through a recording
+// client, with no engine server, cannot show (a documented difference). The engine's `holdback` is VS-34's (engine:
+// holdback-secrets), which a variant may only raise to "secrets"; the desktop's is SF-15's, the same core functions
+// called from the desktop runner.
 export const VARIANT_KEYS = {
-  engine: ["verifyPolicy"],
-  desktop: ["verifyPolicy"],
+  engine: [
+    "depth",
+    "lenses",
+    "cards",
+    "verifyPolicy",
+    "privacy",
+    "holdback",
+    "trivial",
+    "impact",
+    "guardrail",
+    "scopeGate",
+    "ruleCheck",
+    "verifyEvidence",
+  ],
+  desktop: ["verifyPolicy", "holdback", "ruleCheck"],
 } as const satisfies Record<
   string,
   readonly Exclude<keyof ReviewConfig, "maxCostUsd" | "maxSteps" | "timeoutMinutes">[]

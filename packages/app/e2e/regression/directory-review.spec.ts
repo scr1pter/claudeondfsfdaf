@@ -268,9 +268,26 @@ test("a lost review response persists one opaque unpaid request and only explici
   expect(saved[0][0]).toMatch(/^connect\.directory-admission\.[0-9a-f]{64}$/)
   expect(saved[0][1]).not.toContain("http")
   expect(saved[0][1]).not.toContain(reviewRun().result!.findings[0].body)
+  const request = bodies[0]
+  if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("Missing review request")
+  expect(Object.keys(request).sort()).toEqual(["background", "requestKey", "target"])
+  const marker: unknown = JSON.parse(saved[0][1])
+  if (!marker || typeof marker !== "object" || !("savedAt" in marker) || typeof marker.savedAt !== "number")
+    throw new Error("Missing local saved request timestamp")
+  expect(marker).toEqual({ ...request, savedAt: expect.any(Number) })
+  expect(Number.isSafeInteger(marker.savedAt)).toBe(true)
+  await expect(dashboard.locator('[data-component="directory-review-retry-warning"]')).toContainText(
+    "can start a new review",
+  )
+  await page.evaluate(([key, raw]) => {
+    sessionStorage.setItem(key, JSON.stringify({ ...JSON.parse(raw), savedAt: Date.now() - 24 * 60 * 60_000 }))
+  }, saved[0])
   await page.reload()
   dashboard = await openDashboard(page)
   await expect(dashboard.getByRole("button", { name: "Review with VectorScope", exact: true })).toBeDisabled()
+  await expect(dashboard.locator('[data-component="directory-review-retry-warning"]')).toContainText(
+    "at least 24 hours old",
+  )
   expect(bodies).toHaveLength(1)
   await dashboard.getByRole("button", { name: "Retry review start", exact: true }).click()
   await expect(dashboard.locator('[data-component="directory-review"]')).toContainText("Review in progress")

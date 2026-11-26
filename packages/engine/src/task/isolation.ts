@@ -35,6 +35,7 @@ import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import { WorkspaceTrust } from "@vectordevai/core/workspace-trust/workspace-trust"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Database } from "@vectordevai/core/database/database"
+import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { SessionTable } from "@vectordevai/core/session/sql"
 import { SessionSchema } from "@vectordevai/core/session/schema"
 import { eq } from "drizzle-orm"
@@ -128,6 +129,74 @@ export const Record = Schema.Struct({
 export type Record = Schema.Schema.Type<typeof Record>
 const decode = Schema.decodeUnknownSync(Record)
 
+/** One consented check run of a review fix (SF-08), as its record keeps it: no output. */
+const FixChecks = Schema.Struct({
+  operation: Schema.String,
+  at: Schema.Number,
+  results: Schema.Array(
+    Schema.Struct({
+      argv: Schema.Array(Schema.String),
+      cwd: Schema.String,
+      exitCode: Schema.NullOr(Schema.Number),
+      timedOut: Schema.Boolean,
+      truncated: Schema.Boolean,
+      durationMs: Schema.Number,
+    }),
+  ),
+  aborted: Schema.optional(Schema.Literals(["head", "worktree", "cancelled"])),
+})
+const FIX_CHECK_RUNS = 16
+
+/**
+ * A review fix's placement (VS-12a, SF-07): a second record kind beside the task records, never a task. Its checkout is
+ * detached at one verified commit, is never seeded from the launching checkout's uncommitted or untracked files, runs
+ * no agent and loads no instance. Its record (`task-isolation/<project>/.fix/<fixID>/fix.json`) and its checkout
+ * (`task-worktree/<project>/.fix/<fixID>`) sit under `.fix`, a name `safeID` refuses, so `records()`, the sweep's task
+ * branch, recovery, `TaskPlace.isTaskDirectory` and every task path never read one as a task. The owner is the job
+ * store's lease of the process that placed it: the sweep removes only a placement whose process is gone.
+ */
+export const FixRecord = Schema.Struct({
+  version: Schema.Literal(1),
+  kind: Schema.Literal("fix"),
+  projectID: Schema.String,
+  fixID: Schema.String,
+  parentDirectory: Schema.String,
+  homeDirectory: Schema.String,
+  directory: Schema.String,
+  head: Schema.String,
+  state: Schema.Literals(["preparing", "ready", "applied", "committed", "pushed", "retained"]),
+  createdAt: Schema.Number,
+  owner: Schema.Struct({ runtime: Schema.String, pid: Schema.Number, boot: Schema.Number, machine: Schema.String }),
+  gitDirectory: Schema.optional(Schema.String),
+  gitCommonDirectory: Schema.optional(Schema.String),
+  /** What an approved patch put in the checkout, so a later step (checks, commit: SF-08) knows what it holds. */
+  applied: Schema.optional(Schema.Struct({ digest: Schema.String, patchDigest: Schema.String, at: Schema.Number })),
+  /**
+   * The consented check runs (SF-08), newest last, at most FIX_CHECK_RUNS: each command's argv, folder, exit and
+   * bounds, never its output, which is the checked code's and untrusted.
+   */
+  checks: Schema.optional(Schema.Array(FixChecks)),
+  /** The commit a consented commit made on the destination branch (SF-08). */
+  commit: Schema.optional(
+    Schema.Struct({ sha: Schema.String, branch: Schema.String, tree: Schema.String, at: Schema.Number }),
+  ),
+  /** Where a consented push put that commit (SF-08): the remote as approved, which holds no credential. */
+  push: Schema.optional(
+    Schema.Struct({
+      remote: Schema.String,
+      commit: Schema.String,
+      ref: Schema.String,
+      mode: Schema.Literals(["branch", "draft-pr"]),
+      at: Schema.Number,
+    }),
+  ),
+  error: Schema.optional(Schema.String),
+})
+export type FixRecord = Schema.Schema.Type<typeof FixRecord>
+/** Whether `removeFix` removed a placement, or kept it and why. */
+export type FixRemoval = { removed: true } | { removed: false; reason: string }
+const decodeFix = Schema.decodeUnknownSync(Schema.fromJsonString(FixRecord))
+
 /** Injectable size thresholds keep boundary tests small; production defaults match the isolation contract. */
 export const Limits = Context.Reference("TaskIsolation.Limits", {
   defaultValue: () => ({
@@ -194,6 +263,8 @@ const missing = (cause: unknown) => ["ENOENT", "ENOTDIR"].includes((cause as Nod
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 const nuls = (bytes: Buffer | string) => bytes.toString().split("\0").filter(Boolean)
 const safeID = (id: string) => /^[a-zA-Z0-9_-]+$/.test(id)
+const FIX_ID = /^fix_[A-Za-z0-9-]{1,64}$/
+const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const relative = (file: string) =>
   !!file &&
   !file.includes("\0") &&
@@ -453,6 +524,37 @@ async function readRecord(ctx: InstanceContext, taskID: string): Promise<Record>
   if (deleted && (deleted.sessionID !== taskID || deleted.projectID !== ctx.project.id))
     throw err("registry", "Isolation deletion marker does not match the launching project.")
   return deleted ? { ...record, deleted: true } : record
+}
+
+const fixPaths = (projectID: string, fixID: string) => {
+  if (!safeID(projectID) || !FIX_ID.test(fixID)) throw err("registry", "Invalid fix registry identifier.")
+  const registry = path.join(Global.Path.data, "task-isolation", projectID, ".fix", fixID)
+  return {
+    registry,
+    file: path.join(registry, "fix.json"),
+    directory: path.join(Global.Path.data, "task-worktree", projectID, ".fix", fixID),
+  }
+}
+
+/** The private Git index a fix commit is built in (SF-08), inside the fix's registry folder and removed with it. */
+export const fixCommitIndex = (record: Pick<FixRecord, "projectID" | "fixID">) =>
+  path.join(fixPaths(record.projectID, record.fixID).registry, "commit.index")
+
+async function readFixRecord(ctx: InstanceContext, fixID: string): Promise<FixRecord> {
+  const expected = fixPaths(ctx.project.id, fixID)
+  await guarded(expected.file)
+  const record = decodeFix(await readFile(expected.file, "utf8"))
+  if (
+    record.fixID !== fixID ||
+    record.projectID !== ctx.project.id ||
+    record.directory !== expected.directory ||
+    FileLock.key(record.homeDirectory) !== FileLock.key(ctx.directory) ||
+    FileLock.key(record.parentDirectory) !==
+      FileLock.key(ctx.worktree === path.parse(ctx.worktree).root ? ctx.directory : ctx.worktree) ||
+    !COMMIT.test(record.head)
+  )
+    throw err("registry", "Fix registry does not match the launching project.")
+  return record
 }
 
 /** Deletion only marks durable sweep work; it needs neither an ambient instance nor Git. */
@@ -2790,6 +2892,9 @@ export const make = Effect.gen(function* () {
     const scan = !swept.has(ctx.project.id) || input.force === true
     if (!scan && queued.size === 0) return []
     swept.add(ctx.project.id)
+    // Fix placements (SF-07) on the same once-per-process scan; a failure there never stops the tasks' sweep below.
+    if (scan)
+      yield* sweepFixes().pipe(Effect.catchCause((cause) => Effect.logWarning("fix checkout sweep failed", { cause })))
     const candidates = scan
       ? yield* records()
       : (yield* Effect.forEach([...queued], (id) => optional(id).pipe(Effect.option))).flatMap((item) =>
@@ -2869,6 +2974,377 @@ export const make = Effect.gen(function* () {
       id = row.parentID ?? undefined
     }
   })
+
+  // VS-12a fix placements (SF-07, the lead's 2026-11-16 ruling): a second, additive lifecycle beside the tasks'. Every
+  // function below reads and writes only `.fix` records, and no task function reads one. Processes start only through
+  // `run`/`command` (the Git service), as every isolation command does.
+  const getFix = Effect.fn("TaskIsolation.getFix")(function* (fixID: string) {
+    const ctx = yield* home
+    return yield* io(() => readFixRecord(ctx, fixID))
+  })
+  const saveFix = (record: FixRecord) => io(() => privateJSON(fixPaths(record.projectID, record.fixID).file, record))
+  // The same protection a task's checkout has: no model tool may write the checkout, its Git metadata or its registry.
+  const protectFix = (record: Pick<FixRecord, "projectID" | "fixID"> & Partial<FixRecord>) => {
+    const location = fixPaths(record.projectID, record.fixID)
+    TaskClaims.protect({
+      taskID: record.fixID,
+      directories: [location.registry, location.directory],
+      parentDirectory: record.parentDirectory,
+      workDirectory: location.directory,
+      gitDirectory: record.gitDirectory,
+      privateDirectories: [location.registry],
+      immutableFiles: [path.join(location.directory, ".git")],
+    })
+  }
+  const listedFix = Effect.fnUntraced(function* (record: FixRecord) {
+    const entries = nuls(yield* command(record.parentDirectory, ["worktree", "list", "--porcelain", "-z"])).reduce<
+      { directory: string; detached: boolean }[]
+    >((acc, line) => {
+      if (line.startsWith("worktree ")) return [...acc, { directory: line.slice(9), detached: false }]
+      if (line === "detached" && acc.length) acc[acc.length - 1].detached = true
+      return acc
+    }, [])
+    return entries.find((item) => FileLock.key(item.directory) === FileLock.key(record.directory))
+  })
+  /** The checkout is Git's detached worktree at the reserved name, bound to the record's metadata, nothing else. */
+  const checkFix = Effect.fnUntraced(function* (record: FixRecord) {
+    const binding = Effect.gen(function* () {
+      if (!record.gitDirectory || !record.gitCommonDirectory)
+        return yield* err("fix_binding", "The fix checkout was never bound to its Git metadata.")
+      if (!(yield* listedFix(record))?.detached)
+        return yield* err("fix_binding", "Git no longer lists the fix checkout as a detached worktree.")
+      yield* io(() => guarded(record.directory))
+      const [real, root] = yield* io(() => Promise.all([realpath(record.directory), realpath(Global.Path.data)]))
+      if (real !== path.join(root, path.relative(Global.Path.data, record.directory)))
+        return yield* err("fix_binding", "The fix checkout changed identity.")
+      const at = (cwd: string, args: string[]) => text(cwd, args).pipe(Effect.map((value) => path.resolve(cwd, value)))
+      const top = yield* at(record.directory, ["rev-parse", "--show-toplevel"])
+      const gitDirectory = yield* at(record.directory, ["rev-parse", "--git-dir"])
+      const common = yield* at(record.directory, ["rev-parse", "--git-common-dir"])
+      const index = yield* at(record.directory, ["rev-parse", "--git-path", "index"])
+      const parentCommon = yield* at(record.parentDirectory, ["rev-parse", "--git-common-dir"])
+      yield* io(() => guarded(path.join(record.directory, ".git")))
+      yield* io(() => guarded(gitDirectory, parentCommon))
+      yield* io(() => guarded(index, gitDirectory))
+      if (
+        FileLock.key(top) !== FileLock.key(record.directory) ||
+        FileLock.key(gitDirectory) !== FileLock.key(record.gitDirectory) ||
+        FileLock.key(common) !== FileLock.key(record.gitCommonDirectory) ||
+        FileLock.key(common) !== FileLock.key(parentCommon) ||
+        FileLock.key(index) !== FileLock.key(path.join(gitDirectory, "index"))
+      )
+        return yield* err("fix_binding", "The fix checkout's Git metadata changed identity.")
+      if ((yield* run(record.directory, ["symbolic-ref", "-q", "HEAD"])).exitCode === 0)
+        return yield* err("fix_binding", "The fix checkout is no longer detached.")
+      return { ...record, gitDirectory: record.gitDirectory, gitCommonDirectory: record.gitCommonDirectory }
+    })
+    return yield* binding.pipe(
+      Effect.catch((cause) =>
+        Effect.fail(
+          cause instanceof IsolationError && cause.code === "fix_binding" ? cause : err("fix_binding", cause.message),
+        ),
+      ),
+    )
+  })
+  const verifyFix = Effect.fn("TaskIsolation.verifyFix")(function* (fixID: string) {
+    return yield* checkFix(yield* getFix(fixID))
+  })
+  /**
+   * Removes a placement, or keeps it (`retained`, still protected and owned) when anything is uncertain: a checkout whose
+   * binding cannot be verified is never removed, and nothing here removes a checkout recursively.
+   */
+  const dropFix = Effect.fnUntraced(function* (record: FixRecord) {
+    const location = fixPaths(record.projectID, record.fixID)
+    const retain = (reason: string) =>
+      saveFix({ ...record, state: "retained", error: reason }).pipe(Effect.as<FixRemoval>({ removed: false, reason }))
+    const forget = Effect.gen(function* () {
+      yield* io(() => guarded(location.registry))
+      yield* io(() => rm(location.registry, { recursive: true, force: true }))
+      TaskClaims.unprotect(record.fixID)
+      BackgroundJobStore.close(record.owner)
+      const removed: FixRemoval = { removed: true }
+      return removed
+    })
+    const listed = yield* listedFix(record)
+    const exists = yield* io(() => present(record.directory))
+    if (!exists && !listed) return yield* forget
+    if (!exists)
+      return yield* retain("Git still lists the fix checkout, which is gone; it was kept for `git worktree prune`.")
+    const checked = yield* checkFix(record).pipe(
+      Effect.map((bound) => ({ bound })),
+      Effect.catch((cause) => Effect.succeed({ unverified: cause.message })),
+    )
+    if ("unverified" in checked) return yield* retain(`The fix checkout was kept: ${checked.unverified}`)
+    const store = yield* instances()
+    yield* store.disposeDirectory(record.directory)
+    const removed = yield* FileLock.forTree(checked.bound.gitCommonDirectory)(
+      run(record.parentDirectory, [
+        "-c",
+        "core.fsmonitor=false",
+        "worktree",
+        "remove",
+        "--force",
+        "--",
+        record.directory,
+      ]),
+    )
+    if ((yield* listedFix(record)) || (yield* io(() => present(record.directory))))
+      return yield* retain(
+        removed.stderr.toString("utf8").trim() || "Git did not remove the fix checkout; it was kept.",
+      )
+    return yield* forget
+  })
+  const reserveFix = Effect.fn("TaskIsolation.reserveFix")(function* (input: { fixID: string; head: string }) {
+    if (process.platform !== "linux") return yield* err("unavailable", "Fix checkouts are available on Linux only.")
+    const ctx = yield* home
+    const limits = yield* Limits
+    if (!FIX_ID.test(input.fixID) || !safeID(ctx.project.id)) return yield* err("registry", "Invalid fix identifier.")
+    // Checked before any Git argument holds it.
+    if (!COMMIT.test(input.head)) return yield* err("head", "A fix is placed only at a full commit ID.")
+    const location = fixPaths(ctx.project.id, input.fixID)
+    const parent = ctx.worktree === path.parse(ctx.worktree).root ? ctx.directory : ctx.worktree
+    return yield* lock(
+      input.fixID,
+      Effect.gen(function* () {
+        if ((yield* run(parent, ["rev-parse", "--is-inside-work-tree"])).exitCode !== 0)
+          return yield* err("repository", "A fix checkout needs a Git repository.")
+        if ((yield* run(parent, ["config", "--bool", "core.sparseCheckout"])).text().trim() === "true")
+          return yield* err("sparse", "Fix checkouts do not support sparse checkouts.")
+        const format = yield* text(parent, ["rev-parse", "--show-object-format"])
+        const commit = yield* run(parent, [
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          "--end-of-options",
+          `${input.head}^{commit}`,
+        ])
+        if (
+          input.head.length !== (format === "sha256" ? 64 : 40) ||
+          commit.exitCode !== 0 ||
+          commit.text().trim() !== input.head
+        )
+          return yield* err("head", "The fix head is not a commit in this repository.")
+        // As `room` sizes a task's worktree from HEAD's tracked files, a fix checkout is sized from its own head.
+        const needed =
+          (yield* text(parent, ["ls-tree", "-r", "-l", "--end-of-options", input.head]))
+            .split("\n")
+            .reduce((sum, line) => sum + (Number(line.split(/\s+/)[3]) || 0), 0) * 1.5
+        const disk = yield* io(() => statfs(Global.Path.data))
+        if (disk.bavail * disk.bsize < Math.max(limits.minFreeBytes, needed))
+          return yield* err("disk", "There is not enough free disk space for a fix checkout.")
+        if ((yield* io(() => present(location.registry))) || (yield* io(() => present(location.directory))))
+          return yield* err("exists", "This fix is already placed.")
+        const record: FixRecord = {
+          version: 1,
+          kind: "fix",
+          projectID: ctx.project.id,
+          fixID: input.fixID,
+          parentDirectory: parent,
+          homeDirectory: ctx.directory,
+          directory: location.directory,
+          head: input.head,
+          state: "preparing",
+          createdAt: Date.now(),
+          owner: BackgroundJobStore.open(),
+        }
+        protectFix(record)
+        yield* saveFix(record).pipe(Effect.tapError(() => Effect.sync(() => BackgroundJobStore.close(record.owner))))
+        return record
+      }),
+    )
+  })
+  const startFix = Effect.fn("TaskIsolation.startFix")(function* (fixID: string) {
+    if (process.platform !== "linux") return yield* err("unavailable", "Fix checkouts are available on Linux only.")
+    return yield* lock(
+      fixID,
+      Effect.gen(function* () {
+        const reserved = yield* getFix(fixID)
+        if (reserved.state === "ready" || reserved.state === "applied") return yield* checkFix(reserved)
+        if (reserved.state !== "preparing") return yield* err("state", "This fix checkout was kept and cannot start.")
+        return yield* Effect.gen(function* () {
+          if (yield* io(() => present(reserved.directory)))
+            return yield* err("exists", "The reserved fix checkout directory already exists; it has not been changed.")
+          const common = path.resolve(
+            reserved.parentDirectory,
+            yield* text(reserved.parentDirectory, ["rev-parse", "--git-common-dir"]),
+          )
+          // The same lock worktree/index.ts takes for worktree changes under one common dir. The checkout is bound and
+          // saved before it is filled, so a fill that fails leaves a placement dropFix can verify and remove.
+          return yield* FileLock.forTree(common)(
+            Effect.gen(function* () {
+              yield* io(() => mkdir(path.dirname(reserved.directory), { recursive: true, mode: 0o700 }))
+              yield* command(reserved.parentDirectory, [
+                "-c",
+                "core.fsmonitor=false",
+                "worktree",
+                "add",
+                "--detach",
+                "--no-checkout",
+                "--",
+                reserved.directory,
+                reserved.head,
+              ])
+              const bound: FixRecord = {
+                ...reserved,
+                gitDirectory: path.resolve(
+                  reserved.directory,
+                  yield* text(reserved.directory, ["rev-parse", "--git-dir"]),
+                ),
+                gitCommonDirectory: path.resolve(
+                  reserved.directory,
+                  yield* text(reserved.directory, ["rev-parse", "--git-common-dir"]),
+                ),
+              }
+              protectFix(bound)
+              yield* saveFix(bound)
+              yield* command(reserved.directory, [
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.autocrlf=false",
+                "reset",
+                "--hard",
+                reserved.head,
+              ])
+              const ready: FixRecord = { ...bound, state: "ready" }
+              yield* saveFix(ready)
+              return yield* checkFix(ready)
+            }),
+          )
+        }).pipe(
+          Effect.catchCause((cause) =>
+            getFix(fixID).pipe(
+              Effect.flatMap((record) => {
+                const failed: FixRecord = { ...record, state: "retained", error: Cause.pretty(cause) }
+                return saveFix(failed).pipe(Effect.andThen(dropFix(failed)))
+              }),
+              Effect.ignore,
+              Effect.uninterruptible,
+              Effect.andThen(Effect.failCause(cause)),
+            ),
+          ),
+        )
+      }),
+    )
+  })
+  const removeFix = Effect.fn("TaskIsolation.removeFix")(function* (fixID: string) {
+    return yield* lock(
+      fixID,
+      Effect.gen(function* () {
+        const ctx = yield* home
+        const location = yield* Effect.try({
+          try: () => fixPaths(ctx.project.id, fixID),
+          catch: () => err("registry", "Invalid fix identifier."),
+        })
+        if (yield* io(() => present(location.file))) return yield* dropFix(yield* getFix(fixID))
+        const removal: FixRemoval = (yield* io(() => present(location.directory)))
+          ? { removed: false, reason: "A fix checkout exists without its record; it was kept." }
+          : { removed: true }
+        return removal
+      }),
+    )
+  })
+  /** Keeps a placement whose rollback was uncertain, with the reason, protected and owned until its removal. */
+  const retainFix = Effect.fn("TaskIsolation.retainFix")(function* (fixID: string, reason: string) {
+    return yield* lock(
+      fixID,
+      Effect.gen(function* () {
+        const record: FixRecord = { ...(yield* getFix(fixID)), state: "retained", error: reason }
+        yield* saveFix(record)
+        return record
+      }),
+    )
+  })
+  const markFixApplied = Effect.fn("TaskIsolation.markFixApplied")(function* (
+    fixID: string,
+    applied: NonNullable<FixRecord["applied"]>,
+  ) {
+    return yield* lock(
+      fixID,
+      Effect.gen(function* () {
+        const record = yield* getFix(fixID)
+        if (record.state !== "ready") return yield* err("state", "Only a ready fix checkout records an applied patch.")
+        const next: FixRecord = { ...record, state: "applied", applied: { ...applied } }
+        yield* saveFix(next)
+        return next
+      }),
+    )
+  })
+  // SF-08's steps, each a compare-and-set on the record's state under the fix's lock, as markFixApplied is.
+  const fixStep = (fixID: string, from: readonly FixRecord["state"][], step: (record: FixRecord) => FixRecord) =>
+    lock(
+      fixID,
+      Effect.gen(function* () {
+        const record = yield* getFix(fixID)
+        if (!from.includes(record.state)) return yield* err("state", "This fix checkout is not at that step.")
+        const next = step(record)
+        yield* saveFix(next)
+        return next
+      }),
+    )
+  /** Records a consented check run without its output; the state is unchanged, and only the newest runs are kept. */
+  const recordFixChecks = Effect.fn("TaskIsolation.recordFixChecks")(function* (
+    fixID: string,
+    run: Schema.Schema.Type<typeof FixChecks>,
+  ) {
+    return yield* fixStep(fixID, ["applied", "committed"], (record) => ({
+      ...record,
+      checks: [...(record.checks ?? []), run].slice(-FIX_CHECK_RUNS),
+    }))
+  })
+  const markFixCommitted = Effect.fn("TaskIsolation.markFixCommitted")(function* (
+    fixID: string,
+    commit: NonNullable<FixRecord["commit"]>,
+  ) {
+    return yield* fixStep(fixID, ["applied"], (record) => ({ ...record, state: "committed", commit: { ...commit } }))
+  })
+  const markFixPushed = Effect.fn("TaskIsolation.markFixPushed")(function* (
+    fixID: string,
+    push: NonNullable<FixRecord["push"]>,
+  ) {
+    return yield* fixStep(fixID, ["committed"], (record) => ({ ...record, state: "pushed", push: { ...push } }))
+  })
+  /**
+   * Every placement of the project, each protected again (protection is held in memory, so a placement made by an
+   * earlier process, or by another engine on this data folder, is unprotected here until this runs). A name without any
+   * protection yet is first protected by its reserved names, so the reads below leave no window; a protection already
+   * held is never replaced by that narrower one. An entry whose record cannot be read keeps the protection it has and
+   * is left out of the result.
+   */
+  const fixes = Effect.fn("TaskIsolation.fixes")(function* () {
+    const ctx = yield* home
+    const root = path.join(Global.Path.data, "task-isolation", ctx.project.id, ".fix")
+    if (!(yield* io(() => present(root)))) return []
+    yield* io(() => guarded(root))
+    const names = (yield* io(() => readdir(root))).filter((name) => FIX_ID.test(name))
+    const held = new Set(TaskClaims.protectedTrees().map((entry) => entry.taskID))
+    names.filter((fixID) => !held.has(fixID)).forEach((fixID) => protectFix({ projectID: ctx.project.id, fixID }))
+    const found = yield* Effect.forEach(names, (fixID) => getFix(fixID).pipe(Effect.option))
+    const records = found.filter(Option.isSome).map((item) => item.value)
+    records.forEach(protectFix)
+    return records
+  })
+  // The sweep's fix branch: a placement whose process is gone can never be applied (consent is held in memory,
+  // fix-proposal.ts), so it is removed, or kept and reported when that is uncertain. A live process's placement, this
+  // one's or another engine's on this data folder, is left alone.
+  const sweepFixes = Effect.fnUntraced(function* () {
+    const stale = (yield* fixes()).filter((record) => BackgroundJobStore.alive(record.owner) === "dead")
+    yield* Effect.forEach(
+      stale,
+      (record) =>
+        removeFix(record.fixID).pipe(
+          Effect.flatMap((result) =>
+            result.removed
+              ? Effect.void
+              : Effect.logWarning("a fix checkout from an earlier process was kept", {
+                  fixID: record.fixID,
+                  reason: result.reason,
+                }),
+          ),
+        ),
+      { discard: true },
+    )
+  })
   return {
     check,
     /** Closes the terminals `chosen` picks in these folders, and waits for their programs (closeTerminalsIn). */
@@ -2891,6 +3367,17 @@ export const make = Effect.gen(function* () {
     review,
     enqueue,
     admit,
+    reserveFix,
+    startFix,
+    verifyFix,
+    removeFix,
+    retainFix,
+    markFixApplied,
+    recordFixChecks,
+    markFixCommitted,
+    markFixPushed,
+    getFix,
+    fixes,
   }
 })
 
