@@ -21,9 +21,11 @@ const event = (url: string, topLevel = "vector://renderer/index.html") =>
 
 describe("trusted renderer IPC", () => {
   test("GitHub agent methods are fixed preload calls registered through the trusted-frame guard", async () => {
-    const [main, preload] = await Promise.all([
+    const [main, preload, returnedMain, returnedPreload] = await Promise.all([
       readFile(new URL("./ipc.ts", import.meta.url), "utf8"),
       readFile(new URL("../preload/index.ts", import.meta.url), "utf8"),
+      readFile(new URL("./github-agents-returned-ipc.ts", import.meta.url), "utf8"),
+      readFile(new URL("../preload/github-agents-returned.ts", import.meta.url), "utf8"),
     ])
     const names = [
       "status",
@@ -36,15 +38,21 @@ describe("trusted renderer IPC", () => {
       "unbind",
       "runs",
       "brain-preview",
-      "returned-artifacts",
-      "returned-preview",
-      "returned-import",
     ]
     for (const name of names) {
       expect(main).toMatch(new RegExp('handle\\(\\s*"github-agents-' + name + '"'))
       expect(preload).toContain('ipcRenderer.invoke("github-agents-' + name + '"')
     }
     expect(main).toContain("assertTrustedRenderer(event)")
+    expect(main).toMatch(
+      /registerGithubAgentsReturnedIpc\(\s*\(channel, listener\) => ipcMain\.handle\(channel, listener\),\s*assertTrustedRenderer,\s*githubAgents,?\s*\)/,
+    )
+    expect(preload).toContain("...returnedBrainPreloadApi(ipcRenderer)")
+    expect(preload).toContain('contextBridge.exposeInMainWorld("api", api)')
+    for (const name of ["returned-artifacts", "returned-preview", "returned-import"]) {
+      expect(returnedMain).toContain('add("github-agents-' + name + '"')
+      expect(returnedPreload).toContain('ipcRenderer.invoke("github-agents-' + name + '"')
+    }
     expect(main).not.toMatch(/ipcMain\.handle\(\s*["']github-agents-/)
   })
   test("rejects WSL requests sent by an untrusted child frame", () => {
