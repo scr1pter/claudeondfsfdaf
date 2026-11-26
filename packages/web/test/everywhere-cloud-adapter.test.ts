@@ -705,6 +705,7 @@ describe("the handoff binding port", () => {
         githubId: 790,
         ownerId: 456,
         installationId: 600,
+        generation: 1,
         laptopFirst: false,
         codiumMode: true,
         workflowVersion: "3",

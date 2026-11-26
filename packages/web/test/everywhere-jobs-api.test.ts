@@ -108,8 +108,22 @@ function mount(extra: Partial<JobsApiDeps> = {}) {
     "/api/everywhere/jobs/report": api.report,
     "/api/everywhere/jobs/settle": api.settle,
     "/api/everywhere/jobs/pending": api.pending,
+    "/api/everywhere/jobs/github-thread": api.githubThread,
   })
 }
+
+/** A GitHub thread authority that records each call and would approve it. */
+function threadAuthority() {
+  const calls: unknown[] = []
+  const authority: NonNullable<JobsApiDeps["githubThreadAuthority"]> = async (proof) => {
+    calls.push(proof)
+    return true
+  }
+  return { authority, calls }
+}
+
+/** A well-formed GitHub thread check, so only the route's own guards can refuse it. */
+const THREAD_CHECK = { jid: "vej_0000000000000000000000", lease: "0".repeat(26) }
 
 beforeEach(() => {
   fake = new FakeStore()
@@ -253,9 +267,14 @@ describe("who may call", () => {
 })
 
 describe("switches", () => {
-  test("while the feature is off every route answers stop before any store read", async () => {
+  // The GitHub thread check answers 404 rather than `stop`: it is a public route every push to main deploys.
+  test("while the feature is off every route answers stop, or 404 for the GitHub thread check, before any store read", async () => {
     env = { ...env, [ENV_NAMES.enabled]: "false" }
-    mount()
+    const thread = threadAuthority()
+    mount({ githubThreadAuthority: thread.authority })
+    const check = await post("github-thread", THREAD_CHECK, { device: device() })
+    expect({ status: check.status, code: check.body.error?.code }).toEqual({ status: 404, code: "NOT_FOUND" })
+    expect(thread.calls).toEqual([])
     const body = { jid: "vej_0000000000000000000000", lease: "0".repeat(26), seq: 1, milestone: "heartbeat" }
     const claim = await post("claim", { jid: body.jid, device: device() })
     expect(claim.status).toBe(409)
@@ -310,6 +329,36 @@ describe("switches", () => {
       { device: computer },
     )
     expect(report.body).toMatchObject({ action: "continue" })
+  })
+})
+
+describe("GitHub thread check", () => {
+  test("with the feature on but GitHub not among the platforms it answers 404 before any store read", async () => {
+    env = { ...everywhereEnv("slack,linear,jira"), ...OFFER_ENV }
+    const thread = threadAuthority()
+    mount({ githubThreadAuthority: thread.authority })
+    const check = await post("github-thread", THREAD_CHECK, { device: device() })
+    expect({ status: check.status, code: check.body.error?.code }).toEqual({ status: 404, code: "NOT_FOUND" })
+    expect(thread.calls).toEqual([])
+    expect(fake.commands).toEqual([])
+  })
+
+  test("with no thread authority wired it answers 404 before any store read", async () => {
+    mount({ githubThreadAuthority: undefined })
+    const check = await post("github-thread", THREAD_CHECK, { device: device() })
+    expect({ status: check.status, code: check.body.error?.code }).toEqual({ status: 404, code: "NOT_FOUND" })
+    expect(fake.commands).toEqual([])
+  })
+
+  // The control for the two cases above: once GitHub is on and an authority is wired, the same check reaches the
+  // store, so their empty command lists are not vacuous. No such job exists, so it is still 404 and never authorized.
+  test("with GitHub on and an authority wired the same check reads the store, and an unknown job is 404", async () => {
+    const thread = threadAuthority()
+    mount({ githubThreadAuthority: thread.authority })
+    const check = await post("github-thread", THREAD_CHECK, { device: device() })
+    expect({ status: check.status, code: check.body.error?.code }).toEqual({ status: 404, code: "NOT_FOUND" })
+    expect(thread.calls).toEqual([])
+    expect(fake.commands.length).toBeGreaterThan(0)
   })
 })
 

@@ -14,6 +14,7 @@ import { Option, Schema } from "effect"
 
 export type JobsClient = {
   readonly claim: (jid: string) => Promise<EverywhereJob>
+  readonly authorizeGithubThread: (job: EverywhereJob, signal: AbortSignal) => Promise<number>
   readonly decline: (jid: string, reason: DeclineCode, lease?: string) => Promise<void>
   readonly report: (job: EverywhereJob, seq: number, milestone: Milestone, files?: number) => Promise<"continue" | "stop" | "lost">
   readonly settle: (result: Settle) => Promise<void>
@@ -35,19 +36,32 @@ const PendingAnswer = Schema.fromJsonString(Schema.Struct({
   offers: Schema.optional(Schema.Array(Schema.Unknown)),
   waiting: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }))
+const decodeSettlement = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ settled: Schema.Literal(true) })),
+  { onExcessProperty: "error" },
+)
+const decodeEnded = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ code: Schema.Literal("JOB_ENDED") }) })),
+)
+const SETTLE_ANSWER_BYTES = 4_096
+class SettlementEnded extends Error {}
 
 export function createEverywhereJobsClient(input: { readonly token: () => Promise<string>; readonly device: string; readonly fetcher?: typeof fetch; readonly url?: string }): JobsClient {
   const origin = new URL(input.url ?? "https://vectordev.ai")
   if (!(origin.origin === "https://vectordev.ai" || (origin.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname))) || origin.username || origin.password || origin.search || origin.hash) throw new Error("Invalid Everywhere service")
-  const call = async (route: string, body: unknown) => {
+  const post = async (route: string, body: unknown, signal?: AbortSignal) => {
     // Each request is the `everywhere` source: Vector Local decides and logs it first, and one it blocks rejects with
     // EgressGuard.EgressBlocked before anything is sent. With Vector Local off it goes to the fetcher unchanged (under
     // Bun, with a company's certificate authorities added: LocalCA).
-    const response = await Egress.fetch("everywhere", new URL(`/api/everywhere/jobs/${route}`, origin), {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+    const timeout = AbortSignal.timeout(10_000)
+    return Egress.fetch("everywhere", new URL(`/api/everywhere/jobs/${route}`, origin), {
+      method: "POST", redirect: "error", signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       headers: { authorization: `Bearer ${await input.token()}`, "x-vector-device": input.device, "content-type": "application/json" },
       body: JSON.stringify(body),
     }, input.fetcher)
+  }
+  const call = async (route: string, body: unknown, signal?: AbortSignal) => {
+    const response = await post(route, body, signal)
     if (!response.ok) throw new Error(response.status === 404 || response.status === 409 ? "Everywhere job stopped" : "Everywhere service unavailable")
     return await response.json() as Record<string, unknown>
   }
@@ -56,6 +70,11 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
       const result = decodeJob((await call("claim", { jid, device: input.device })).job)
       if (!result.ok) throw new Error("Invalid Everywhere claim")
       return result.value
+    },
+    async authorizeGithubThread(job, signal) {
+      const result = await call("github-thread", { jid: job.jid, lease: job.lease.id }, signal)
+      if (typeof result.expiresAt !== "number" || !Number.isSafeInteger(result.expiresAt)) throw new Error("Invalid Github thread authorization")
+      return result.expiresAt
     },
     decline: async (jid, reason, lease) => { await call("decline", { jid, device: input.device, reason, ...(lease ? { lease } : {}) }) },
     async report(job, seq, milestone, files) {
@@ -71,7 +90,14 @@ export function createEverywhereJobsClient(input: { readonly token: () => Promis
     settle: async (result) => {
       const checked = decodeSettle(result)
       if (!checked.ok) throw new Error("Invalid Everywhere result")
-      await call("settle", checked.value)
+      const response = await post("settle", checked.value)
+      if (response.status === 200 || response.status === 409) {
+        const body = await responseText(response, SETTLE_ANSWER_BYTES)
+        if (response.status === 200 && Option.isSome(decodeSettlement(body))) return
+        // The settle route emits this code only after proving the sponsor, the device and the exact lease.
+        if (response.status === 409 && Option.isSome(decodeEnded(body))) throw new SettlementEnded()
+      } else await response.body?.cancel().catch(() => undefined)
+      throw new Error("Everywhere result was not acknowledged")
     },
     async pending(readiness) {
       // The same label, sign-in, device and ten-second bound as the POST routes; a GET with the booleans as `1` or `0`.
@@ -126,11 +152,11 @@ export type RunnerDeps = {
   readonly verify: (offer: unknown) => Promise<{ jid: string } | undefined>
   readonly ledger: JobLedger
   /** The runner never asks for waiting jobs; everywhere-wiring.ts does. */
-  readonly jobs: Omit<JobsClient, "pending">
+  readonly jobs: Omit<JobsClient, "pending" | "authorizeGithubThread">
   readonly safeWorktree?: SafeWorktree
   readonly git: (directory: string, repository: string, signal: AbortSignal) => RunnerGit
   readonly engine: (directory: string) => RunnerEngine
-  readonly githubThread?: (job: EverywhereJob) => Promise<FrameOptions>
+  readonly githubThread?: (job: EverywhereJob, signal: AbortSignal) => Promise<FrameOptions>
   readonly privateRepository: (job: EverywhereJob) => Promise<boolean>
   readonly openPr: (input: { job: EverywhereJob; branch: string; base: string; summary: string; held: number }) => Promise<string | undefined>
   readonly now?: () => number
@@ -170,9 +196,8 @@ const LOCAL_NEEDS = [
  */
 export function localAllows(policy: LocalMode.Policy) {
   return LOCAL_NEEDS.every((need) => {
-    // 2026-11-16 (EV-15): desktop github-api.ts still sends unlabelled, so under Vector Local the backstop refuses every
-    // GitHub API call whatever is allowed, and a claimed job could only end held. Until EV-21 labels those calls
-    // `github`, that need refuses whenever Vector Local is on, and laptop jobs stay declined under it.
+    // EV-15: the production GitHub thread and publication ports still need live job and repository authority.
+    // Until those ports are wired, keep declining laptop jobs under Vector Local before claiming one.
     if (need.source === "github" && policy.enabled) return false
     const source = LocalSources.get(need.source)
     return (
@@ -197,17 +222,33 @@ export function createEverywhereRunner(deps: RunnerDeps) {
   const active = new Map<string, AbortController>()
   const localAllowed = () => localAllows((deps.localPolicy ?? Egress.policy)())
 
+  function warn(message: string) {
+    if (!deps.log) return false
+    try {
+      deps.log(message)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async function deliver(result: Settle, journaled = false) {
     // JobsClient has a ten-second request bound. An acknowledgement loss must replay this
     // exact result, never substitute a contradictory terminal outcome.
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await deps.jobs.settle(result)
-        if (journaled) await deps.ledger.acknowledge(result).catch(() => deps.log?.("Vector everywhere could not clear an acknowledged publication receipt."))
+        if (journaled)
+          await deps.ledger.clearReceipt(result).catch(() => warn("Vector everywhere could not clear an acknowledged publication receipt."))
         return true
-      } catch { /* The same lease and payload are safe to retry. */ }
+      } catch (error) {
+        if (!(error instanceof SettlementEnded)) continue
+        if (journaled && warn("Vector everywhere could not report a publication because the job had ended."))
+          await deps.ledger.clearReceipt(result).catch(() => warn("Vector everywhere could not retire a publication receipt."))
+        return false
+      }
     }
-    deps.log?.("Vector everywhere could not acknowledge a job result.")
+    warn("Vector everywhere could not acknowledge a job result.")
     return false
   }
 
@@ -253,14 +294,18 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       // Read once: the wiring offers the worktree only while the engine's probe does, and that may change mid-job.
       const worktree = deps.safeWorktree
       if (!worktree || worktree.policy !== "unattended-v1") {
-        await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "held", summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed." })
-        settled = true
+        await deliver({
+          jid,
+          lease: job.lease.id,
+          outcome: "held",
+          summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed.",
+        })
         return
       }
       let frame: FrameOptions | undefined
       if (job.platform === "github") {
         try {
-          frame = await deps.githubThread?.(job)
+          frame = await deps.githubThread?.(job, controller.signal)
           if (!frame?.thread) throw new Error("The Github trigger is unavailable")
           frameTask(job, frame)
         } catch {
@@ -367,8 +412,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       if (controller.signal.aborted) throw new Error("Everywhere job stopped")
       const summary = await checkedSummary(job, await engine.summary(session), [...sessions], engine.posting)
       if (needs.size > 0) {
-        await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "needs-approval", summary, needs: [...needs] })
-        settled = true
+        await deliver({ jid, lease: job.lease.id, outcome: "needs-approval", summary, needs: [...needs] })
         return
       }
       const staged = await git.stage(snapshot, placed.directory)
@@ -389,7 +433,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
           await deps.ledger.remember(uncertain)
           publication = uncertain
           if (controller.signal.aborted || now() >= deadline) {
-            await deps.ledger.acknowledge(uncertain)
+            await deps.ledger.clearReceipt(uncertain)
             publication = undefined
             outcome = "held"
           } else {
@@ -397,7 +441,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
             // already admitted. The git executor retains its own 60-second bound.
             const publishingGit = deps.git(project.directory, project.repository, new AbortController().signal)
             if (!await publishingGit.push(snapshot, placed.directory, branch)) {
-              await deps.ledger.acknowledge(uncertain)
+              await deps.ledger.clearReceipt(uncertain)
               publication = undefined
               outcome = "held"
             } else {

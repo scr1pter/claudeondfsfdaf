@@ -18,7 +18,7 @@ function fixture() {
   const f = routerFixture()
   const identity: GithubHandoffIdentity = { repositoryId: 101, repository: "acme/app", ownerId: 456, actorId: 42, runId: 1001, runAttempt: 1,
     eventName: "issue_comment", ref: "refs/heads/main" }
-  const binding: GithubHandoffBinding = { account: f.account, githubId: 42, ownerId: 456, installationId: 77, laptopFirst: true, codiumMode: true,
+  const binding: GithubHandoffBinding = { account: f.account, githubId: 42, ownerId: 456, installationId: 77, generation: 1, laptopFirst: true, codiumMode: true,
     workflowVersion: "fixture-v1", defaultRef: "refs/heads/main", repository: { id: 101, fullName: "acme/app", shared: false } }
   const token = randomBytes(32).toString("hex")
   const body = { kind: "issue", issue: 7, commentId: 99, thread: "acme/app#7", workflowVersion: "fixture-v1" }

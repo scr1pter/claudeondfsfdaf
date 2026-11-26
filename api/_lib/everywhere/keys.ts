@@ -2,6 +2,7 @@ import {
   ACCOUNT_ID_PATTERN,
   DEVICE_ID_PATTERN,
   JOB_ID_PATTERN,
+  JOB_RECORD_RETENTION_MS,
   PLATFORMS,
   RANDOM_ID_PATTERN,
   TIMING,
@@ -31,7 +32,7 @@ export const KEEP_MS = {
   state: 10 * MINUTE,
   /** VE-04: failed link code attempts by one platform user are counted for an hour. */
   linkTries: HOUR,
-  job: 30 * DAY,
+  job: JOB_RECORD_RETENTION_MS,
   jobBody: TIMING.bodyTtlMs,
   ready: DAY,
   handoff: DAY,

@@ -16,6 +16,7 @@ import {
   type UnattendedShellPolicy,
 } from "./everywhere-engine"
 import { createEverywhereGit } from "./everywhere-git"
+import { readAuthorizedGithubThread } from "./everywhere-github"
 import { createLedger, ledgerFile, type JobLedger } from "./everywhere-ledger"
 import { createOfferVerifier, OFFER_KEYS } from "./everywhere-offer"
 import {
@@ -35,6 +36,7 @@ import {
   type ProjectFolder,
 } from "./everywhere-settings"
 import type { LinkDependencies, RemoteLink, RemoteState, RemoteStatus } from "./remote-link"
+import type { GithubAccess } from "./github-api"
 import { tokenClaims } from "./vector-account"
 
 // Vector everywhere in the running app (VE-21, R-C2, R-C3): the jobs subscriber Vector Remote's link takes, and the
@@ -87,6 +89,7 @@ export type EverywhereJobsDeps = {
   /** The fetcher for the engine's config route, its two capability probes and the unattended worktree adapter. */
   readonly fetcher?: typeof fetch
   readonly git?: RunnerDeps["git"]
+  readonly githubAccess?: () => Promise<GithubAccess | undefined>
   readonly runnerEngine?: RunnerDeps["engine"]
   /**
    * Replaces the probe-gated adapter (unattendedWorktree), which the runner otherwise gets only while the engine answers
@@ -151,8 +154,19 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
   const log = (message: string) => deps.log?.(message)
   const authorization = `Basic ${Buffer.from(`vector:${deps.engine.password}`).toString("base64")}`
   const keys = deps.keys ?? OFFER_KEYS
-  const ledger = deps.ledger ?? createLedger({ ...ledgerFile(deps.ledgerPath), now })
+  const ledger = deps.ledger ?? createLedger({
+    ...ledgerFile(deps.ledgerPath),
+    now,
+    onPublicationExpired: deps.log
+      ? () => log("Vector everywhere could not report a publication before its receipt expired.")
+      : undefined,
+  })
   const token = () => deps.token().catch(() => undefined)
+  const githubAccess = deps.githubAccess ?? (async () => {
+    const { getGithubToken } = await import("./github-auth")
+    const githubToken = await getGithubToken()
+    return githubToken ? { token: githubToken, source: "vector" as const } : undefined
+  })
   const git: RunnerDeps["git"] =
     deps.git ??
     // No identity and no authentication: a commit refuses and git sends no sign-in, until the push path is wired.
@@ -328,12 +342,18 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     get safeWorktree() {
       return deps.safeWorktree ?? (state.settings.worktree ? worktree : undefined)
     },
-    // Push-path stand-ins until the GitHub calls are wired: never private, so a committed branch stays held.
+    githubThread: (job, signal) => readAuthorizedGithubThread(job, {
+      access: githubAccess,
+      authorize: (claim, abort) => jobsFor().authorizeGithubThread(claim, abort),
+      signal,
+      now,
+    }),
+    // Publication ports stay closed until a separate writer-authority proof is available.
     privateRepository: async () => false,
     openPr: async () => undefined,
     now,
     localPolicy: deps.localPolicy,
-    log,
+    log: deps.log ? log : undefined,
   })
 
   const current = (): EverywhereJobsState => {

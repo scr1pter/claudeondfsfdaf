@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
 import { branchFor } from "../../core/src/everywhere/publish"
-import { createHandoffBinding, createHandoffVerifier } from "../../../api/_lib/everywhere/adapters/cloud-agents"
+import { mintCliToken } from "../../../api/_lib/cli-token"
+import { createGithubThreadAuthority, createHandoffBinding, createHandoffVerifier } from "../../../api/_lib/everywhere/adapters/cloud-agents"
 import { ENV_NAMES, readConfig } from "../../../api/_lib/everywhere/config"
 import { createJobEvents, postPending } from "../../../api/_lib/everywhere/events"
 import {
@@ -9,7 +10,8 @@ import {
   type GithubHandoffBinding,
 } from "../../../api/_lib/everywhere/github/adapter"
 import type { GithubStatusPort } from "../../../api/_lib/everywhere/github/status"
-import { claimJob, openSummary, readJob, reportJob, settleJob } from "../../../api/_lib/everywhere/jobs"
+import { claimJob, openReply, openSummary, readJob, reportJob, settleJob, updateJobReply } from "../../../api/_lib/everywhere/jobs"
+import { createJobsApi, DEVICE_HEADER } from "../../../api/_lib/everywhere/jobs-api"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { offerPublicKey, offerVerifyKey, verifyOffer } from "../../../api/_lib/everywhere/offer"
 import type { Ports } from "../../../api/_lib/everywhere/ports"
@@ -19,7 +21,7 @@ import { createGithubOidcVerifier, githubOidcJwks, type GithubOidcPurpose } from
 import type { ApiRequest, ApiResponse } from "../../../api/_lib/http"
 import { fromUtf8 } from "../../../packages/relay/src/bytes"
 import { DEVICE_BYTES, FRAME, decodeFrame } from "../../../packages/relay/src/protocol"
-import { TIMING } from "../../../packages/schema/src/everywhere"
+import { TIMING, randomId } from "../../../packages/schema/src/everywhere"
 import { githubAppFixture } from "./github-app-fixture"
 import { everywhereEnv } from "./lib/everywhere-account"
 import { installJourney, journeyPorts } from "./lib/everywhere-journey"
@@ -36,6 +38,8 @@ import { realRedis, testEverywhereStore, type RealRedis } from "./lib/everywhere
 
 const journey = installJourney([])
 const ROUTE = "/api/everywhere/github/handoff"
+const CLAIM = "/api/everywhere/jobs/claim"
+const THREAD = "/api/everywhere/jobs/github-thread"
 const SHA = "a".repeat(40)
 const WORKFLOW_REF = "fixture-owner/project/.github/workflows/vector.yml@refs/heads/main"
 const BODY = { kind: "issue", issue: 7, commentId: 99, thread: "fixture-owner/project#7", workflowVersion: "3" }
@@ -187,6 +191,86 @@ function claimingComputer(w: ReturnType<typeof world>) {
   }
   return claimed
 }
+
+test("a signed handoff authorizes thread reads only for the live lease and original App binding", async () => {
+  let binding: Record<string, string> = {}
+  const w = world({ fields: (account) => stored(account, binding) })
+  const offered = Promise.withResolvers<string>()
+  const release = Promise.withResolvers<void>()
+  const now = () => w.f.fake.clock.now
+  let metadataReads = 0
+  let duringMetadata: (() => void) | undefined
+  let stopped = false
+  const api = createJobsApi({
+    env: { ...w.f.env, [ENV_NAMES.platforms]: "github" },
+    store: w.f.store, accountAuthority: w.f.context().accountAuthority, fetcher: journey.fetcher, now,
+    switches: async () => stopped ? "stop" : "on",
+    githubThreadAuthority: createGithubThreadAuthority({
+      store: w.bindings.store,
+      app: { attachmentRepository: async (_binding, options) => {
+        expect(options?.includeFullName).toBe(true)
+        metadataReads++
+        duringMetadata?.()
+        return { publicRepository: false, visibility: "private", fullName: "fixture-owner/project" }
+      } },
+    }),
+  })
+  const desktop = (id = w.f.account) => mintCliToken({ id, email: "desktop@example.invalid" }, now(), "desktop").token
+  w.f.ports.offer = async () => {
+    offered.resolve(w.jobs()[0]!)
+    return "sent"
+  }
+  const handoff = w.call(await token(), BODY, { sleep: async () => {
+    await release.promise
+    w.f.fake.clock.advance(TIMING.offerWindowMs)
+  } })
+  try {
+    const jid = await offered.promise
+    journey.harness.mount({ [CLAIM]: api.claim, [THREAD]: api.githubThread })
+    const claim = await journey.harness.call("POST", CLAIM, { token: desktop(), body: { jid, device: w.f.computer } })
+    expect(claim.status).toBe(200)
+    expect(claim.body.job).toMatchObject({ requester: { self: true }, github: { actorId: 789 } })
+    const job = (await readJob(w.f.store, jid))!
+    expect(openReply(w.f.context(), job)?.githubBindingGeneration).toBe(1)
+    const request = (options: { bearer?: string; device?: string; lease?: string } = {}) =>
+      journey.harness.call("POST", THREAD, {
+        token: options.bearer ?? desktop(),
+        headers: { [DEVICE_HEADER]: options.device ?? w.f.computer },
+        body: { jid, lease: options.lease ?? claim.body.job.lease.id },
+      })
+    expect((await request({ bearer: desktop(crypto.randomUUID()) })).status).toBe(404)
+    expect((await request({ device: "A".repeat(22) })).status).toBe(404)
+    expect((await request({ lease: randomId() })).status).toBe(404)
+    expect(metadataReads).toBe(0)
+
+    expect((await request()).body).toEqual({ expiresAt: job.offeredAt! + TIMING.offerWindowMs })
+    expect(await readJob(w.f.store, jid)).toEqual(job)
+    expect(metadataReads).toBe(1)
+    const rejectedBindings: Record<string, string>[] = [
+      { generation: "2" }, { installationId: "601" }, { binderGithubId: "790" }, { suspended: "binder-left" },
+    ]
+    for (const rejected of rejectedBindings) {
+      binding = rejected
+      expect((await request()).status).toBe(404)
+    }
+    expect(metadataReads).toBe(1)
+    binding = {}
+    duringMetadata = () => { binding = { generation: "2" } }
+    expect((await request()).status).toBe(404)
+    binding = {}
+    duringMetadata = () => { stopped = true }
+    expect((await request()).status).toBe(404)
+    duringMetadata = undefined
+    stopped = false
+    expect(metadataReads).toBe(3)
+    expect(await updateJobReply(w.f.context(), jid, { githubBindingGeneration: null })).toBe(true)
+    expect((await request()).status).toBe(404)
+    expect(metadataReads).toBe(3)
+  } finally {
+    release.resolve()
+    expect((await handoff).body).toEqual({ handled: false })
+  }
+})
 
 describe("the handoff verifier (R-A5)", () => {
   test("V1: a live-shaped token maps to the handoff identity with one JWKS read", async () => {
