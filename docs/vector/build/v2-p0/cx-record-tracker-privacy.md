@@ -1,6 +1,6 @@
 # cx-record-tracker-privacy: dated tracker privacy marks (#157)
 
-Branch `record-tracker-privacy` (PR #157), finished locally on `cx-record-tracker-privacy`. Codex opened the draft on 2026-11-24 and left it idle for more than a day, so this v2 run took it over to merge it before the Saturday 2026-11-28 deadline. Vector Everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`, which stays off. No public claims, no production configuration.
+Branch `record-tracker-privacy` (PR #157), finished locally on `cx-record-tracker-privacy`. Codex opened the draft on 2026-11-24 and left it idle for more than a day, so this v2 run took it over to land it in main with the rest of v2. The owner's deadline is 1 January 2027, for the redesign and for everything else (GTM strategy, Stripe, signing). Vector Everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`, which stays off. No public claims, no production configuration.
 
 ## 2026-11-26, takeover: a tracker privacy mark had no time of its own
 
@@ -20,6 +20,10 @@ Branch `record-tracker-privacy` (PR #157), finished locally on `cx-record-tracke
 **Other runs on this tree.** web `everywhere-docs` 17 pass; `everywhere-authority` 20 pass, 7 skip; `everywhere-repository-port` 5 pass; `everywhere-intake` 8 pass; `everywhere-jira-a2a` 20 pass, 3 skip; `everywhere-journey-laptop-tracker` 5 pass, 4 skip; `everywhere-erase` 11 pass; `everywhere-journey-actions` 11 pass, 2 skip; `everywhere-linear-webhook` 15 pass, 4 skip; root `test/no-personal-paths.test.ts` 1 pass. Every skip is a `VECTOR_TEST_REDIS_URL` "real Redis" block, which runs in CI's "Vector everywhere tests" job (Valkey service). Typechecks pass for the hosted API (root `tsconfig.json`), schema and web. The PR's earlier CI run was cancelled while queued, not failed.
 
 **Lead rulings.**
-- Stacking: this branch contains #108 (`9a492260`, verified GitHub job threads) and #123 (verified tracker repository mappings), both open Codex drafts. Merging #157 lands both. Ruling: keep the stack as it is and land in order #108, #123, #157 (or #157 alone, which carries both). Do not split the stack, because #157's tests use #123's `addTrackerRepository`.
+- Stacking: this branch contains #108 (`9a492260`, verified GitHub job threads, an open Codex draft) and #123 (verified tracker repository mappings, an open draft that Claude Code took over on 2026-11-26; its head `6c190061` is an exact ancestor of this branch). Merging #157 lands both. Ruling: keep the stack as it is and land in order #108, #123, #157 (or #157 alone, which carries both). Do not split the stack, because #157's tests use #123's `addTrackerRepository`.
 - Clearing a mark (`private: false`) is also an explicit choice, so it is dated too. That keeps "when did the connector last decide" true for both values.
 - The datastore field is optional and older readers refuse unknown keys. Real tracker mark collection stays off until every deployed reader understands `privateSetAt`. Today nothing collects marks: the account page never sends `private`.
+
+## 2026-11-26, finalize: wording only
+
+The review found nothing to fix in code. This entry's deadline line now names the owner's 1 January 2027 deadline instead of the run's Saturday working date, and the stacking ruling records #123's current owner. #108's later main-merge commit `2762464c` is not in this branch, which is harmless: landing #157 lands #108's change itself.
