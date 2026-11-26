@@ -1,6 +1,12 @@
-import { createCipheriv, createECDH, createHash, hkdfSync, randomBytes } from "node:crypto"
+import { createCipheriv, createECDH, createHash, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto"
 import { importJWK, SignJWT } from "jose"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
+import {
+  PUSH_SUBSCRIPTION_ID_LENGTH,
+  pushSubscriptionFingerprintInput,
+  type PushSubscriptionCheck,
+  type PushSubscriptionIdentity,
+} from "../../packages/schema/src/push-subscription.js"
 import { readEntitlement, requireUsableSnapshot } from "./codium-entitlements.js"
 import { codiumKey, codiumKeyIn } from "./codium-keys.js"
 import { readSwitch } from "./codium-switches.js"
@@ -157,7 +163,7 @@ function base64url(value: string) {
 
 // ── Subscriptions ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type PushSubscriptionInput = { endpoint: string; p256dh: string; auth: string; expiresAt?: number }
+export type PushSubscriptionInput = PushSubscriptionIdentity & { expiresAt?: number }
 export type StoredPushSubscription = PushSubscriptionInput & { id: string; createdAt: number }
 
 /** Whether an endpoint belongs to a known push service, on https and port 443. */
@@ -213,7 +219,25 @@ export function parsePushSubscription(input: unknown, now = Date.now()): PushSub
 export const pushSubscriptionsKey = (account: string) => codiumKey("notify", "subs", account)
 /** A subscription's id: the start of the SHA-256 of its endpoint, so the same browser registering again replaces it. */
 export const pushSubscriptionId = (endpoint: string) =>
-  createHash("sha256").update(endpoint).digest("base64url").slice(0, 22)
+  createHash("sha256").update(endpoint).digest("base64url").slice(0, PUSH_SUBSCRIPTION_ID_LENGTH)
+
+/** Passive status queries carry only the existing lookup id and a SHA-256 hex digest. */
+export function parsePushSubscriptionCheck(input: unknown): PushSubscriptionCheck {
+  if (
+    !isRecord(input) ||
+    Object.keys(input).length !== 2 ||
+    !Object.hasOwn(input, "id") ||
+    !Object.hasOwn(input, "fingerprint") ||
+    typeof input.id !== "string" ||
+    input.id.length !== PUSH_SUBSCRIPTION_ID_LENGTH ||
+    /[^A-Za-z0-9_-]/.test(input.id) ||
+    typeof input.fingerprint !== "string" ||
+    input.fingerprint.length !== 64 ||
+    /[^0-9a-f]/.test(input.fingerprint)
+  )
+    throw new ApiError(400, "PUSH_SUBSCRIPTION_INVALID", "That push subscription check is not valid.")
+  return { id: input.id, fingerprint: input.fingerprint }
+}
 
 /** Stores a subscription for the account, replacing the oldest past ten. Answers the subscription's id. */
 export async function savePushSubscription(
@@ -242,6 +266,26 @@ export async function removePushSubscription(account: string, endpoint: string, 
   return (
     Number(await persistentStore(["HDEL", pushSubscriptionsKey(account), pushSubscriptionId(endpoint)], fetcher)) > 0
   )
+}
+
+/** Checks whether this account has the browser's current endpoint and encryption keys registered. */
+export async function hasPushSubscription(
+  account: string,
+  check: PushSubscriptionCheck,
+  fetcher: typeof fetch = fetch,
+  clock: () => number = Date.now,
+) {
+  const raw = await persistentStore(["HGET", pushSubscriptionsKey(account), check.id], fetcher)
+  const stored = typeof raw === "string" ? decodeStored(raw) : undefined
+  if (
+    !stored ||
+    stored.id !== check.id ||
+    pushSubscriptionId(stored.endpoint) !== check.id ||
+    (stored.expiresAt !== undefined && stored.expiresAt <= clock())
+  )
+    return false
+  const expected = createHash("sha256").update(pushSubscriptionFingerprintInput(stored)).digest()
+  return timingSafeEqual(expected, Buffer.from(check.fingerprint, "hex"))
 }
 
 /** The account's subscriptions, newest first, at most ten. Malformed entries are left out. */

@@ -735,7 +735,16 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     // A Vector everywhere job's turns are its platform's outside text (R-A4); every other run's are GitHub's.
     outside: start.everywhere?.outside,
     // On Codium a turn's error object holds the gateway's own words, which no public log may print (P6).
-    reportError: deps.codium ? () => {} : (label: string, error: unknown) => deps.error(`${label} ${messageOf(error)}`),
+    reportError: deps.codium
+      ? () => {}
+      : (label: string, error: unknown) => {
+          const message = messageOf(error)
+          deps.error(
+            typeof error === "object" && !(error instanceof Error) && message === "[object Object]"
+              ? label
+              : `${label} ${message}`,
+          )
+        },
   }
   // A stop cancels the session's running turn, and chat sends no turn once the run has stopped. A stop that lands
   // after chat's check and before the turn's loop starts finds nothing to cancel, so the cancel repeats every

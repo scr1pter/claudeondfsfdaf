@@ -27,6 +27,7 @@ import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { httpApiLayer } from "./httpapi-layer"
+import { createGithubAgentsBrain } from "../../../desktop/src/main/github-agents-brain"
 
 const allowedID = SessionID.make("ses_workflow_http_authorized")
 const auth = (username: string, password: string) =>
@@ -105,6 +106,50 @@ afterEach(async () => {
   await disposeAllInstances()
   await resetDatabase()
 })
+
+it.live("desktop Brain preview uses the real owner route and returns the exact local attachment", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture()
+    const server = yield* HttpServer.HttpServer
+    const origin = HttpServer.formatAddress(server.address)
+    const text = "Run the parser fixtures before publishing a release."
+    const created = yield* f.raw("/memory", owner, { kind: "lesson", scope: "repository", text })
+    expect(created.status, yield* call(() => created.text())).toBe(200)
+    const desktop = createGithubAgentsBrain({
+      token: async () => "fixture-desktop-account",
+      context: async (cwd) => {
+        expect(cwd).toBe(f.directory)
+        return {
+          authority: "fixture-authority",
+          access: { token: "fixture-github-account", source: "vector" },
+          info: { id: 41, full_name: "fixture/repository", private: true, permissions: { push: true } },
+        }
+      },
+      engine: async () => ({ url: origin, username: "vector", password: "owner-secret" }),
+      vector: async () => {
+        throw new Error("Preview must stay on the local Engine")
+      },
+      fetch: Object.assign(
+        async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          expect(new URL(String(input)).origin).toBe(origin)
+          return fetch(input, init)
+        },
+        {
+          preconnect: () => {
+            throw new Error("Unexpected connection during local preview")
+          },
+        },
+      ),
+    })
+    yield* Effect.addFinalizer(() => Effect.sync(desktop.clear))
+
+    const preview = yield* call(() => desktop.preview(f.directory))
+    expect(preview).toMatchObject({ repositoryId: "41", publicRepository: false, entries: 1, skills: 0 })
+    expect(JSON.parse(preview.text)).toMatchObject({ memory: { entries: [{ text }] } })
+    expect(preview.bytes).toBe(Buffer.byteLength(preview.text))
+    expect(preview.sha256).toBe(new Bun.CryptoHasher("sha256").update(preview.text).digest("hex"))
+  }),
+)
 
 it.live("owner preview validates without writes; guests and forwarded guests cannot preview or mutate", () =>
   Effect.gen(function* () {
