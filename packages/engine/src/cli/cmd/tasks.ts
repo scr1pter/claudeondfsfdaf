@@ -309,9 +309,21 @@ async function stopBackground(client: Client, sessionID: string, reason?: string
     throw new Error(outdated("stop only its background subagents"))
   const ids = native.filter((task) => task.background === true && task.controls.stop).map((task) => task.id)
   const stopped: (typeof listed.tasks)[number][] = []
-  for (const chunk of chunks(ids, STOP_CHUNK))
-    stopped.push(...(await client.experimental.task.stop({ sessionID, taskIDs: chunk, reason })).data!.tasks)
-  return { tasks: stopped }
+  let completed = 0
+  for (const chunk of chunks(ids, STOP_CHUNK)) {
+    const result = await client.experimental.task
+      .stop({ sessionID, taskIDs: chunk, reason })
+      .catch((error: unknown) => {
+        if (!completed) throw error
+        throw new Error(
+          `The server returned results for ${count(stopped.length, "background subagent")} from ${count(completed, "successful Stop request")}. The next request failed. ${errorMessage(error)}`,
+          { cause: error },
+        )
+      })
+    stopped.push(...result.data!.tasks)
+    completed++
+  }
+  return { tasks: stopped, ...(listed.truncated ? { truncated: true } : {}) }
 }
 
 /** Resumes the IDs in calls the route accepts (at most 32 each). Each call is all or nothing on the engine. */
@@ -665,6 +677,14 @@ export async function formatTaskResult(
       return formatInspect(result as TaskInspectResult, now)
   }
   const listed = result as Partial<TaskListResult & TaskWaitResult> & { tasks: TaskListResult["tasks"] }
+  const missingShells = args.action === "list" && args.shells && listed.shells === undefined
+  const backgroundStop = args.action === "stop" && args.background
+  const partialBackground =
+    "The server returned an incomplete task list. More background subagents may still be running."
+  if (backgroundStop && !listed.tasks.length)
+    return listed.truncated
+      ? `No listed background subagents were stopped.\n${partialBackground}`
+      : "No background subagents were stopped."
   const empty =
     args.action === "resume"
       ? args.interrupted
@@ -672,24 +692,31 @@ export async function formatTaskResult(
         : "Nothing was resumed."
       : args.action === "promote"
         ? "No foreground subagents to move."
-        : args.action === "stop" && args.background
-          ? "No background subagents are running."
-          : undefined
+        : undefined
   if (!listed.tasks.length && empty) return empty
+  // Tasks can finish or be interrupted while the Stop request is in flight.
+  const stopped = backgroundStop ? listed.tasks.filter((task) => task.status === "stopped").length : 0
   const head =
     args.action === "resume"
       ? [`Resumed ${count(listed.tasks.length, "subagent")}.`]
       : args.action === "promote"
         ? [`Moved ${count(listed.tasks.length, "subagent")} to the background.`]
-        : args.action === "stop" && args.background
-          ? [`Stopped ${count(listed.tasks.length, "background subagent")}.`]
+        : backgroundStop
+          ? [
+              stopped
+                ? `The server reported ${count(stopped, "background subagent")} as stopped.`
+                : "The server reported no background subagents as stopped.",
+            ]
           : []
   return [
     ...head,
     formatTasks(listed.tasks, { limits: listed.limits, now }),
     ...(listed.shells && (listed.shells.length || args.shells) ? [formatShells(listed.shells, now)] : []),
+    ...(missingShells ? ["Could not list background commands. Try again."] : []),
     ...(listed.attention?.length ? [`Needs your attention: ${listed.attention.map(safe).join(", ")}`] : []),
-    ...(listed.truncated ? ["More tasks are available; narrow the selection."] : []),
+    ...(listed.truncated
+      ? [backgroundStop ? partialBackground : "More tasks are available; narrow the selection."]
+      : []),
     ...(listed.timedOut ? ["Wait timed out; completion is not confirmed."] : []),
   ].join("\n")
 }
