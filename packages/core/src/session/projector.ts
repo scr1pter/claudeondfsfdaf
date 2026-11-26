@@ -18,6 +18,7 @@ import type { DeepMutable } from "../schema"
 import { PublicSession } from "@vectordevai/schema/public-session"
 import { Billing } from "@vectordevai/schema/billing"
 import { SessionAccounting } from "./accounting"
+import { ReviewSessionAdmission } from "../review/session-admission"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -427,9 +428,23 @@ const layer = Layer.effectDiscard(
         tokens_cache_write: ______,
         ...settings
       } = sessionRow(event.data.info)
+      const metadata = settings.metadata
+      // A session update carries a snapshot. An earlier snapshot must not clear a review's recorded privacy hold.
+      const projectedMetadata =
+        ReviewSessionAdmission.isReviewSession(settings.internal ?? undefined) &&
+        metadata &&
+        metadata[ReviewSessionAdmission.ZDR_METADATA] !== true
+          ? sql`CASE WHEN json_type(${SessionTable.metadata}, ${ReviewSessionAdmission.ZDR_METADATA_PATH}) = 'true'
+              THEN json_set(${JSON.stringify(metadata)}, ${ReviewSessionAdmission.ZDR_METADATA_PATH}, json('true'))
+              ELSE ${JSON.stringify(metadata)} END`
+          : metadata
       return db
         .update(SessionTable)
-        .set({ ...settings, time_updated: sql`max(${SessionTable.time_updated}, ${settings.time_updated ?? 0})` })
+        .set({
+          ...settings,
+          metadata: projectedMetadata,
+          time_updated: sql`max(${SessionTable.time_updated}, ${settings.time_updated ?? 0})`,
+        })
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
         .pipe(

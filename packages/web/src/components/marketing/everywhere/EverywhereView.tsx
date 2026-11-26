@@ -29,7 +29,15 @@ type Props = { readonly state: EverywhereState; readonly model: EverywhereAccoun
 export function EverywhereAccountView(props: Props & { readonly focus?: string | undefined }) {
   const state = props.state
   if (state.kind !== "ready")
-    return <Gate state={state} model={props.model} pathname={props.pathname} signIn={EVERYWHERE_COPY.signIn} />
+    return (
+      <Gate
+        state={state}
+        model={props.model}
+        pathname={props.pathname}
+        focus={props.focus}
+        signIn={EVERYWHERE_COPY.signIn}
+      />
+    )
   return (
     <div className="everywhere">
       <LandingNotice landing={state.landing} />
@@ -123,6 +131,7 @@ function Gate(props: {
   readonly state: Exclude<EverywhereState, { readonly kind: "ready" }>
   readonly model: EverywhereAccountModel
   readonly pathname: string
+  readonly focus?: string | undefined
   readonly signIn: string
 }) {
   const state = props.state
@@ -144,7 +153,7 @@ function Gate(props: {
       <section className="acct-section">
         {note}
         <p>{props.signIn}</p>
-        <a className="acct-button" href={signInPath(props.pathname)}>
+        <a className="acct-button" href={signInPath(props.pathname, props.focus)}>
           {EVERYWHERE_COPY.signInButton}
         </a>
       </section>
@@ -155,7 +164,11 @@ function Gate(props: {
         {note}
         <p>{EVERYWHERE_COPY.expired}</p>
         {held && <p className="acct-fine">{EVERYWHERE_COPY.landing.held}</p>}
-        <button className="acct-button" type="button" onClick={() => void props.model.signInAgain(props.pathname)}>
+        <button
+          className="acct-button"
+          type="button"
+          onClick={() => void props.model.signInAgain(props.pathname, props.focus)}
+        >
           {EVERYWHERE_COPY.expiredButton}
         </button>
       </section>

@@ -37,6 +37,9 @@ import {
   type StrictResult,
 } from "@vectordevai/core/review/types"
 import { isRecord, violations } from "./fixtures/json-schema"
+import type { DiagnosticProvenance } from "../../src/review/diagnostic"
+import type { Lab } from "../../src/model-lab"
+import type { Finding, ReviewOutcome } from "../../src/review/types"
 
 // Every key used anywhere in a schema, at any depth.
 function keys(value: unknown): string[] {
@@ -371,7 +374,7 @@ function keywords(schema: unknown): string[] {
 }
 
 // Every field set, so a field added to the type without the schema, or the other way round, fails below.
-const STRICT_FINDING: Required<StrictFinding> = {
+const STRICT_FINDING: Required<Omit<StrictFinding, "linkedRule" | "certificate">> = {
   id: "3f9a1c07be21",
   class: "crash",
   mechanism: "logic",
@@ -398,6 +401,14 @@ const STRICT_RESULT: Required<StrictResult> = {
 }
 
 describe("the strict schemas (VS-27a)", () => {
+  test("the ruleCheck result carries a checked rule only under its own key", () => {
+    const linkedRule = { source: "paths[0]", quote: "Preserve FIFO order.", rulesSource: "working tree" } as const
+    const withRule: Required<Omit<StrictFinding, "certificate">> = { ...STRICT_FINDING, linkedRule }
+    const schema = strictResultJsonSchema({ guardrail: "strict", ruleCheck: "strict" })!
+    expect(schema.properties.findings.items.properties.linkedRule?.required).toEqual(Object.keys(withRule.linkedRule))
+    expect(strictResultJsonSchema(STRICT)!.properties.findings.items.properties).not.toHaveProperty("linkedRule")
+  })
+
   test("exist only under guardrail: strict", () => {
     // VS-42's scopeGate is ignored without strict, by the schemas as by the guardrail.
     for (const keys of [
@@ -424,6 +435,8 @@ describe("the strict schemas (VS-27a)", () => {
     expect([...STRICT_DROPS]).toEqual([
       "unverified",
       "verdict-unreadable",
+      "verdict-unsure",
+      "certificate-mismatch",
       "severity-unreadable",
       "not-blocking",
       "out-of-scope",
@@ -523,7 +536,7 @@ describe("the strict schemas (VS-27a)", () => {
     expect(finding.properties.quotes).toMatchObject({ minItems: 1, maxItems: MAX_FINDING_QUOTES })
     // VS-42's pre-existing joins the enum only under scopeGate (below).
     expect(result.properties.dropped.items.properties.reason.enum).toEqual(
-      STRICT_DROPS.filter((reason) => reason !== "pre-existing"),
+      STRICT_DROPS.filter((reason) => !["pre-existing", "certificate-mismatch", "verdict-unsure"].includes(reason)),
     )
     expect(result.properties.dropped.items.properties.count.minimum).toBe(1)
     expect(result.properties.fixUnchecked.minimum).toBe(0)
@@ -569,13 +582,13 @@ describe("the strict schemas (VS-27a)", () => {
     expect(violations(schema, { ...STRICT_RESULT, findings: [unverified] })).toEqual(["$.findings[0] lacks verifier"])
   })
 
-  // VS-42a: under scopeGate "introduced" the result schema's drop enum gains pre-existing, and nothing else changes; the
-  // report schema's `scope` field and its decoding wait for VS-42 wiring, with VS-27c.
-  test("VS-42's scopeGate adds only the pre-existing drop, and changes neither the report schema nor the decoder", () => {
+  test("requests and decodes the three scope labels only when strict and introduced are both effective", () => {
     const GATE = { guardrail: "strict", scopeGate: "introduced" } as const
     const gated = strictResultJsonSchema(GATE)!
     const plain = strictResultJsonSchema(STRICT)!
-    expect(gated.properties.dropped.items.properties.reason.enum).toEqual([...STRICT_DROPS])
+    expect(gated.properties.dropped.items.properties.reason.enum).toEqual(
+      STRICT_DROPS.filter((reason) => reason !== "certificate-mismatch" && reason !== "verdict-unsure"),
+    )
     expect({
       ...gated,
       properties: {
@@ -584,12 +597,18 @@ describe("the strict schemas (VS-27a)", () => {
       },
     }).toEqual(plain)
     expect(strictResultJsonSchema({ guardrail: "strict", scopeGate: "off" })).toEqual(plain)
-    expect(strictReportJsonSchema(GATE)).toEqual(strictReportJsonSchema(STRICT))
+    const reportSchema = strictReportJsonSchema(GATE)!
+    const fields = reportSchema.properties.findings.items.properties
+    const { scope, ...rest } = fields
+    expect(scope?.enum).toEqual([...FINDING_SCOPES])
+    expect(scope?.description).toContain("Required on blocking findings")
+    expect(rest).toEqual(strictReportJsonSchema(STRICT)!.properties.findings.items.properties)
+    expect(strictReportJsonSchema({ ...STRICT, scopeGate: "off" })).toEqual(strictReportJsonSchema(STRICT))
+    expect(strictReportJsonSchema({ scopeGate: "introduced" })).toBeUndefined()
     const dropped = { ...STRICT_RESULT, dropped: [{ reason: "pre-existing", count: 1 }] }
     expect(violations(gated, dropped)).toEqual([])
     expect(violations(plain, dropped)).toEqual(["$.dropped[0].reason is not in its enum"])
     expect([...FINDING_SCOPES]).toEqual(["introduced", "exacerbated", "pre-existing"])
-    // A model's scope label is not read before VS-42 wiring, under any keys.
     const report = {
       summary: "s",
       findings: [
@@ -605,10 +624,14 @@ describe("the strict schemas (VS-27a)", () => {
         },
       ],
     }
-    const decoded = decodeReport(report, GATE)!
-    expect(decoded).toEqual(decodeReport(report, STRICT)!)
-    expect(Object.hasOwn(decoded.findings[0], "scope")).toBe(false)
-    expect(Object.hasOwn(decodeReport(report)!.findings[0], "scope")).toBe(false)
+    for (const scope of FINDING_SCOPES) {
+      const labelled = { ...report, findings: [{ ...report.findings[0], scope }] }
+      expect(decodeReport(labelled, GATE)!.findings[0].scope).toBe(scope)
+      for (const keys of [{}, STRICT, { ...STRICT, scopeGate: "off" }, { scopeGate: "introduced" }] as const)
+        expect(decodeReport(labelled, keys)!.findings[0]).not.toHaveProperty("scope")
+    }
+    const malformed = { ...report, findings: [{ ...report.findings[0], scope: "unrelated" }] }
+    expect(decodeReport(malformed, GATE)!.findings[0]).not.toHaveProperty("scope")
   })
 
   test("a strict finding conforms to the strict report schema, and a legacy one still does", () => {
@@ -647,9 +670,25 @@ describe("the strict schemas (VS-27a)", () => {
     // The matcher is anchored: prose that says "from" is not an import.
     expect(source).toContain("copied out of a file")
   })
+
+  test("self-contained annotations retain the diagnostic and model-lab domains", () => {
+    type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
+    const diagnostics: Same<NonNullable<Finding["diagnostics"]>[number], DiagnosticProvenance> = true
+    const labs: Same<NonNullable<ReviewOutcome["claimedAuthor"]>[number]["lab"], Lab> = true
+    expect([diagnostics, labs]).toEqual([true, true])
+  })
 })
 
 describe("decodeReport under guardrail: strict (VS-27a)", () => {
+  test("an unreadable candidate list cannot become a completed empty strict report", () => {
+    for (const raw of [{ summary: "done" }, { summary: "done", findings: null }, { summary: "done", findings: [{}] }]) {
+      expect(decodeReport(raw)?.findings).toEqual([])
+      expect(decodeReport(raw, { guardrail: "strict" })).toBeUndefined()
+      expect(decodeReport(JSON.stringify(raw), { guardrail: "strict" })).toBeUndefined()
+    }
+    expect(decodeReport({ findings: [] }, { guardrail: "strict" })?.findings).toEqual([])
+  })
+
   const base = {
     path: "src/a.ts",
     line: 12,
@@ -1069,6 +1108,17 @@ describe("decodeRuleCitation (VS-43a)", () => {
 // wiring, with VS-27c.
 describe("the certificate verify schema (VS-44a)", () => {
   const CERT = { guardrail: "strict", verifyEvidence: "certificate" } as const
+
+  test("only the dual-key result schema requires accepted verification evidence", () => {
+    const kept: Required<Omit<StrictFinding, "linkedRule">> = {
+      ...STRICT_FINDING,
+      certificate: { trace: STRICT_FINDING.quotes, guards: [], reach: "entry-point" },
+    }
+    const schema = strictResultJsonSchema(CERT)!
+    expect(violations(schema, { ...STRICT_RESULT, findings: [kept] })).toEqual([])
+    expect(violations(schema, STRICT_RESULT)).toEqual(["$.findings[0] lacks certificate"])
+    expect(violations(strictResultJsonSchema(STRICT)!, STRICT_RESULT)).toEqual([])
+  })
 
   test("exists only under guardrail: strict with verifyEvidence: certificate", () => {
     for (const keys of [

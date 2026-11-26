@@ -71,6 +71,84 @@ test("retries incomplete Windows ACL reads, stays fail-closed, and keeps complet
   expect(reads).toHaveLength(4)
 })
 
+test("a Windows ACL owner printed before a failed rule read cannot make the path trusted or cached", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "vector-managed-"))
+  temporary.push(dir)
+  const file = path.join(dir, "vector.json")
+  writeFileSync(file, "{}")
+  const owner = "S-1-5-18"
+  const partial = [`O 0 ${owner}`, "C 0", `O 1 ${owner}`, `R 1 ${owner} 2 1 0`]
+  let reads = 0
+  const acl: ConfigManaged.AclReader = (paths) => {
+    reads += 1
+    const output = reads === 1 ? partial : [...partial, "R 1 S-1-1-0 2 1 0", "C 1"]
+    return ConfigManaged.parseAcl(output.join("\r\n"), paths)
+  }
+  const options = { platform: "win32" as const, acl }
+  expect(ConfigManaged.check(file, options)).toEqual({
+    kind: "unreadable",
+    reason: `Vector could not read who may change ${file}.`,
+  })
+  expect(ConfigManaged.check(file, options)).toEqual({
+    kind: "untrusted",
+    reason: `${file} lets S-1-1-0 change it.`,
+  })
+  expect(reads).toBe(2)
+})
+
+test("a completed Windows ACL with a malformed access flag is unavailable and is retried", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "vector-managed-"))
+  temporary.push(dir)
+  const file = path.join(dir, "vector.json")
+  writeFileSync(file, "{}")
+  let reads = 0
+  const acl: ConfigManaged.AclReader = (paths) => {
+    const allow = ++reads === 1 ? "unknown" : "1"
+    const output = [`O 0 S-1-5-18`, "C 0", `O 1 S-1-5-18`, `R 1 S-1-1-0 2 ${allow} 0`, "C 1"]
+    return ConfigManaged.parseAcl(output.join("\r\n"), paths)
+  }
+  const options = { platform: "win32" as const, acl }
+  expect(ConfigManaged.check(file, options)).toEqual({
+    kind: "unreadable",
+    reason: `Vector could not read who may change ${file}.`,
+  })
+  expect(ConfigManaged.check(file, options)).toEqual({ kind: "untrusted", reason: `${file} lets S-1-1-0 change it.` })
+  expect(reads).toBe(2)
+})
+
+test("Windows ACL blocks need one owner at the start, complete rule rows, and one matching terminal", () => {
+  const file = "vector.json"
+  const owner = "O 0 S-1-5-18"
+  const rule = "R 0 S-1-1-0 -1610612736 1 0"
+  const end = "C 0"
+  for (const rows of [
+    [owner, "R", end],
+    [owner, "R 1 S-1-1-0 2 1 0", end],
+    [owner, "R 0 S-1-1-0 2 1", end],
+    [owner, "R 0 S-1-1-0 2147483648 1 0", end],
+    [owner, "R 0 S-1-1-0 2e0 1 0", end],
+    [owner, "R 0 S-1-1-0 2 1 2", end],
+    [owner, "R 0 S-1-1-4294967296 2 1 0", end],
+    ["O 0 incomplete", end],
+    [owner, owner, end],
+    [rule, owner, end],
+    [owner, end, rule, end],
+    [owner, "C 1"],
+  ]) {
+    expect(ConfigManaged.parseAcl(rows.join("\n"), [file]).entries[file]).toBeUndefined()
+  }
+  expect(ConfigManaged.parseAcl([owner, end].join("\n"), [file]).entries[file]).toEqual({
+    owner: "S-1-5-18",
+    rules: [],
+  })
+  expect(ConfigManaged.parseAcl([owner, rule, end].join("\r\n"), [file]).entries[file]?.rules).toEqual([
+    { sid: "S-1-1-0", rights: -1610612736, allow: true, inheritOnly: false },
+  ])
+  expect(
+    ConfigManaged.parseAcl([owner, "O 1 S-1-5-18", rule, end, "C 1"].join("\n"), ["folder", file]).entries,
+  ).toEqual({})
+})
+
 test.skipIf(process.platform === "win32")(
   "lists macOS access control lists once until a path in the chain changes, and sees a change then",
   () => {

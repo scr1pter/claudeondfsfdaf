@@ -2386,6 +2386,16 @@ export type ConnectConfig = {
   review?: ConnectReviewConfig
 }
 
+export type GlobalReviewConfig = {
+  inversion?: unknown
+  alternateModel?: unknown
+  privacy?: unknown
+  holdback?: unknown
+  diagnostics?: unknown
+  ruleCheck?: unknown
+  zdrAttested?: unknown
+}
+
 export type ConfigWithLocks = {
   $schema?: string
   shell?: string
@@ -2570,6 +2580,7 @@ export type ConfigWithLocks = {
   local?: LocalConfig
   research?: ResearchConfig
   connect?: ConnectConfig
+  review?: GlobalReviewConfig
   experimental?: {
     vectorscope?: boolean
     disable_paste_summary?: boolean
@@ -2770,6 +2781,7 @@ export type Config = {
   local?: LocalConfig
   research?: ResearchConfig
   connect?: ConnectConfig
+  review?: GlobalReviewConfig
   experimental?: {
     vectorscope?: boolean
     disable_paste_summary?: boolean
@@ -2968,6 +2980,7 @@ export type ExperimentalCapabilities = {
   vectorscopeSettings?: boolean
   vectorscopeRuns?: boolean
   vectorscopeReviewMemoryControls?: boolean
+  vectorscopeLocalFixes?: boolean
   codeReviewAfterTask?: boolean
   connections?: boolean
 }
@@ -8084,6 +8097,231 @@ export type ReviewRunList = {
   runs: Array<ReviewRunSummary>
   next?: string
 }
+
+export type ReviewFixControlFixId = string
+
+export type ReviewFixControlState = "proposal" | "preview" | "applied" | "committed" | "pushed" | "cancelled" | "failed"
+
+export type ReviewFixControlSummary = {
+  fixID: ReviewFixControlFixId
+  state: ReviewFixControlState
+  head: string
+  sourceBranch: string
+  destinationBranch: string
+  digest: string
+  patchDigest: string
+  commit?: string
+}
+
+export type ReviewFixControlList = {
+  fixes: Array<ReviewFixControlSummary>
+}
+
+export type ReviewFixControlSource = {
+  kind: "client"
+}
+
+export type ReviewFixControlFile = {
+  path: string
+  preimage: string
+  postimage: string
+}
+
+export type ReviewFixControlPrepare = {
+  source: ReviewFixControlSource
+  head: string
+  base: string
+  baseBranch: string
+  findings: Array<string>
+  files: Array<ReviewFixControlFile>
+  patch: string
+}
+
+export type ReviewFixControlChange = {
+  path: string
+  status: "added" | "modified" | "deleted"
+  additions: number
+  deletions: number
+}
+
+export type ReviewFixControlPreview = {
+  fixID: ReviewFixControlFixId
+  repository: string
+  worktree: string
+  head: string
+  base: string
+  sourceBranch: string
+  baseBranch: string
+  destinationBranch: string
+  source: ReviewFixControlSource
+  findingsVerified: false
+  findings: Array<string>
+  digest: string
+  patchDigest: string
+  patch: string
+  files: Array<ReviewFixControlChange>
+  notes: Array<string>
+}
+
+export type ReviewFixControlApplyRequest = {
+  kind: "apply"
+}
+
+export type ReviewFixControlCommand = {
+  argv: Array<string>
+  cwd: string
+}
+
+export type ReviewFixControlChecksRequest = {
+  kind: "checks"
+  commands: Array<ReviewFixControlCommand>
+}
+
+export type ReviewFixControlCommitRequest = {
+  kind: "commit"
+}
+
+export type ReviewFixControlPushRequest = {
+  kind: "push"
+  remote: string
+  mode: "branch" | "draft-pr"
+}
+
+export type ReviewFixControlRequest =
+  | ReviewFixControlApplyRequest
+  | ReviewFixControlChecksRequest
+  | ReviewFixControlCommitRequest
+  | ReviewFixControlPushRequest
+
+export type ReviewFixControlOfferId = string
+
+export type ReviewFixControlApplyOperation = {
+  kind: "apply"
+}
+
+export type ReviewFixControlChecksOperation = {
+  kind: "checks"
+  commands: Array<ReviewFixControlCommand>
+  network: "off"
+  timeoutMs: number
+  outputBytes: number
+}
+
+export type ReviewFixControlCommitOperation = {
+  kind: "commit"
+  message: string
+}
+
+export type ReviewFixControlPushOperation = {
+  kind: "push"
+  remote: string
+  commit: string
+  mode: "branch" | "draft-pr"
+}
+
+export type ReviewFixControlOperation =
+  | ReviewFixControlApplyOperation
+  | ReviewFixControlChecksOperation
+  | ReviewFixControlCommitOperation
+  | ReviewFixControlPushOperation
+
+export type ReviewFixControlIdentity = {
+  name: string
+  email: string
+}
+
+export type ReviewFixControlOffer = {
+  offerID: ReviewFixControlOfferId
+  fixID: ReviewFixControlFixId
+  operation: ReviewFixControlOperation
+  operationDigest: string
+  head: string
+  digest: string
+  patchDigest: string
+  expiresAt: number
+  identity?: ReviewFixControlIdentity
+  notes: Array<string>
+}
+
+export type ReviewFixControlExecute = {
+  offerID: ReviewFixControlOfferId
+  head: string
+  patchDigest: string
+  operationDigest: string
+}
+
+export type ReviewFixControlApplied = {
+  kind: "apply"
+  fixID: ReviewFixControlFixId
+  worktree: string
+  head: string
+  digest: string
+  patchDigest: string
+  consumedAt: number
+  files: Array<ReviewFixControlChange>
+}
+
+export type ReviewFixControlCheckResult = {
+  argv: Array<string>
+  cwd: string
+  exitCode: number
+  timedOut: boolean
+  output: string
+  truncated: boolean
+  durationMs: number
+}
+
+export type ReviewFixControlChecked = {
+  kind: "checks"
+  fixID: ReviewFixControlFixId
+  head: string
+  digest: string
+  operation: string
+  consumedAt: number
+  results: Array<ReviewFixControlCheckResult>
+  aborted?: "head" | "worktree"
+  leftovers?: Array<string>
+  passed: boolean
+}
+
+export type ReviewFixControlCommitted = {
+  kind: "commit"
+  fixID: ReviewFixControlFixId
+  head: string
+  digest: string
+  commit: string
+  tree: string
+  branch: string
+  author: ReviewFixControlIdentity
+  consumedAt: number
+}
+
+export type ReviewFixControlPushed = {
+  kind: "push"
+  fixID: ReviewFixControlFixId
+  commit: string
+  remote: string
+  ref: string
+  mode: "branch" | "draft-pr"
+  consumedAt: number
+}
+
+export type ReviewFixControlResult =
+  | ReviewFixControlApplied
+  | ReviewFixControlChecked
+  | ReviewFixControlCommitted
+  | ReviewFixControlPushed
+
+export type ReviewFixControlCleanup =
+  | {
+      fixID: ReviewFixControlFixId
+      removed: true
+    }
+  | {
+      fixID: ReviewFixControlFixId
+      removed: false
+      reason: string
+    }
 
 export type ReviewMemoryControlId = string
 
@@ -19285,6 +19523,179 @@ export type ReviewStopResponses = {
 
 export type ReviewStopResponse = ReviewStopResponses[keyof ReviewStopResponses]
 
+export type ReviewFixListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/fix"
+}
+
+export type ReviewFixListErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewFixListError = ReviewFixListErrors[keyof ReviewFixListErrors]
+
+export type ReviewFixListResponses = {
+  /**
+   * ReviewFixControl.List
+   */
+  200: ReviewFixControlList
+}
+
+export type ReviewFixListResponse = ReviewFixListResponses[keyof ReviewFixListResponses]
+
+export type ReviewFixPrepareData = {
+  body?: ReviewFixControlPrepare
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/fix"
+}
+
+export type ReviewFixPrepareErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewFixPrepareError = ReviewFixPrepareErrors[keyof ReviewFixPrepareErrors]
+
+export type ReviewFixPrepareResponses = {
+  /**
+   * ReviewFixControl.Preview
+   */
+  200: ReviewFixControlPreview
+}
+
+export type ReviewFixPrepareResponse = ReviewFixPrepareResponses[keyof ReviewFixPrepareResponses]
+
+export type ReviewFixPreviewData = {
+  body?: ReviewFixControlRequest
+  path: {
+    sessionID: string
+    fixID: ReviewFixControlFixId
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/fix/{fixID}/preview"
+}
+
+export type ReviewFixPreviewErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewFixPreviewError = ReviewFixPreviewErrors[keyof ReviewFixPreviewErrors]
+
+export type ReviewFixPreviewResponses = {
+  /**
+   * ReviewFixControl.Offer
+   */
+  200: ReviewFixControlOffer
+}
+
+export type ReviewFixPreviewResponse = ReviewFixPreviewResponses[keyof ReviewFixPreviewResponses]
+
+export type ReviewFixExecuteData = {
+  body?: ReviewFixControlExecute
+  path: {
+    sessionID: string
+    fixID: ReviewFixControlFixId
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/fix/{fixID}/execute"
+}
+
+export type ReviewFixExecuteErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewFixExecuteError = ReviewFixExecuteErrors[keyof ReviewFixExecuteErrors]
+
+export type ReviewFixExecuteResponses = {
+  /**
+   * ReviewFixControl.Result
+   */
+  200: ReviewFixControlResult
+}
+
+export type ReviewFixExecuteResponse = ReviewFixExecuteResponses[keyof ReviewFixExecuteResponses]
+
+export type ReviewFixCancelData = {
+  body?: never
+  path: {
+    sessionID: string
+    fixID: ReviewFixControlFixId
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/review/fix/{fixID}/cancel"
+}
+
+export type ReviewFixCancelErrors = {
+  /**
+   * ReviewApiError | InvalidRequestError
+   */
+  400: ReviewApiError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type ReviewFixCancelError = ReviewFixCancelErrors[keyof ReviewFixCancelErrors]
+
+export type ReviewFixCancelResponses = {
+  /**
+   * ReviewFixControl.Cleanup
+   */
+  200: ReviewFixControlCleanup
+}
+
+export type ReviewFixCancelResponse = ReviewFixCancelResponses[keyof ReviewFixCancelResponses]
+
 export type ReviewMemoryInspectData = {
   body?: never
   path?: never
@@ -22491,6 +22902,7 @@ export type V2SessionPromptData = {
     delivery?: "steer" | "queue"
     resume?: boolean
     budget?: RunBudget
+    tightenBudget?: boolean
   }
   path: {
     sessionID: string

@@ -55,3 +55,28 @@ Typechecks: schema, core, engine, app, client (`tsgo`), root `tsconfig.json` (ap
 - Engine reviews on Codium take the pair from the provider's Codium listing; that path is covered by the pure
   `reviewModels()` tests and the desktop tests, not by an engine test with a Codium provider.
 - `bun.lock` was already modified in the worktree before this work and is not mine; it is left out of the commit.
+
+## Completion judge integration (22 Nov 2026)
+
+The full-gate test gap above is now covered in `packages/engine/test/session/codium-auto.test.ts`, based on main
+`c515de62465db817ff309f4237023f9704fe7983`. Its existing in-process Codium catalog and chat transport now also accept
+scripted replies from the shared test builder. Two cases run Second opinion on and off through the real
+`SessionPrompt.prompt`, provider, tools, completion judge gate and task tool: write a file, finish, judge FAIL, repair
+the file, finish, judge PASS. Both judge children and the actual model requests are checked. The enabled case uses
+the listed model from another lab for both rounds and carries the setting onto the repair; the disabled case uses
+the worker's model. Both cases finish with the repaired file, exactly two judge children, six model requests and an
+empty reply queue.
+
+Mutation proofs were run one at a time against temporary, immediately restored edits to `session/prompt.ts`:
+
+- Removing the gate's explicit cross-lab model handoff made the enabled case fail because its judge children ran on
+  the worker model (one pass, one fail).
+- Removing the synthetic repair's Second opinion setting made the enabled case fail because the second judge never
+  returned PASS (one pass, one fail).
+- Restored source: the complete `codium-auto.test.ts` file passed, 21 tests and 84 assertions, with no skips.
+
+Engine `bun --no-env-file typecheck` also passed. All Bun workloads ran through the canonical serial wrapper from the
+engine package; tests ran one file at a time with `--no-env-file --timeout 30000`. The model and catalog responses are functions in the test process; no model server,
+desktop, browser, app or remote provider was started or called. The existing strict egress guard stays enabled.
+No production source, review token limits or owner activation settings changed. This record does not close the
+separate per-PR token-cap follow-up.

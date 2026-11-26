@@ -33,7 +33,7 @@ import {
 } from "./ops-settings.js"
 import { healthView, readHealth, type DomainHealthView } from "./ops-health.js"
 import { requireOpsPerk, type OpsPerk } from "./ops-listing.js"
-import { opsConfigured } from "./ops-worker.js"
+import { opsCall, opsConfigured } from "./ops-worker.js"
 import { persistentStore } from "./persistent-store.js"
 import { requireUnrevokedAccount, requireUnrevokedCliToken } from "./revocation.js"
 import { phoneAppOrigin } from "./web-push.js"
@@ -430,6 +430,8 @@ export type OpsMonitorView = {
   domainVerified: boolean
   /** The Worker checks it: its domain is among the plan's verified domains, and it is among the plan's URLs. */
   checked: boolean
+  /** The latest check was skipped because its DNS lookup failed; never an outage verdict. */
+  resolverFailedAt?: number
 }
 
 /** Which monitors the Worker probes: the first `urls` (in the order added) on the first `domains` verified domains. */
@@ -455,17 +457,51 @@ export function monitorView(monitor: OpsMonitor, settings: OpsSettings, caps: Op
   } satisfies OpsMonitorView
 }
 
+// The optional observation should not keep configuration controls waiting for the general Worker timeout.
+const MONITOR_STATE_READ_MS = 1_500
+
 export async function listOpsMonitors(account: string, fetcher: typeof fetch = fetch, now = Date.now()) {
   const [{ settings }, caps] = await Promise.all([
     readOpsSettings(account, fetcher),
     readOpsCaps(account, fetcher, now),
   ])
   const current = settings ?? newOpsSettings()
+  const monitors = current.monitors.map((monitor) => monitorView(monitor, current, caps, now))
+  const synced = !settings || !workerBehind(account, settings, now)
+  const state =
+    synced && monitors.some((monitor) => monitor.checked) && opsConfigured()
+      ? await opsCall("state", { account }, fetcher, now, AbortSignal.timeout(MONITOR_STATE_READ_MS)).catch(
+          () => undefined,
+        )
+      : undefined
   return {
-    monitors: current.monitors.map((monitor) => monitorView(monitor, current, caps, now)),
+    monitors: monitors.map((monitor) => {
+      const at = monitor.checked ? resolverFailureAt(state, monitor.id, now) : undefined
+      return { ...monitor, ...(at !== undefined ? { resolverFailedAt: at } : {}) }
+    }),
     limits: caps ? { urls: caps.onCall.urls, intervalSec: caps.onCall.intervalSec } : null,
-    synced: !settings || !workerBehind(account, settings, now),
+    synced,
   }
+}
+
+/** Display evidence only: malformed or unavailable Worker state must not hide the account's configured URLs. */
+function resolverFailureAt(state: Record<string, unknown> | undefined, id: string, now: number) {
+  if (state?.active !== true || !Array.isArray(state.monitors)) return undefined
+  const rows = state.monitors.filter(
+    (row: unknown): row is Record<string, unknown> =>
+      row !== null && typeof row === "object" && !Array.isArray(row) && "id" in row && row.id === id,
+  )
+  if (rows.length !== 1) return undefined
+  const row = rows[0]!
+  return row.probed === true &&
+    row.verified === true &&
+    row.reason === "resolver" &&
+    typeof row.checkedAt === "number" &&
+    Number.isSafeInteger(row.checkedAt) &&
+    row.checkedAt > 0 &&
+    row.checkedAt <= now
+    ? row.checkedAt
+    : undefined
 }
 
 /** Adds an On Call URL on a verified domain, within the plan's URL count (or answers the same URL already there). */

@@ -734,6 +734,10 @@ test("initial Windows window diagnostics preserve predicate order and leave fina
   ].map((predicate) => current.indexOf(predicate))
   expect(predicates.every((index) => index >= 0)).toBe(true)
   expect(predicates).toEqual([...predicates].sort((left, right) => left - right))
+  const deadline = "std::chrono::steady_clock::now() >= life->deadline"
+  expect(current).toContain(`!life->current() || ${deadline}`)
+  expect(current.match(/steady_clock::now\(\) >= life->deadline/g)).toHaveLength(2)
+  expect(current.lastIndexOf(deadline)).toBeGreaterThan(current.indexOf("windows_desktop_available("))
   const stages = [
     "request",
     "lifetime",
@@ -760,7 +764,7 @@ test("initial Windows window diagnostics preserve predicate order and leave fina
   )
   expect(
     current.match(/if \(diagnostic\) \*diagnostic = OverlayDriverStage::window_current_[a-z_]+; return false;/g),
-  ).toHaveLength(18)
+  ).toHaveLength(19)
   expect(current.match(/GetWindowThreadProcessId\(/g)).toHaveLength(3)
   expect(current.match(/GetAncestor\(/g)).toHaveLength(2)
   expect(current.match(/GetWindowLongPtrW\(/g)).toHaveLength(2)

@@ -332,6 +332,17 @@ export type Consolidation = {
 
 export interface Interface {
   readonly sync: (place: Place) => Effect.Effect<void>
+  /** Read a fresh reviewer's outward context without mirroring sources or counting them as used. */
+  readonly previewReviewContext?: (
+    place: Place,
+    input: {
+      personal: boolean
+      query: string
+      files: readonly string[]
+      kinds: readonly HabitKind[]
+      wrap: (lines: readonly string[]) => string
+    },
+  ) => Effect.Effect<{ digest?: string; recall?: string } | undefined>
   /** `documents`: the line about the repository's documents, which goes in with the memory index. */
   readonly digest: (
     place: Place,
@@ -805,8 +816,9 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       kinds?: readonly HabitKind[]
       facets?: readonly BrainSchema.Facet[]
     },
+    snapshot = false,
   ) {
-    yield* sync(place)
+    if (!snapshot) yield* sync(place)
     const outward = options.audience === "outward"
     const kinds = new Set<string>(["rule", ...(options.kinds ?? [...HABIT_KINDS, "failure"])])
     const facets = options.facets ? new Set(options.facets) : undefined
@@ -1057,9 +1069,10 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
       requestID?: string
       tier: "brief" | "review"
     },
+    snapshot = false,
   ) {
     if (input.budget <= 0 || input.kinds.length === 0) return { ids: [], tokens: 0 }
-    yield* sync(place)
+    if (!snapshot) yield* sync(place)
     const exclude = input.exclude ?? new Set<string>()
     const facets = input.facets ? new Set(input.facets) : undefined
     const wrap = input.wrap ?? ((lines: readonly string[]) => recallText(lines))
@@ -1115,9 +1128,52 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     const text = wrap(picked.map(line))
     const tokens = Token.estimate(text)
     const ids = picked.map((row) => row.id)
-    yield* used(ids, input.sessionID, input.tier, tokens, input.requestID)
+    if (!snapshot) yield* used(ids, input.sessionID, input.tier, tokens, input.requestID)
     return { text, ids, tokens, personal: ids, shared: "" }
   })
+
+  const previewReviewContext: NonNullable<Interface["previewReviewContext"]> = Effect.fnUntraced(
+    function* (place, input) {
+      // mirror() compares these same metadata before it reads or rewrites an entry. A stale mirror cannot
+      // predict what the first real review will read, so leave it to normal synchronization.
+      const sources = mirrors(place)
+      const rows = new Map(
+        (yield* db
+          .select()
+          .from(BrainSourceTable)
+          .where(
+            inArray(
+              BrainSourceTable.path,
+              sources.map((source) => source.path),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie)).map((row) => [row.path, row]),
+      )
+      for (const source of sources) {
+        const stat = yield* Effect.promise(() => statFollowing(source))
+        const known = rows.get(source.path)
+        if (
+          stat?.isFile()
+            ? !known ||
+              stat.size !== known.size ||
+              Math.round(stat.mtimeMs) !== known.mtime ||
+              source.held !== known.held
+            : known
+        )
+          return
+      }
+      const context = yield* digest(
+        place,
+        { audience: "outward", personal: input.personal, index: false, kinds: input.kinds },
+        true,
+      )
+      const recall = input.personal
+        ? yield* habits(place, { ...input, budget: HABITS.review, audience: "outward", tier: "review" }, true)
+        : undefined
+      return { digest: context.text, recall: recall?.text }
+    },
+  )
 
   const posting = Effect.fn("Brain.posting")(function* (place: Place, input: { sessionIDs: readonly string[] }) {
     yield* sync(place)
@@ -2881,6 +2937,7 @@ function make(db: BrainDatabase.Database, dirs: { readonly data: string; readonl
     sync,
     digest,
     habits,
+    previewReviewContext,
     posting,
     candidates,
     used: (ids, input) => used(ids, input.sessionID, input.tier, input.tokens, input.requestID),
