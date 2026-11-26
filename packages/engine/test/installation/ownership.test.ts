@@ -54,6 +54,35 @@ test("standalone ownership requires the exact current binary hash and uninstalls
   expect(await Bun.file(path.join(metadata, "keep-user-file")).text()).toBe("user data")
 })
 
+test("Windows standalone receipts support legacy and holder archives and reject malformed holder names", async () => {
+  await using fixture = await directory()
+  const executable = path.join(fixture.root, "vector.exe")
+  const metadata = path.join(fixture.root, ".vector-vector.exe")
+  await mkdir(metadata)
+  await Bun.write(executable, "synthetic executable")
+  const binarySha = createHash("sha256").update("synthetic executable").digest("hex")
+  const archiveSha = "a".repeat(64)
+  const holder = `vector-holder-x64-${"b".repeat(64)}.exe`
+  for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"])
+    await Bun.write(path.join(metadata, name), name)
+
+  for (const [schema, target, extra, valid] of [
+    ["1", "windows-x64-baseline", [], true],
+    ["2", "windows-x64-baseline", [holder], true],
+    ["1", "windows-x64-baseline", [holder], false],
+    ["2", "windows-x64-baseline", [], false],
+    ["2", "windows-x64-baseline", ["../" + holder], false],
+    ["2", "windows-x64-baseline", [holder, holder], false],
+    ["2", "windows-x64-baseline", [holder.toUpperCase()], false],
+    ["2", "windows-arm64", [holder], false],
+    ["2", "linux-x64-baseline", [holder], false],
+  ] as const) {
+    const fields = ["vector-standalone", schema, "1.2.3", target, "latest", "vector.exe", binarySha, archiveSha, ...extra]
+    await Bun.write(path.join(metadata, "receipt.tsv"), fields.join("\t") + "\n")
+    expect((await Standalone.receipt(executable))?.version).toBe(valid ? "1.2.3" : undefined)
+  }
+})
+
 test("global package listings cannot claim an unrelated running executable", async () => {
   await using fixture = await directory()
   const executable = path.join(fixture.root, "vector")

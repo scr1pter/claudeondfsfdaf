@@ -27,7 +27,12 @@ export type Ports = {
     readonly codiumMode?: boolean
   } | undefined>
   readonly visibility?: (repositoryId: number) => Promise<"public" | "private" | "internal" | undefined>
-  readonly repository?: (fullName: string) => Promise<Repository | undefined>
+  readonly repository?: (input: {
+    readonly fullName: string
+    readonly account: string
+    /** The immutable repository id from a previously selected mapping. */
+    readonly id?: number
+  }) => Promise<Repository | undefined>
   /**
    * Whether this platform's jobs may run in Actions: it is an enabled run source (R-C8/R-A8). Absent, none may. Routing
    * reads no binding or visibility for a platform that may not.
