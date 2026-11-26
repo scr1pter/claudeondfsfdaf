@@ -1,7 +1,7 @@
 // Whether a change is trivial (VectorScope upgrade contract §1.2 and §4 VS-24 items 1 and 2): whitespace, docs,
 // rename or comment-only under strict rules, never anything sensitive or behaviour-bearing. Pure and browser-safe.
-// Nothing calls it yet: VS-24 wiring calls it inside Review.run under `trivial: "skip"`, and the GitHub skip waits for
-// the @vector merge.
+// The engine supplies facts from its private Git view for the opt-in local skip. The GitHub integration waits for
+// its own skip-state support.
 //
 // A change is trivial only when every changed file matches a positive rule, and the first file that does not names
 // why. The caller passes EVERY changed file, before classifyFiles' ignore rules, so lockfiles, ignored, generated and

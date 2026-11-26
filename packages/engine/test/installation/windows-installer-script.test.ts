@@ -150,13 +150,14 @@ test("install.ps1's deferred upgrade path runs no cmdlet that needs command disc
   )
   expect(spans.parentTicks!.text).toContain("catch { return '' } finally { $process.Dispose() }")
 
-  // Every hash goes through fileSha256: the existing install's receipt check, the archive check and the new receipt.
+  // Existing binary, archive, new binary, and staged or promoted holder hashes use the same function.
   expect(text.toLowerCase()).not.toContain("get-filehash")
-  expect(text.match(/\bfileSha256\b/g) ?? []).toHaveLength(4)
+  expect(text.match(/\bfileSha256\b/g) ?? []).toHaveLength(5)
   for (const site of [
     "(fileSha256 $destination) -cne $fields[6]",
     "(fileSha256 $archive) -cne $release.sha256",
     "$binaryHash = fileSha256 $stagedBinary",
+    "(fileSha256 $path) -cne $digest",
   ])
     expect(text).toContain(site)
   expect(spans.fileSha256!.text).toContain("$stream = [IO.File]::OpenRead($path)")

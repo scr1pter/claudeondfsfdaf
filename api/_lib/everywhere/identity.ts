@@ -1232,6 +1232,7 @@ export type MappingVerdict =
         | "not-connector"
         | "not-linked"
         | "not-allowed"
+        | "repository-unverified"
         | "wrong-platform"
         | "bot"
         | "automation"
@@ -1337,6 +1338,7 @@ export async function setMappingByWord(
     readonly userId: string
     readonly actor: LinkActor
     readonly repository: RepoRef
+    readonly verifyRepository?: (account: string) => Promise<RepoRef | undefined>
     /** Whether a Vector account may sponsor runs (the intake's perk check, VE-06). */
     readonly maySponsor: (account: string) => boolean | Promise<boolean>
   },
@@ -1344,8 +1346,8 @@ export async function setMappingByWord(
   if (platformOf(input.installation) !== "slack") return { ok: false, code: "wrong-platform" }
   const place = checkPlace(input.place)
   const userId = checkUser(input.installation, input.userId)
-  const repositories = checkRepositories([input.repository])
-  if (!repositories || repositories.some((repository) => repository.id === undefined)) return { ok: false, code: "not-allowed" }
+  let repositories = checkRepositories([input.repository])
+  if (!repositories || (!input.verifyRepository && repositories[0]?.id === undefined)) return { ok: false, code: "not-allowed" }
   const refusal = actorRefusal(input.actor)
   if (refusal) return { ok: false, code: refusal }
   const install = await readInstallSnapshot(ctx.store, input.installation)
@@ -1358,6 +1360,15 @@ export async function setMappingByWord(
   if ((await input.maySponsor(link.record.account)) !== true) return { ok: false, code: "not-allowed" }
   if (existing && existing.setBy === install.record.connector && link.record.account !== install.record.connector)
     return { ok: false, code: "not-connector" }
+  if (input.verifyRepository) {
+    await checkAccount(ctx, link.record.account)
+    await checkAccount(ctx, install.record.connector)
+    const verified = await input.verifyRepository(link.record.account)
+    repositories = checkRepositories([verified])
+    if (!repositories || repositories[0]?.id === undefined ||
+      repositories[0].fullName.toLowerCase() !== input.repository.fullName.toLowerCase())
+      return { ok: false, code: "repository-unverified" }
+  }
   const mapping: RepoMapping = {
     revision: randomBytes(16).toString("base64url"),
     place,

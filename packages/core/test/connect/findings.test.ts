@@ -170,6 +170,14 @@ describe("the verdict", () => {
         findings: [],
       }),
     ).toBe("incomplete")
+    // VS-34: a file held back from the model is not reviewed (I-7), so it is never clean.
+    expect(
+      ConnectFindings.verdict({
+        outcome: outcome({ skipped: [{ path: "config/prod/.envrc", reason: "held-back" }] }),
+        findings: nitsOnly,
+      }),
+    ).toBe("incomplete")
+    expect(ConnectFindings.skipNotes([{ reason: "held-back" }])).toEqual(["1 file skipped: held back from the model"])
     expect(ConnectFindings.verdict({ settingsEdited: true, outcome: outcome(), findings: [] })).toBe("incomplete")
     expect(ConnectFindings.verdict({ settingsEdited: true, findings: [] })).toBe("incomplete")
   })

@@ -23,6 +23,18 @@ export const check = Effect.fn("SessionPosting.check")(function* (input: Input) 
   const git = yield* Git.Service
   const place = yield* instruction.place()
   const contributors = yield* lineage(input.sessionIDs ?? [], sessions.children)
+  // Forgetting a private Brain document removes its text and use records. The conversation's
+  // owner-only audience survives, including on imports/forks. Only the owner can release its output.
+  for (const id of contributors) {
+    if (yield* sessions.isOwnerOnly(id))
+      return {
+        status: "ask" as const,
+        parts: input.parts,
+        links: 0,
+        dropped: input.parts.map((text, part) => ({ part, text })),
+        ownerOnly: true as const,
+      }
+  }
   return yield* BrainPosting.run(place, {
     parts: input.parts,
     typed: input.typed,
@@ -51,6 +63,10 @@ export const headless = Effect.fn("SessionPosting.headless")(function* (
   input: Input & { readonly log: (line: string) => void },
 ) {
   const result = yield* check(input)
+  if ("ownerOnly" in result)
+    return yield* new Refused({
+      message: "This post uses an owner-only conversation. The owner must review it before anything is sent.",
+    })
   if (result.status === "ask")
     return yield* new Refused({
       message: `Vector did not post this: ${result.dropped.length === 1 ? "1 sentence of your text repeats" : `${result.dropped.length} sentences of your text repeat`} what Vector knows about you.`,

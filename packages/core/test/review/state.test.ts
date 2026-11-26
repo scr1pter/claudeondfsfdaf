@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { GithubAgents } from "@vectordevai/core/github-agents"
 import { DEFAULT_MENTIONS, parseReviewCommand } from "@vectordevai/core/review/command"
+import { planReviewBatches } from "@vectordevai/core/review/plan"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
 import {
+  advanceBatchCursor,
+  batchCoverage,
+  batchCursorDigest,
+  readStickyBatchCursor,
+  recordBatchCoverage,
+  restoreBatchCursor,
+  startBatchCursor,
   classifyPrior,
   decodeState,
   emptyState,
@@ -96,6 +104,17 @@ describe("encodeState and decodeState", () => {
   test("round-trip every field", () => {
     expect(decodeState(encodeState(FULL))).toEqual(FULL)
     expect(decodeState(encodeState(emptyState()))).toEqual(emptyState())
+  })
+
+  test("an optional full retry after a budget stop round-trips independently of the analyzed head", () => {
+    const pending = { ...FULL, retryFullAfterBudget: true as const }
+    expect(readState(stateMarker(pending))).toEqual(pending)
+    expect(rawJson(encodeState(FULL))).not.toHaveProperty("q")
+    const malformed = { ...rawJson(encodeState(FULL)), q: "1" }
+    expect(decodeState(base64url(JSON.stringify(malformed)))?.retryFullAfterBudget).toBeUndefined()
+    const run = { head: HEAD, base: BASE, mode: "full" as const, now: NOW }
+    expect(nextState(pending, { ...run, failed: true }).retryFullAfterBudget).toBe(true)
+    expect(nextState(pending, run).retryFullAfterBudget).toBeUndefined()
   })
 
   test("use base64url, short keys and a shared path table", () => {
@@ -350,7 +369,10 @@ describe("markers", () => {
   test("the review marker", () => {
     const marker = reviewMarker(HEAD, "8f3c21aa")
     expect(marker).toBe("<!-- vector-review:review head=e5f6a7b run=8f3c21aa -->")
-    expect(parseReviewMarker(`Vectorscope review of \`e5f6a7b\`.\n${marker}`)).toEqual({ head: "e5f6a7b", run: "8f3c21aa" })
+    expect(parseReviewMarker(`Vectorscope review of \`e5f6a7b\`.\n${marker}`)).toEqual({
+      head: "e5f6a7b",
+      run: "8f3c21aa",
+    })
     expect(parseReviewMarker("nothing")).toBeUndefined()
   })
 
@@ -408,7 +430,9 @@ describe("earlier findings", () => {
     )
     expect(followAlso(prior, changes).also).toEqual([42, 122])
     expect(followAlso({ ...prior, side: "LEFT" }, changes).also).toEqual([40, 90, 120])
-    expect(priorFromComment({ id: 1, body: body.replace(/The same[^\n]*\n\n/, ""), path: "src/a.ts", line: 12 })?.also).toBeUndefined()
+    expect(
+      priorFromComment({ id: 1, body: body.replace(/The same[^\n]*\n\n/, ""), path: "src/a.ts", line: 12 })?.also,
+    ).toBeUndefined()
   })
 
   test("priorFromState moves lines to this head, and a deleted line becomes null", () => {
@@ -945,5 +969,125 @@ describe("nextState", () => {
     expect(nextState(previous, { head: HEAD, base: BASE, mode: "full", now: NOW, notedHead: HEAD }).notedHead).toBe(
       HEAD,
     )
+  })
+})
+
+describe("durable review batch cursor (VS-19)", () => {
+  const base = "1".repeat(40)
+  const head = "2".repeat(40)
+  const paths = ["src/a.ts", "src/b.ts", "src/z.ts"]
+  const files = parseUnifiedDiff(
+    paths
+      .map((p) => `diff --git a/${p} b/${p}\n--- a/${p}\n+++ b/${p}\n@@ -1 +1 @@\n-old\n+PRIVATE_SOURCE_IGNORED`)
+      .join("\n"),
+  )
+  const spec = {
+    base,
+    head,
+    files,
+    limits: { maxFiles: 1, maxChangedLines: 20, maxDiffChars: 4000 },
+    clusters: new Map(paths.map((path) => [path, "UNTRUSTED_INSTRUCTION"])),
+  }
+  const plan = planReviewBatches(spec)
+  const first = startBatchCursor(plan)
+  const ack = (i: number) => ({ id: plan.batches[i]!.id, head, covered: plan.batches[i]!.paths, complete: true })
+  test("advances exactly once on whole successful coverage and resumes using the authenticated checkpoint", () => {
+    expect(batchCoverage(plan, first)).toMatchObject({ covered: [], unreviewed: paths, complete: false })
+    for (const bad of [
+      { ...ack(0), complete: false },
+      { ...ack(0), covered: [] },
+      { ...ack(0), covered: [paths[0]!, paths[0]!] },
+      { ...ack(0), head: base },
+      { ...ack(0), covered: [paths[2]!] },
+      ack(1),
+    ]) {
+      expect(advanceBatchCursor(plan, first, bad)).toBeUndefined()
+    }
+    const next = advanceBatchCursor(plan, first, ack(0))!
+    expect(advanceBatchCursor(plan, next, ack(0))).toBe(next)
+    const progress = batchCoverage(plan, next)!
+    expect(progress).toMatchObject({
+      covered: [paths[0]],
+      unreviewed: paths.slice(1),
+      complete: false,
+      context: {
+        coveredFiles: 1,
+        related: [
+          { path: paths[0], batch: 1, covered: true },
+          { path: paths[2], batch: 3, covered: false },
+        ],
+      },
+    })
+    expect(JSON.stringify(progress.context)).not.toContain("PRIVATE_SOURCE")
+    expect(JSON.stringify(progress.context)).not.toContain("UNTRUSTED_INSTRUCTION")
+    const before = { ...emptyState(), head: base, base, costUsd: 2, reviews: 3, unreviewed: ["separate.ts"] }
+    const pending = recordBatchCoverage(before, plan, next)!
+    expect(pending).toMatchObject({
+      head: base,
+      unreviewed: [...paths.slice(1), "separate.ts"],
+      reviews: 3,
+      costUsd: 2,
+    })
+    const encoded = encodeState(pending)
+    const saved = decodeState(encoded)!
+    expect(saved.batch).toEqual(next)
+    const restored = restoreBatchCursor(plan, saved.batch, batchCursorDigest(next))!
+    const second = advanceBatchCursor(plan, restored, ack(1))!
+    const final = advanceBatchCursor(plan, second, ack(2))!
+    expect(batchCoverage(plan, final)).toMatchObject({ covered: paths, unreviewed: [], complete: true })
+    expect(recordBatchCoverage(pending, plan, final)).toMatchObject({ head: base, unreviewed: ["separate.ts"] })
+    const done = recordBatchCoverage({ ...pending, unreviewed: paths.slice(1) }, plan, final)!
+    expect(done.head).toBe(head)
+    expect(done.batch).toBeUndefined()
+    expect(done.unreviewed).toEqual([])
+  })
+  test("refuses guessed, forged, out-of-plan and other-head cursors even if the forged prefix is plausible", () => {
+    const next = advanceBatchCursor(plan, first, ack(0))!
+    const second = advanceBatchCursor(plan, next, ack(1))!
+    const guessed = JSON.parse(JSON.stringify(second))
+    expect(batchCoverage(plan, guessed)).toBeUndefined()
+    expect(batchCoverage(plan, { ...second, covered: 77 })).toBeUndefined()
+    expect(restoreBatchCursor(plan, guessed, batchCursorDigest(next))).toBeUndefined()
+    expect(
+      restoreBatchCursor(plan, { ...next, covered: 30 }, batchCursorDigest({ ...next, covered: 30 })),
+    ).toBeUndefined()
+    const changed = planReviewBatches({ ...spec, head: "3".repeat(40) })
+    expect(batchCoverage(changed, next)).toBeUndefined()
+    expect(restoreBatchCursor(changed, next, batchCursorDigest(next))).toBeUndefined()
+    expect(
+      restoreBatchCursor(planReviewBatches({ ...spec, base: head }), next, batchCursorDigest(next)),
+    ).toBeUndefined()
+    const comments = (cursor: typeof next, id: number, login: string) => ({
+      id,
+      user: { login },
+      body: SUMMARY_MARKER + "\n" + stateMarker({ ...emptyState(), batch: cursor }),
+    })
+    expect(readStickyBatchCursor(plan, [comments(second, 2, "untrusted-user")], "vector[bot]")).toBeUndefined()
+    expect(
+      readStickyBatchCursor(
+        plan,
+        [comments(second, 2, "untrusted-user"), comments(second, 8, "vector[bot]"), comments(next, 6, "vector[bot]")],
+        "vector[bot]",
+      ),
+    ).toEqual(next)
+    const corrupt = btoa(JSON.stringify({ v: 1, r: 4, c: 3, j: { ...next, completed: "1" } })).replace(/=+$/, "")
+    expect(decodeState(corrupt)).toMatchObject({ reviews: 4, costUsd: 3, failed: true })
+  })
+  test("cap exhaustion is still partial across storage and ordinary posting retries", () => {
+    const big = { ...files[2]!, additions: 30 }
+    const mixed = planReviewBatches({ ...spec, files: [files[0]!, big] })
+    const cursor = advanceBatchCursor(mixed, startBatchCursor(mixed), {
+      head,
+      id: mixed.batches[0]!.id,
+      covered: [paths[0]!],
+      complete: true,
+    })!
+    expect(batchCoverage(mixed, cursor)).toMatchObject({ next: undefined, complete: false, unreviewed: [paths[2]] })
+    const before = recordBatchCoverage({ ...emptyState(), head, base }, mixed, cursor)!
+    expect(before.head).toBeUndefined()
+    const retry = nextState(before, { head, base, mode: "full", now: 0 })
+    expect(readState(stateMarker(retry))).toMatchObject({ batch: cursor, unreviewed: [paths[2]] })
+    expect(retry.head).toBeUndefined()
+    expect(nextState(retry, { head: base, base, mode: "full", now: 0 }).batch).toBeUndefined()
   })
 })

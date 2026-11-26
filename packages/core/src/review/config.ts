@@ -16,6 +16,13 @@ import {
   type ZdrAttestedEntry,
 } from "./types"
 
+// The desktop accepts a diff and checkout files, without immutable base and head blob reads for strict verification.
+export const DESKTOP_CARDS_NOTICE = "Brain context cards are available in local CLI reviews. Desktop reviews omit them."
+export const DESKTOP_STRICT_NOTICE =
+  'Desktop reviews use ordinary finding selection. The engine review supports "guardrail": "strict".'
+
+export const DESKTOP_DIAGNOSTICS_NOTICE = "Offline diagnostics did not run. They require a Linux engine review."
+
 export const REVIEW_CONFIG_PATH = ".vector/review.json"
 export const REVIEW_RULES_PATHS = [".vector/review.md", ".vector/REVIEW.md"] as const
 export const MAX_RULES_BYTES = 16 * 1024
@@ -143,16 +150,22 @@ function attestedEntry(
 }
 
 // Keys whose sources are tagged (contract §1.1, invariant I-2). parseReviewConfig reads none of them: review.json's
-// copy is an unknown key and the environment's is not read, so no surface takes "zdr" before it enforces it.
-// mergeReviewConfig is their only reader.
+// copy is an unknown key and the environment's is not read, so no surface takes "zdr" or "secrets" before it enforces
+// it. mergeReviewConfig is their only reader.
 // - Raise-only: each level is stricter than the one before. Any source may raise the key and none may lower it, and a
-//   value that is not a level reads as the strictest.
+//   value that is not a level reads as the strictest. VS-34's `holdback` (addendum A §1) is the strictest of the global
+//   config, review.json and REVIEW_HOLDBACK, as `privacy` is. The global source is the user config's hidden `review`
+//   block since SF-15 (core v1/config/review.ts). Review.run applies holdback's payload half since SF-13b and the
+//   reviewer's read and grep tools since SF-14, and the desktop runner both halves since SF-15.
 const RAISE_ONLY = {
   privacy: { levels: ["standard", "zdr"], env: "REVIEW_PRIVACY" },
+  holdback: { levels: ["off", "secrets"], env: "REVIEW_HOLDBACK" },
 } as const satisfies Partial<Record<keyof ReviewConfig, { levels: readonly string[]; env: string }>>
 // - Trusted-only: read from the surface's trusted source alone, never from the working tree or the environment. This
 //   holds for `zdrAttested`'s attestation objects (VS-33) as for its text entries, and for VS-30's `runtime`.
 const TRUSTED_ONLY = {
+  diagnostics: oneOf(["off", "offline"]),
+  ruleCheck: oneOf(["off", "strict"]),
   zdrAttested: attestations,
   runtime: oneOf(["off", "ask"]),
 } satisfies Partial<Record<keyof ReviewConfig, Field>>
@@ -175,6 +188,7 @@ const FIELDS: Record<PlainKey, Field> = {
   modelEvidence: oneOf(["off", "warn"]),
   trivial: oneOf(["review", "skip"]),
   impact: oneOf(["grep", "graph"]),
+  cards: oneOf(["off", "brain"]),
   guardrail: oneOf(["off", "strict"]),
   scopeGate: oneOf(["off", "introduced"]),
   verifyEvidence: oneOf(["off", "certificate"]),
@@ -186,6 +200,7 @@ const FIELDS: Record<PlainKey, Field> = {
   skipAuthors: strings,
   skipLabels: strings,
   skipBranches: strings,
+  largeChanges: oneOf(["skip", "batch"]),
   maxFiles: number({ min: 1, integer: true }),
   maxChangedLines: number({ min: 1, integer: true }),
   // diffBudgetChars never goes below 8,000 characters, so a lower cap would do nothing.
@@ -212,6 +227,7 @@ const RETIRED: Record<string, string> = {
 }
 
 const ENV: { name: string; key: PlainKey; kind: "number" | "text" }[] = [
+  { name: "REVIEW_CARDS", key: "cards", kind: "text" },
   { name: "REVIEW_MIN_SEVERITY", key: "minSeverity", kind: "text" },
   { name: "REVIEW_MIN_CONFIDENCE", key: "minConfidence", kind: "number" },
   { name: "REVIEW_MAX_COMMENTS", key: "maxComments", kind: "number" },
@@ -238,42 +254,6 @@ const UNAPPLIED: Record<
   (typeof UNAPPLIED_REVIEW_KEYS)[number],
   { applies: (config: ReviewConfig) => boolean; warning: string }
 > = {
-  trivial: {
-    applies: (config) => config.trivial === "skip",
-    warning: '"trivial": "skip" is not applied yet: every change is still reviewed.',
-  },
-  maxInputTokens: {
-    applies: (config) => (config.maxInputTokens ?? 0) > 0,
-    warning: '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
-  },
-  impact: {
-    applies: (config) => config.impact === "graph",
-    warning: '"impact": "graph" is not applied yet: related code still comes from git grep.',
-  },
-  guardrail: {
-    applies: (config) => config.guardrail === "strict",
-    warning: '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
-  },
-  // Only under "strict": without it the key is ignored (settle's note), so it is never also "not applied".
-  scopeGate: {
-    applies: (config) => config.scopeGate === "introduced" && config.guardrail === "strict",
-    warning: '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.',
-  },
-  // The same: only under "strict".
-  verifyEvidence: {
-    applies: (config) => config.verifyEvidence === "certificate" && config.guardrail === "strict",
-    warning:
-      '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.',
-  },
-  depth: {
-    applies: (config) => config.depth === "auto",
-    warning: '"depth": "auto" is not applied yet: every review still runs its usual passes.',
-  },
-  // Only under "auto": without it the key is ignored (settle's note), so it is never also "not applied".
-  lenses: {
-    applies: (config) => config.lenses === "high" && config.depth === "auto",
-    warning: '"lenses": "high" is not applied yet: no lens passes run.',
-  },
   // A sourced key (TRUSTED_ONLY): settle never sees it, so mergeReviewConfig gives this warning.
   runtime: {
     applies: (config) => config.runtime === "ask",
@@ -290,6 +270,10 @@ function assign(config: ReviewConfig, key: PlainKey, value: unknown, label: stri
     return
   }
   if (parsed.note) warnings.push(`${label}: ${parsed.note}.`)
+  if (key === "largeChanges" && parsed.value === "skip") {
+    delete config.largeChanges
+    return
+  }
   Object.assign(config, { [key]: parsed.value })
 }
 
@@ -331,24 +315,38 @@ export function parseReviewConfig(
   input: { json?: string; env?: Record<string, string | undefined>; trigger?: Trigger } = {},
 ): { config: ReviewConfig; warnings: string[] } {
   const warnings: string[] = []
-  const config = settle(readJson(input.json, warnings), input.env ?? {}, input.trigger, warnings)
+  // The GitHub job still uses this entry point with an automatic or command trigger. Local replays of those
+  // triggers use mergeReviewConfig and supply their actual surface.
+  const config = settle(
+    readJson(input.json, warnings),
+    input.env ?? {},
+    input.trigger,
+    warnings,
+    input.trigger === "auto" || input.trigger === "command",
+  )
   return { config, warnings }
 }
 
 /**
- * Review settings from sources tagged with where each comes from (contract §1.1). Nothing calls this yet: the surfaces
- * switch to it when the route rules are enforced (VS-23b to VS-23d), and until then they read parseReviewConfig, which
- * ignores the keys below.
- * - `surface`: "local" for the CLI, the desktop and the eval's replay entry point, whose global config is the
- *   operator's (the eval passes its own settings as `global`); "github" for the CI job.
- * - `global`: the global config's `review` block (VS-23d adds it to the config schema).
- * - `json`: the one review.json the surface reads, at the base commit or in the working tree. `privacyOnly` is the
- *   desktop's base blob when a pull request changes review.json: it may raise `privacy`, and every other key keeps
- *   today's defaults there.
+ * Review settings from sources tagged with where each comes from (contract §1.1). `vector review`, the local review
+ * service (through the CLI's executeLocalReview) and the eval's replay call it on "local" from VS-23b, which enforces
+ * the route rules there. Since VS-23d (SF-15) the CLI and the local service pass the user config's hidden `review`
+ * block as `global`, the engine server reads that block alone for the review sessions it holds (engine
+ * review/route.ts serverPolicy), and the desktop calls this too, with the block the engine's global config route
+ * returns. The eval's replay passes none: an operator's own settings never change a replay. The GitHub job (SF-37) and
+ * connect's consent preview still read parseReviewConfig, which ignores the keys below.
+ * - `surface`: "local" for the CLI, the desktop and the eval's replay entry point; "github" for the CI job.
+ * - `global`: the user global config's `review` block (core v1/config/review.ts), read loosely.
+ * - `json`: the review.json read at the base, in the working tree, or at a service-pinned non-base snapshot. `privacyOnly` is the
+ *   desktop's base blob when a pull request changes review.json: it may raise the raise-only keys (`privacy`, VS-34's
+ *   `holdback`), and every other key keeps today's defaults there.
  *
  * Every key outside RAISE_ONLY and TRUSTED_ONLY is read exactly as parseReviewConfig reads it. `privacy` is the
  * strictest of the global config, review.json and REVIEW_PRIVACY, and a review.json that cannot be read but mentions it
- * counts as "zdr". `zdrAttested` and VS-30's `runtime` come from the trusted source alone: the global config on "local"
+ * counts as "zdr". VS-34's `holdback` is the strictest of the global config, review.json and REVIEW_HOLDBACK in the
+ * same way ("secrets" for one that cannot be read but mentions it); Review.run applies it to the prompt since SF-13b
+ * and to the reviewer's read and grep tools since SF-14, so it gives no warning. No pull request text is a source of
+ * either, and a pull request's own review.json can only raise them. `zdrAttested` and VS-30's `runtime` come from the trusted source alone: the global config on "local"
  * (your own branch can hold other people's commits), review.json at the base on "github" (a pull request can edit the
  * workflow and its environment). Neither has an environment variable, and a value from any other source is ignored with
  * a warning. `zdrAttested`'s entries are text or VS-33's attestation objects (`{ id, operator, project?, region?,
@@ -361,7 +359,7 @@ export function parseReviewConfig(
 export function mergeReviewConfig(input: {
   surface: "local" | "github"
   global?: Partial<Record<SourcedReviewKey, unknown>>
-  json?: { at: "base" | "working-tree"; text: string | undefined; privacyOnly?: boolean }
+  json?: { at: "base" | "working-tree" | "snapshot"; text: string | undefined; privacyOnly?: boolean }
   env?: Record<string, string | undefined>
   trigger?: Trigger
 }): { config: ReviewConfig; warnings: string[] } {
@@ -369,20 +367,40 @@ export function mergeReviewConfig(input: {
   const env = input.env ?? {}
   const text = input.json?.text
   const source = readJson(text, warnings)
+  // A gate can only come from the base blob, explicitly identified by the caller. Leave the old decoder
+  // and REVIEW_FAIL_ON untouched for their existing values; neither can activate or lower this gate.
+  const gated = input.json?.at === "base" && !input.json.privacyOnly && source?.failOn === "blocking-or-incomplete"
   const config = settle(
     input.json?.privacyOnly || !source
       ? undefined
-      : Object.fromEntries(Object.entries(source).filter(([key]) => !SOURCED_REVIEW_KEYS.some((item) => item === key))),
+      : Object.fromEntries(
+          Object.entries(source).filter(
+            ([key]) => !(gated && key === "failOn") && !SOURCED_REVIEW_KEYS.some((item) => item === key),
+          ),
+        ),
     env,
     input.trigger,
     warnings,
+    input.surface === "github",
   )
-  const sources: { values: Record<string, unknown> | undefined; trusted: boolean; label: (key: string) => string }[] = [
-    { values: input.global, trusted: input.surface === "local", label: (key) => `review.${key} in the global config` },
+  if (gated) config.failOn = "blocking-or-incomplete"
+  const sources: {
+    values: Record<string, unknown> | undefined
+    trusted: (key: string) => boolean
+    label: (key: string) => string
+  }[] = [
+    {
+      values: input.global,
+      trusted: () => input.surface === "local",
+      label: (key) => `review.${key} in the global config`,
+    },
     {
       values: source,
-      // The desktop's base blob may raise `privacy` and nothing else, so it is never the trusted source.
-      trusted: input.surface === "github" && input.json?.at === "base" && !input.json.privacyOnly,
+      // The desktop's base blob may raise the raise-only keys and nothing else, so it is never the trusted source.
+      trusted: (key) =>
+        input.json?.at === "base" &&
+        !input.json.privacyOnly &&
+        (input.surface === "github" || key === "ruleCheck" || key === "diagnostics"),
       label: (key) => `${REVIEW_CONFIG_PATH}: "${key}"`,
     },
   ]
@@ -416,8 +434,12 @@ export function mergeReviewConfig(input: {
   for (const [key, field] of Object.entries(TRUSTED_ONLY))
     for (const item of sources.filter((entry) => given(entry.values, key))) {
       const label = item.label(key)
-      if (!item.trusted) {
-        warnings.push(`${label} is ignored: "${key}" is read only from ${trusted}.`)
+      if (!item.trusted(key)) {
+        const authority =
+          (key === "ruleCheck" || key === "diagnostics") && input.surface === "local"
+            ? "the global config or review.json on the base branch"
+            : trusted
+        warnings.push(`${label} is ignored: "${key}" is read only from ${authority}.`)
         continue
       }
       const parsed = field.parse(item.values?.[key])
@@ -437,6 +459,7 @@ export function mergeReviewConfig(input: {
       (key) => SOURCED_REVIEW_KEYS.some((item) => item === key) && UNAPPLIED[key].applies(config),
     ).map((key) => UNAPPLIED[key].warning),
   )
+  if (input.trigger === "desktop" && config.diagnostics === "offline") warnings.push(DESKTOP_DIAGNOSTICS_NOTICE)
   return { config, warnings }
 }
 
@@ -446,6 +469,7 @@ function settle(
   env: Record<string, string | undefined>,
   trigger: Trigger | undefined,
   warnings: string[],
+  github: boolean,
 ): ReviewConfig {
   // New arrays, so a caller that mutates its config never changes the shared defaults.
   const config: ReviewConfig = {
@@ -508,10 +532,41 @@ function settle(
         ? '"depth": "auto" keeps "security": "off": no band adds the security pass or the access lens.'
         : '"depth": "auto" keeps "security": "off": no band adds the security pass.',
     )
+  // Until SF-38 can record a policy skip without marking the commit reviewed, GitHub reviews the change.
+  if (github && config.trivial === "skip") {
+    delete config.trivial
+    warnings.push('GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.')
+  }
+  if (github || trigger === "desktop") {
+    if (config.cards === "brain")
+      warnings.push(github ? "Brain context cards are available in local CLI reviews. GitHub reviews omit them." : DESKTOP_CARDS_NOTICE)
+    delete config.cards
+  }
+  if (config.largeChanges === "batch" && (github || trigger === "desktop"))
+    warnings.push(
+      github
+        ? "GitHub reviews still use the existing size limits. Resumable batches run in the local CLI."
+        : "Desktop reviews use ordinary diff coverage. Resumable batches run in the local CLI.",
+    )
+  if (!github && trigger === "desktop" && config.impact === "graph")
+    warnings.push('Desktop reviews use grep for related code. The engine review supports "impact": "graph".')
+  if (!github && trigger === "desktop" && config.guardrail === "strict") warnings.push(DESKTOP_STRICT_NOTICE)
+  if (!github && trigger === "desktop" && (config.maxInputTokens ?? 0) > 0)
+    warnings.push("Desktop reviews with a token cap require a first-request estimate from the local engine.")
   warnings.push(
     ...UNAPPLIED_REVIEW_KEYS.filter((key) => UNAPPLIED[key].applies(config)).map((key) => UNAPPLIED[key].warning),
   )
   return config
+}
+
+const STRICT_SETTINGS = { verifyPolicy: "shared", verify: "all", minSeverity: "blocking", nits: false } as const
+type StrictSettings = Pick<ReviewConfig, "guardrail" | keyof typeof STRICT_SETTINGS>
+
+/** The engine applies these settings together, including when a caller supplied the configuration directly. */
+export function strictReviewConfig<T extends StrictSettings>(
+  config: T,
+): Omit<T, keyof typeof STRICT_SETTINGS> & StrictSettings {
+  return config.guardrail === "strict" ? { ...config, ...STRICT_SETTINGS } : config
 }
 
 export interface ReviewRules {
@@ -615,4 +670,18 @@ export function rulesForPaths(rules: ReviewRules, changedPaths: string[], extra:
   return rulePartsForPaths(rules, changedPaths, extra)
     .map((part) => part.text)
     .join("\n\n")
+}
+
+// The prompt and the citation gate share the same source parts. Scope indexes are shown only
+// when the model may cite them. They are headings and cannot themselves establish a rule.
+export function rulePromptInput(
+  rules: ReviewRules,
+  changedPaths: string[],
+  config: Pick<ReviewConfig, "paths" | "ruleCheck">,
+) {
+  if (config.ruleCheck !== "strict") return { rules: rulesForPaths(rules, changedPaths, config.paths) }
+  const ruleParts = rulePartsForPaths(rules, changedPaths, config.paths).map((part) =>
+    part.from === "paths" ? { ...part, text: `## paths[${part.index}]\n${part.text}` } : part,
+  )
+  return { rules: ruleParts.map((part) => part.text).join("\n\n"), ruleParts }
 }

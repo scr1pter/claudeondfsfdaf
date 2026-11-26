@@ -107,17 +107,19 @@ jobs:
 
       - name: Run the Vector Local tests with no network
         working-directory: packages/engine
+        # Give the unprivileged runner its own home after the outer sudo starts the namespace as root.
         run: |
           set -euo pipefail
           for file in \
             test/local-mode/air-gap.test.ts \
             test/tool/shell-sandbox-local.test.ts \
             test/tool/research-offline.test.ts \
-            test/local-mode/local-run.test.ts
+            test/local-mode/local-run.test.ts \
+            test/review/fix.test.ts
           do
             echo "::group::$file"
             sudo unshare --net -- sh -c \
-              'ip link set lo up && exec sudo -E -u "$1" env PATH="$2" GITHUB_ACTIONS=false bun test --timeout 30000 "$3"' \
+              'ip link set lo up && exec sudo -E -H -u "$1" env PATH="$2" GITHUB_ACTIONS=false VECTOR_FIX_SANDBOX_CI=1 bun test --timeout 30000 "$3"' \
               sh "$USER" "$PATH" "$file"
             echo "::endgroup::"
           done
