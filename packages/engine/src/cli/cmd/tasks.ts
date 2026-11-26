@@ -684,7 +684,7 @@ export async function formatTaskResult(
   if (backgroundStop && !listed.tasks.length)
     return listed.truncated
       ? `No listed background subagents were stopped.\n${partialBackground}`
-      : "No background subagents are running."
+      : "No background subagents were stopped."
   const empty =
     args.action === "resume"
       ? args.interrupted
@@ -694,13 +694,19 @@ export async function formatTaskResult(
         ? "No foreground subagents to move."
         : undefined
   if (!listed.tasks.length && empty) return empty
+  // Tasks can finish or be interrupted while the Stop request is in flight.
+  const stopped = backgroundStop ? listed.tasks.filter((task) => task.status === "stopped").length : 0
   const head =
     args.action === "resume"
       ? [`Resumed ${count(listed.tasks.length, "subagent")}.`]
       : args.action === "promote"
         ? [`Moved ${count(listed.tasks.length, "subagent")} to the background.`]
         : backgroundStop
-          ? [`Stopped ${count(listed.tasks.length, "background subagent")}.`]
+          ? [
+              stopped
+                ? `The server reported ${count(stopped, "background subagent")} as stopped.`
+                : "The server reported no background subagents as stopped.",
+            ]
           : []
   return [
     ...head,
