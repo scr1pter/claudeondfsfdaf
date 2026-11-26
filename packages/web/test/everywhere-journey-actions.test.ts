@@ -7,7 +7,7 @@ import {
   registerRunSettleListener,
   type RunEnd,
 } from "../../../api/_lib/cloud-agents-runs"
-import { createCloudPorts } from "../../../api/_lib/everywhere/adapters/cloud-agents"
+import { createCloudPorts, createRunBodyVisibility } from "../../../api/_lib/everywhere/adapters/cloud-agents"
 import { drainAfter } from "../../../api/_lib/everywhere/after"
 import type { EverywhereConfig } from "../../../api/_lib/everywhere/config"
 import { createJobEvents } from "../../../api/_lib/everywhere/events"
@@ -534,6 +534,7 @@ async function throughActions(w: ActionsWorld) {
       fetcher: journey.fetcher,
       now: () => w.f.fake.clock.now,
       switches: codiumSwitches(journey.fetcher),
+      visibility: createRunBodyVisibility({ store: w.cloud.binding.store, app: w.cloud.app }),
       // The token's live-run check is cloud-agents-run-token.test.ts's; here its store answers live.
       runTokens: { store: async () => "ok", revokedBefore: async () => undefined },
     }),

@@ -554,7 +554,7 @@ export function createGithubApp(
   }
 
   /** Current visibility and fresh binder access for explicitly requested owner attachment/data reads. */
-  async function attachmentRepository(binding: RepoBinding) {
+  async function attachmentRepository(binding: RepoBinding, options: { readonly includeFullName?: true } = {}) {
     const config = configuration()
     if (!config || !binding.installationId || binding.suspended) throw notConfigured()
     const jwt = await appJwt(config)
@@ -596,10 +596,20 @@ export function createGithubApp(
         )) !== "ok"
       )
         throw denied("ACTOR_NOT_ALLOWED", "Reconnect this repository before attaching context.")
+      const observed = repository.visibility
+      const visibility =
+        (observed === "public" && !repository.private) ||
+        ((observed === "private" || observed === "internal") && repository.private)
+          ? observed
+          : undefined
+      const fullName =
+        options.includeFullName && repository.full_name === credential.repository ? credential.repository : undefined
       return {
         repositoryId: binding.repositoryId,
         generation: binding.generation,
         publicRepository: !repository.private,
+        ...(visibility === undefined ? {} : { visibility }),
+        ...(fullName === undefined ? {} : { fullName }),
       }
     } finally {
       await revoke(credential.token)
