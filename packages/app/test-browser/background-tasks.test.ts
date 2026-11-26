@@ -477,6 +477,43 @@ describe("Stop", () => {
 })
 
 describe("Background commands", () => {
+  test("warns when the last known command status is stale", async () => {
+    const fake = engine()
+    fake.state.shells = [
+      {
+        id: "shl_dev",
+        title: "bun run dev",
+        command: "bun run dev",
+        status: "running",
+        startedAt: 1_000,
+        outputBytes: 0,
+      },
+    ]
+    const page = await open(fake, [ROOT], {
+      capabilities: () => ({ ...NO_CAPABILITIES, backgroundSubagents: true, backgroundShells: true }),
+    })
+    const refresh = async () => {
+      const previous = fake.boards.length
+      page.reconnect()
+      await until(() => fake.boards.length > previous && !page.tasks.refreshing())
+    }
+    try {
+      await until(() => page.tasks.shells().length === 1)
+      fake.state.invalidBoard = true
+      await refresh()
+      expect(page.tasks.shells()[0]?.status).toBe("running")
+      expect(page.tasks.error()).toBe("Task updates unavailable. Showing the last known state.")
+
+      fake.state.invalidBoard = false
+      fake.state.shells = []
+      await refresh()
+      expect(page.tasks.shells()).toEqual([])
+      expect(page.tasks.error()).toBeUndefined()
+    } finally {
+      page.dispose()
+    }
+  })
+
   // The flags can answer after the board's first load (a cold start, a restored tab), and an idle conversation with
   // only a dev server running sends no event that would load it again.
   test("flags that arrive after the first board load bring the conversation's commands", async () => {
