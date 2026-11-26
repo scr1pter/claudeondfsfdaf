@@ -324,12 +324,18 @@ waits on it, and no timeout changed.
 - Root: `bun test --timeout 30000 ./test/no-personal-paths.test.ts` from the repository root 1/1, with both docs as
   committed here (the `./` matters: the root `bunfig.toml` points a bare name at an empty test root).
 
-**CI only.** The Windows engine shards and the Linux and Windows desktop runs of these files run in `test.yml`
-(#77's 18 Windows engine shards; the new engine file reshuffles them). A shard over the 45-minute step limit is
-reported, never answered with a longer limit.
+**CI only (corrected 2026-11-25 after review).** In `test.yml` the two engine files, `test/tool/browser.test.ts`
+and `test/tool/terminal-agent-review.test.ts`, run in the engine shard jobs on both systems: eight shards on Linux
+and #77's 18 round-robin shards on Windows, which the new engine file reshuffles. The two desktop files,
+`src/main/browser-agent-tabs.test.ts` and `src/main/browser-bridge-agent-review.test.ts`, run in no pull-request
+workflow. `test.yml`'s only desktop step, "Run desktop computer-use tests", runs a fixed list (the computer-use files,
+`config-skew`, `ipc-security` and `keep-awake`), and its own comment says desktop tests otherwise run only in the
+release workflow. These two files run there, in the release workflow's Linux "Test (desktop)" job, which starts only
+on a tag or by hand. So the macOS runs recorded above are their only evidence before merge. A shard over the
+45-minute step limit is reported, never answered with a longer limit.
 
-**Still owed.** Push, open the PR (not draft), and read its `test.yml` run shard by shard. Owner item unchanged:
-OWN-RELEASE-ACCEPT.
+**Still owed.** Push, open the PR (not draft), and read its `test.yml` run shard by shard (it covers the engine
+files only). Owner item unchanged: OWN-RELEASE-ACCEPT.
 
 ## Done
 
