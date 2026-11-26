@@ -603,7 +603,7 @@ export function taskPart(text: string, outside: PlatformId = "github") {
  * cause is the session's own error, so a caller can map it (stopReason); a reply with no text asks for a summary with
  * the tools off.
  */
-export async function chat(ctx: ChatContext, message: string, files: PromptFiles = []) {
+export async function chat(ctx: ChatContext, message: string, files: PromptFiles = [], context?: string) {
   console.log("Sending message to Vector...")
 
   return ctx.run(
@@ -619,6 +619,9 @@ export async function chat(ctx: ChatContext, message: string, files: PromptFiles
         // agent is omitted - server will use default_agent from config or fall back to "build"
         parts: [
           taskPart(message, ctx.outside),
+          // The run model receives the approved context in the same message. SessionPrompt's title helper reads only
+          // its non-synthetic parts.
+          ...(context ? [{ ...taskPart(`\n\n${context}`, ctx.outside), synthetic: true }] : []),
           ...files.flatMap((f) => [
             {
               id: PartID.ascending(),
@@ -702,6 +705,7 @@ export async function subscribeSessionEvents(
     permissions: Permission.Interface
     clean?: (text: string) => string
     write?: (text: string) => void
+    logDetails?: boolean
   },
 ) {
   const clean = ctx.clean ?? ((text: string) => text)
@@ -752,12 +756,14 @@ export async function subscribeSessionEvents(
       const request = evt.data as EventV2.Data<typeof Permission.Event.Asked>
       return Effect.gen(function* () {
         if (!(yield* inRun(request.sessionID))) return
-        log(clean(`permission requested: ${request.permission} (${request.patterns.join(", ")}); rejecting`))
+        if (ctx.logDetails !== false)
+          log(clean(`permission requested: ${request.permission} (${request.patterns.join(", ")}); rejecting`))
         yield* ctx.permissions.reply({ requestID: request.id, reply: "reject" }).pipe(Effect.ignore)
       })
     }),
   )
 
+  if (ctx.logDetails === false) return
   let text = ""
   await ctx.run(
     ctx.events.listen((evt) => {

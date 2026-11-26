@@ -6810,16 +6810,18 @@ describe("task isolation saves", () => {
         const jobs = yield* BackgroundJob.Service
         const isolation = yield* TaskIsolation.Service
         const def = yield* singleTaskDefinition(yield* TaskTool)
-        // Each isolated run writes the file its brief names, or nothing.
+        // Each isolated run writes the files its brief names, or nothing.
         const promptOps: TaskPromptOps = {
           ...stubOps(),
           prompt: (input) => {
             if (input.sessionID === seeded.chat.id) return Effect.succeed(reply(input, "noted"))
             const work = TaskPlace.get(input.sessionID)?.work.directory
-            const named = input.parts
-              .flatMap((part) => (part.type === "text" ? [part.text.match(/WRITE:([a-z0-9]+\.txt)/)?.[1]] : []))
-              .find((file) => file !== undefined)
-            if (work && named) require("node:fs").writeFileSync(path.join(work, named), `${named}\n`)
+            const files = input.parts.flatMap((part) =>
+              part.type === "text" ? (part.text.match(/(?<=WRITE:)[a-z0-9]+\.txt/g) ?? []) : [],
+            )
+            if (work) {
+              for (const file of files) require("node:fs").writeFileSync(path.join(work, file), `${file}\n`)
+            }
             return Effect.succeed(reply(input, "done"))
           },
         }
@@ -6853,19 +6855,16 @@ describe("task isolation saves", () => {
         const unchanged = yield* launch({ prompt: "Change nothing.", isolated: true })
         yield* Effect.addFinalizer(() => cleanup(unchanged))
         yield* settled(unchanged, "unchanged")
-        const changed = yield* launch({ prompt: "WRITE:first.txt", isolated: true })
+
+        // The child of shared and unchanged tasks has no stacked dependencies of its own.
+        const changed = yield* launch({
+          prompt: "WRITE:first.txt WRITE:second.txt",
+          isolated: true,
+          depends_on: [shared, unchanged],
+        })
         yield* Effect.addFinalizer(() => cleanup(changed))
         yield* settled(changed, "changed")
-
-        // A shared and an unchanged dependency are not stacked: the child starts, and merges with nothing to wait on.
-        const plain = yield* launch({ prompt: "WRITE:second.txt", isolated: true, depends_on: [shared, unchanged] })
-        yield* Effect.addFinalizer(() => cleanup(plain))
-        yield* settled(plain, "changed")
-        expect((yield* isolation.get(plain)).stacked).toEqual([])
-        expect((yield* isolation.merge({ taskID: plain, by: { kind: "owner" } })).record.state).toBe("merged")
-        expect(
-          yield* Effect.promise(() => fs.readFile(path.join(home.directory, "second.txt"), "utf8")),
-        ).toBe("second.txt\n")
+        expect((yield* isolation.get(changed)).stacked).toEqual([])
 
         // A changed isolated dependency is stacked: its work is in the child's checkout, and it merges first.
         const stacked = yield* launch({
@@ -6878,9 +6877,15 @@ describe("task isolation saves", () => {
         const record = yield* isolation.get(stacked)
         expect(record.stacked).toEqual([changed])
         expect(record.files.map((file) => file.path)).toEqual(["third.txt"])
+        for (const file of ["first.txt", "second.txt"]) {
+          expect(yield* Effect.promise(() => fs.readFile(path.join(record.directory, file), "utf8"))).toBe(`${file}\n`)
+        }
         const refused = yield* isolation.merge({ taskID: stacked, by: { kind: "owner" } }).pipe(Effect.flip)
         expect(refused).toMatchObject({ code: "stacked" })
         expect((yield* isolation.merge({ taskID: changed, by: { kind: "owner" } })).record.state).toBe("merged")
+        expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "second.txt"), "utf8"))).toBe(
+          "second.txt\n",
+        )
         expect((yield* isolation.merge({ taskID: stacked, by: { kind: "owner" } })).record.state).toBe("merged")
         expect(yield* Effect.promise(() => fs.readFile(path.join(home.directory, "first.txt"), "utf8"))).toBe(
           "first.txt\n",
@@ -6890,8 +6895,7 @@ describe("task isolation saves", () => {
         )
       }),
     { git: true },
-    // Four isolated launches with their saves, a shared one and three merges: a single isolated launch and save took
-    // 5 to 6 s on hosted Windows runners, so this case needs more than the default 30 s there.
+    // Three isolated launches with their saves and two successful merges still use real Git on Windows.
     60_000,
   )
 

@@ -1,0 +1,23 @@
+## Vectorscope review · Incomplete
+
+> **Partial review.** A follow-up check could not confirm that its first request fit the configured budget. Checks remain for `src/auth/refresh.ts`.
+
+**0 blocking findings or concerns recorded** on the changed lines · 1 nit below
+
+<details><summary>Still open from earlier reviews (1)</summary>
+
+- **Concern** · `src/auth/refresh.ts:1` · Earlier concern
+</details>
+
+<details><summary>Outside the changed lines (1)</summary>
+
+- **Concern** · `src/api/session.ts:88` · `readSession()` still expects the old stored shape. This PR changes what `storage.ts` writes, and this reader was not updated.
+</details>
+
+<details><summary>Nits (1)</summary>
+
+- `src/auth/storage.ts:18` · `openDB` is imported but never used
+</details>
+
+---
+<sub>Partial review of `d4e5f6a` against `main`</sub>

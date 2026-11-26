@@ -93,6 +93,9 @@ export function projectExecutableConfig(config: Info, trusted: boolean, base: In
   // set Vector Local, so a cloned repository can neither loosen it nor turn it off.
   delete next.local
   delete next.computer
+  // VS-23d (SF-15): the review block is yours alone, trusted or not. A repository can attest no zero data retention
+  // route; it raises review privacy and holdback in .vector/review.json, which mergeReviewConfig reads as such.
+  delete next.review
   // Vector everywhere is this computer's own consent to take jobs started from elsewhere and the folders they may use,
   // so a repository's config can never turn it on, add itself or change its limits, trusted or not.
   delete next.everywhere

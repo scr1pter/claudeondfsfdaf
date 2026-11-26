@@ -2,7 +2,7 @@
 
 Files: this addendum is `docs/vector/build/vectorscope-upgrade-addendum-b.md`, committed as a proposal pending Q45 (§5). It extends `docs/vector/build/vectorscope-upgrade.md` and addendum A (`docs/vector/build/vectorscope-upgrade-addendum-a.md`). Its evidence is `docs/vector/build/vectorscope-research/round-three/REPORT-3.md`, which cites Phase A (`phaseA/REPORT.md`, a session record kept outside the repository, I-13) and the five round-three lane notes beside it.
 
-Status: a proposal written 2026-11-07, against worktree `/home/user/wt/vectorscope` at `41a64e5e`. It is not approved and not implemented, and it makes no claim of measured quality.
+Status: a proposal written 2026-11-07, against worktree `<worktree>` at `41a64e5e`. It is not approved and not implemented, and it makes no claim of measured quality.
 
 - **Rules inherited:** the contract's §0 rules (P0, the windows, the six §0.3 items, tests and typecheck from package directories, the "Never" list); invariants I-1 to I-14; decisions D1 to D14 (including D14: nothing user-facing in 1.99.113); addendum A's rules, keys and owner questions Q18 to Q34. §3 proposes text amendments to addendum A (CRBugBench, VS-40 item 4, the OpenRouter batch line) and Q36 amends Q26's wording; nothing else is changed.
 - **Approval.** Every package here needs owner approval, asked by a new question, Q45 (§5). Q18 covers only VS-32 to VS-49 and stays as it is. Two Now items amend Q15-scope packages (VS-21e amends VS-21, VS-22d amends VS-22), and R4 amends VS-27's wiring; Q45 lists them separately from the items that amend Q18-scope packages.

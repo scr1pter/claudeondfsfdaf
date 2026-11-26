@@ -24,6 +24,7 @@ import {
   incidentTitle,
   intervalLine,
   manualReason,
+  monitorStatusLine,
   opsErrorText,
   opsParts,
   opsSections,
@@ -764,13 +765,7 @@ function Checks(props: { call: Call; act: Act; busy: boolean; showMonitors: bool
             {(monitor) => (
               <div class="settings-ops-row">
                 <span>{monitor.url}</span>
-                <span class="settings-ops-muted">
-                  {monitor.checked
-                    ? "Checked"
-                    : monitor.domainVerified
-                      ? "Past your plan's URLs"
-                      : "Domain not verified"}
-                </span>
+                <span class="settings-ops-muted">{monitorStatusLine(monitor)}</span>
                 <ButtonV2
                   variant="outline"
                   disabled={props.busy}

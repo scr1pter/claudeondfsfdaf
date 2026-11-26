@@ -17,10 +17,12 @@ import {
   type LocalReviewOptions,
 } from "../../src/cli/cmd/review"
 import { Git } from "../../src/git"
+import { Config } from "../../src/config/config"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { ReviewModel, type ResolvedModel } from "../../src/review/model"
 import { Review } from "../../src/review/run"
+import { TestConfig } from "../fixture/config"
 import { tmpdir } from "../fixture/fixture"
 import { cliIt } from "../lib/cli-process"
 import { testEffect } from "../lib/effect"
@@ -761,6 +763,58 @@ describe("vector review: --post", () => {
     }),
   )
 
+  it.live("explicit posting keeps safe suggestions and drops replacements that would post redacted values", () =>
+    Effect.gen(function* () {
+      const repo = yield* pullRequest
+      const raw = "ghp_" + "p7Q2".repeat(9)
+      const safe = "  const index = items.length - 1"
+      for (const mode of ["default", "held", "offline"] as const) {
+        for (const replacement of ["[redacted]", raw]) {
+          const github = fakeGitHub({ token: TOKEN })
+          const run = fake({
+            github: github.access,
+            findings: () => [
+              { ...finding({ line: 2, title: "Adjust the index", suggestion: safe }), verified: true },
+              {
+                ...finding({ line: 3, title: "Fix the return value", suggestion: `  return "${replacement}"` }),
+                verified: true,
+              },
+            ],
+          })
+          const result = yield* review(
+            {
+              directory: repo.dir,
+              pr: 7,
+              post: true,
+              yes: true,
+              full: true,
+              env: mode === "held" ? { REVIEW_HOLDBACK: "secrets" } : {},
+            },
+            run.deps,
+          ).pipe(
+            Effect.provideService(
+              Config.Service,
+              TestConfig.make({
+                getGlobal: () => Effect.succeed(mode === "offline" ? { review: { diagnostics: "offline" } } : {}),
+              }),
+            ),
+          )
+          expect(result.exitCode).toBe(0)
+          const comments = github.reviews[0]?.comments ?? []
+          const safeBody = comments.find((comment) => comment.line === 2)?.body
+          const unsafeBody = comments.find((comment) => comment.line === 3)?.body
+          expect(safeBody).toContain(`\`\`\`suggestion\n${safe}\n\`\`\``)
+          expect(unsafeBody).toContain("Fix the return value")
+          if (mode === "default") expect(unsafeBody).toContain("```suggestion")
+          else {
+            expect(unsafeBody).not.toContain("```suggestion")
+            expect(unsafeBody).not.toContain(replacement)
+          }
+        }
+      }
+    }),
+  )
+
   it.live(
     "a posted review goes through the posting check with the review's sessions, as a review it cannot trust",
     () =>
@@ -1030,6 +1084,9 @@ describe("vector review: Codium JSON boundary", () => {
   it.live("mixed JSON retains explicit own pass figures and own dollars", () =>
     Effect.gen(function* () {
       const repo = yield* branched
+      // The branch name legitimately prints the same digits as the cached usage fixture.
+      yield* git(repo.dir, "branch", "-m", "feature-987")
+      const planPass = { name: "review", model: "vector-plan/sol", costKind: "codium" } as const
       const own = {
         name: "security" as const,
         model: "lmstudio/test-model",
@@ -1054,9 +1111,7 @@ describe("vector review: Codium JSON boundary", () => {
           },
           passes: [
             {
-              name: "review",
-              model: "vector-plan/sol",
-              costKind: "codium",
+              ...planPass,
               input: 24000,
               output: 100,
               cacheRead: 0,
@@ -1075,18 +1130,29 @@ describe("vector review: Codium JSON boundary", () => {
         costUsd: 0.12,
         billing: "codium",
       })
-      expect(printed.passes).toEqual([{ name: "review", model: "vector-plan/sol", costKind: "codium" }, own, { ...own, input: 987654, costKind: undefined }])
+      expect(printed.passes).toEqual([planPass, own, { ...own, input: 987654, costKind: undefined }])
       const cached = fake()
       yield* review({ directory: repo.dir }, cached.deps)
       expect(cached.calls).toHaveLength(0)
-      expect(cached.out()).not.toContain("25.0k")
-      expect(cached.out()).not.toContain("987")
+      const lines = cached.out().trimEnd().split("\n")
+      expect(lines).toContain(
+        `Vectorscope review · feature-987 vs main (merge-base ${repo.main.slice(0, 7)}) · 1 file, +2 −1`,
+      )
+      expect(lines.slice(-2)).toEqual([
+        "Multiple models · $0.12 + Codium · additional cost unknown: pricing or complete usage is unavailable · 1s · sessions: ses_test",
+        "By pass: review: Codium · security $0.12 (token usage unavailable) · security $0.12 + unpriced (token usage unavailable)",
+      ])
       const cachedJson = fake()
       yield* review({ directory: repo.dir, json: true }, cachedJson.deps)
-      expect(cachedJson.out()).not.toContain("987654")
-      expect(JSON.parse(cachedJson.out()).outcome.passes[1]).not.toHaveProperty("input")
-      expect(cached.out()).toContain("$0.12")
-      expect(cached.out()).toContain("Codium")
+      expect(cachedJson.calls).toHaveLength(0)
+      const saved = JSON.parse(cachedJson.out())
+      expect(saved).toMatchObject({
+        cached: true,
+        target: { branch: "feature-987", baseRef: "main", mergeBase: repo.main, head: repo.head },
+      })
+      const cachedOwn = { name: own.name, model: own.model, costUsd: own.costUsd, usageMissing: true }
+      expect(saved.outcome.cost).toEqual(printed.cost)
+      expect(saved.outcome.passes).toEqual([planPass, { ...cachedOwn, costKind: "priced" }, cachedOwn])
     }),
   )
 })

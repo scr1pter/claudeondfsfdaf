@@ -100,6 +100,52 @@ const render = (input: Partial<RenderInput> & Pick<RenderInput, "outcome">) =>
   })
 
 describe("renderLocalReview", () => {
+  test("strict terminal output distinguishes complete, capped and incomplete reviews of the same head", () => {
+    const strict: NonNullable<ReviewOutcome["strict"]> = {
+      version: 1,
+      head: HEAD,
+      complete: true,
+      findings: [],
+      dropped: [],
+      fixUnchecked: 0,
+    }
+    const show = (change: Partial<ReviewOutcome>) => render({ outcome: outcome({ strict, ...change }) })
+    expect(show({})).toContain("No verified production-breaking issues")
+    const capped = show({ strict: { ...strict, dropped: [{ reason: "cap", count: 2 }] } })
+    expect(capped).toContain("the comment limit left out 2 verified findings")
+    expect(capped).not.toMatch(/no verified production-breaking issues|no issues found/i)
+    for (const change of [
+      { unreviewed: ["src/unseen.ts"] },
+      { specialists: [{ name: "review", status: "failed", steps: 0 }] },
+      { strict: { ...strict, complete: false, incomplete: ["blob-unreadable"] } },
+    ] satisfies Partial<ReviewOutcome>[]) {
+      const text = show(change)
+      expect(text).toContain("Review incomplete")
+      expect(text).not.toMatch(/no verified production-breaking issues|no issues found/i)
+    }
+  })
+
+  test("an unaffordable follow-up check keeps completed work visible without reporting a dollar stop or a clean review", () => {
+    const review = outcome({
+      partial: "budget",
+      specialists: [
+        { name: "review", status: "ok", steps: 1 },
+        { name: "verify", status: "skipped", steps: 0, detail: "first-request-budget" },
+      ],
+      unreviewed: ["src/check.ts"],
+    })
+    for (const findings of [[], [placed({ severity: "blocking", title: "The job discards its pending result" })]]) {
+      const text = render({
+        outcome: { ...review, selection: selection({ inline: findings }) },
+        limits: { maxCostUsd: 0, maxSteps: 30, timeoutMinutes: 10 },
+      })
+      expect(text).toContain("A follow-up check could not confirm that its first request fit the configured budget.")
+      expect(text).toContain("src/check.ts")
+      expect(text).not.toMatch(/stopped at the \$|no issues found|Risk: Low/i)
+      if (findings.length) expect(text).toContain(findings[0]!.title)
+    }
+  })
+
   test("prints the section 1.7 layout", () => {
     const text = render({
       since: LAST,
@@ -202,6 +248,19 @@ describe("renderLocalReview", () => {
         "",
       ].join("\n"),
     )
+  })
+
+  // VS-34 (SF-13a): the label only. No runner records a held-back skip before VS-34 wiring (SF-13b).
+  test("names a file held back from the model as not reviewed", () => {
+    const text = render({
+      outcome: outcome({
+        skipped: [
+          { path: "config/prod/.envrc", reason: "held-back" },
+          { path: "bun.lock", reason: "lockfile" },
+        ],
+      }),
+    })
+    expect(text).toContain("Not reviewed: config/prod/.envrc (held back) · bun.lock (lockfile)")
   })
 
   test("words the subscription and unknown costs as the summary comment does", () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Cause, Effect, Layer, Result, Schema } from "effect"
 import { TestClock, TestConsole } from "effect/testing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { httpClient } from "@vectordevai/core/effect/app-node-platform"
@@ -18,6 +18,8 @@ import { testEffect } from "../lib/effect"
 import { TestConfig } from "../fixture/config"
 import { Config } from "@/config/config"
 import { ConfigDependencies } from "@/config/dependencies"
+import { ReviewMcp } from "@/review/mcp"
+import { Session } from "@/session/session"
 import { Plugin } from "@/plugin"
 import { Agent } from "@/agent/agent"
 import { InstanceState } from "@/effect/instance-state"
@@ -36,14 +38,16 @@ const configLayer = TestConfig.layer({
 // Fake Plugin.Service that returns a single plugin whose `tool` map contains
 // one definition with `args: undefined`. Used to exercise the plugin entry
 // point of `fromPlugin` for the #27451 / #27630 regression.
+let pluginLists = 0
 const brokenPluginLayer = Layer.succeed(
   Plugin.Service,
   Plugin.Service.of({
     init: () => Effect.void,
     trigger: ((_name: unknown, _input: unknown, output: unknown) =>
       Effect.succeed(output)) as Plugin.Interface["trigger"],
-    list: () =>
-      Effect.succeed([
+    list: () => {
+      pluginLists++
+      return Effect.succeed([
         {
           tool: {
             broken_plugin_tool: {
@@ -53,11 +57,12 @@ const brokenPluginLayer = Layer.succeed(
             },
           },
         },
-      ]),
+      ])
+    },
   }),
 )
 
-const root = LayerNode.group([ToolRegistry.node, Agent.node])
+const root = LayerNode.group([ToolRegistry.node, Agent.node, Session.node])
 const replacements = [
   [Config.node, configLayer],
   [RuntimeFlags.node, RuntimeFlags.layer()],
@@ -518,6 +523,61 @@ describe("tool.registry", () => {
   // and plugin-list loops both funnel through `fromPlugin`, but covering both
   // entry points means a future refactor that splits them won't silently lose
   // protection.
+  withBrokenPlugin.instance("review tool listing and direct execution refuse plugin and nested task calls", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agent = yield* (yield* Agent.Service).defaultInfo()
+      const model = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("reader-test"), agent }
+      const before = pluginLists
+      yield* registry.named(true)
+      const ids = (yield* registry.tools({ ...model, review: true })).map((tool) => tool.id)
+      expect(pluginLists).toBe(before)
+      const ordinary = yield* registry.tools(model)
+      expect(pluginLists).toBeGreaterThan(before)
+      expect(ids).not.toContain("task")
+      expect(ids).not.toContain("broken_plugin_tool")
+      const ctx = {
+        sessionID: SessionID.make("ses_test"),
+        messageID: MessageID.make("msg_test"),
+        agent: agent.name,
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      } satisfies Tool.Context
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "Review source", internal: "vectorscope.review" })
+      const child = yield* sessions.create({ title: "Nested", parentID: parent.id })
+      const ordinarySession = yield* sessions.create({ title: "Ordinary" })
+      for (const name of ["task", "broken_plugin_tool"]) {
+        const tool = ordinary.find((item) => item.id === name)
+        if (!tool) throw new Error("ordinary fixture missing " + name)
+        const args =
+          name === "task"
+            ? {
+                tasks: [
+                  {
+                    description: "Inspect source",
+                    prompt: "Read src/last.ts and summarize it.",
+                    subagent_type: "general",
+                  },
+                ],
+              }
+            : {}
+        const result = yield* Effect.exit(
+          tool.execute(args, ctx).pipe(Effect.provideService(ReviewMcp.Restricted, true)),
+        )
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") expect(Cause.pretty(result.cause)).toContain(ReviewMcp.unavailable)
+        const direct = yield* Effect.exit(tool.execute(args, { ...ctx, sessionID: child.id }))
+        expect(direct._tag).toBe("Failure")
+        if (direct._tag === "Failure") expect(Cause.pretty(direct.cause)).toContain(ReviewMcp.unavailable)
+        if (name === "broken_plugin_tool")
+          expect((yield* tool.execute(args, { ...ctx, sessionID: ordinarySession.id })).output).toBe("ok")
+      }
+    }),
+  )
+
   withBrokenPlugin.instance("tolerates a plugin tool registered with null/undefined args", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
