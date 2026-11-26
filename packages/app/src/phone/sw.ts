@@ -1,5 +1,6 @@
 import { readAlertKey } from "./alert-keys"
 import { clickTarget, decodePushPayload, notificationFor, openAlert } from "./alerts"
+import { PHONE_BASE, PHONE_PUSH_CHANGED } from "./config"
 
 // The phone app's one service worker (WP A38), registered for the whole phone origin. It shows phone alerts and opens
 // the app where a tap points. It has no fetch handler: pages, the API and the live views always come from the network,
@@ -11,7 +12,12 @@ import { clickTarget, decodePushPayload, notificationFor, openAlert } from "./al
 type Extendable = { waitUntil(promise: Promise<unknown>): void }
 type PushEventLike = Extendable & { data: { text(): string } | null }
 type NotificationEventLike = Extendable & { notification: { data: unknown; close(): void } }
-type WindowClientLike = { url: string; focus(): Promise<unknown>; navigate(url: string): Promise<unknown> }
+type WindowClientLike = {
+  url: string
+  focus(): Promise<unknown>
+  navigate(url: string): Promise<unknown>
+  postMessage(message: string): void
+}
 type WorkerScope = {
   location: { origin: string }
   registration: { showNotification(title: string, options: Record<string, unknown>): Promise<void> }
@@ -23,6 +29,7 @@ type WorkerScope = {
   skipWaiting(): Promise<void>
   addEventListener(type: "install" | "activate", listener: (event: Extendable) => void): void
   addEventListener(type: "push", listener: (event: PushEventLike) => void): void
+  addEventListener(type: "pushsubscriptionchange", listener: (event: Extendable) => void): void
   addEventListener(type: "notificationclick", listener: (event: NotificationEventLike) => void): void
 }
 
@@ -31,6 +38,20 @@ const worker = self as unknown as WorkerScope
 // A new build's worker takes over at once: it holds no cache an older page could depend on.
 worker.addEventListener("install", (event) => event.waitUntil(worker.skipWaiting()))
 worker.addEventListener("activate", (event) => event.waitUntil(worker.clients.claim()))
+
+// The signed-in page rechecks its own registration. The worker only signals that browser state changed.
+worker.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      const windows = await worker.clients.matchAll({ type: "window", includeUncontrolled: false })
+      for (const client of windows) {
+        const url = new URL(client.url)
+        if (url.origin === worker.location.origin && url.pathname.startsWith(PHONE_BASE))
+          client.postMessage(PHONE_PUSH_CHANGED)
+      }
+    })(),
+  )
+})
 
 worker.addEventListener("push", (event) => {
   event.waitUntil(

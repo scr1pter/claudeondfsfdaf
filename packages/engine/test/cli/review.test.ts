@@ -1084,6 +1084,9 @@ describe("vector review: Codium JSON boundary", () => {
   it.live("mixed JSON retains explicit own pass figures and own dollars", () =>
     Effect.gen(function* () {
       const repo = yield* branched
+      // The branch name legitimately prints the same digits as the cached usage fixture.
+      yield* git(repo.dir, "branch", "-m", "feature-987")
+      const planPass = { name: "review", model: "vector-plan/sol", costKind: "codium" } as const
       const own = {
         name: "security" as const,
         model: "lmstudio/test-model",
@@ -1108,9 +1111,7 @@ describe("vector review: Codium JSON boundary", () => {
           },
           passes: [
             {
-              name: "review",
-              model: "vector-plan/sol",
-              costKind: "codium",
+              ...planPass,
               input: 24000,
               output: 100,
               cacheRead: 0,
@@ -1129,18 +1130,29 @@ describe("vector review: Codium JSON boundary", () => {
         costUsd: 0.12,
         billing: "codium",
       })
-      expect(printed.passes).toEqual([{ name: "review", model: "vector-plan/sol", costKind: "codium" }, own, { ...own, input: 987654, costKind: undefined }])
+      expect(printed.passes).toEqual([planPass, own, { ...own, input: 987654, costKind: undefined }])
       const cached = fake()
       yield* review({ directory: repo.dir }, cached.deps)
       expect(cached.calls).toHaveLength(0)
-      expect(cached.out()).not.toContain("25.0k")
-      expect(cached.out()).not.toContain("987")
+      const lines = cached.out().trimEnd().split("\n")
+      expect(lines).toContain(
+        `Vectorscope review · feature-987 vs main (merge-base ${repo.main.slice(0, 7)}) · 1 file, +2 −1`,
+      )
+      expect(lines.slice(-2)).toEqual([
+        "Multiple models · $0.12 + Codium · additional cost unknown: pricing or complete usage is unavailable · 1s · sessions: ses_test",
+        "By pass: review: Codium · security $0.12 (token usage unavailable) · security $0.12 + unpriced (token usage unavailable)",
+      ])
       const cachedJson = fake()
       yield* review({ directory: repo.dir, json: true }, cachedJson.deps)
-      expect(cachedJson.out()).not.toContain("987654")
-      expect(JSON.parse(cachedJson.out()).outcome.passes[1]).not.toHaveProperty("input")
-      expect(cached.out()).toContain("$0.12")
-      expect(cached.out()).toContain("Codium")
+      expect(cachedJson.calls).toHaveLength(0)
+      const saved = JSON.parse(cachedJson.out())
+      expect(saved).toMatchObject({
+        cached: true,
+        target: { branch: "feature-987", baseRef: "main", mergeBase: repo.main, head: repo.head },
+      })
+      const cachedOwn = { name: own.name, model: own.model, costUsd: own.costUsd, usageMissing: true }
+      expect(saved.outcome.cost).toEqual(printed.cost)
+      expect(saved.outcome.passes).toEqual([planPass, { ...cachedOwn, costKind: "priced" }, cachedOwn])
     }),
   )
 })
