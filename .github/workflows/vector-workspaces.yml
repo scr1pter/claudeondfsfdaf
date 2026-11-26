@@ -56,6 +56,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 concurrency:
   # Every run on main keeps its own group, so a cancelled check never marks main's history; branches and pull
   # requests cancel their stale runs. Both format() results are non-empty, so the && / || idiom is safe here.
@@ -69,10 +72,11 @@ jobs:
     env:
       ASTRO_TELEMETRY_DISABLED: "1"
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
+          package-manager-cache: false
       - uses: ./.github/actions/setup-bun
         with:
           install-flags: --frozen-lockfile

@@ -1,17 +1,33 @@
-import { JOB_ID_PATTERN, RANDOM_ID_PATTERN, decodeSettle, type Settle } from "@vectordevai/schema/everywhere"
+import {
+  JOB_ID_PATTERN,
+  JOB_RECORD_RETENTION_MS,
+  RANDOM_ID_PATTERN,
+  decodeSettle,
+  jobIdTime,
+  type Settle,
+} from "@vectordevai/schema/everywhere"
 import { constants } from "node:fs"
 import { mkdir, open, rename, rm } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import path from "node:path"
 
 export type InFlight = { readonly jid: string; readonly startedAt: number; readonly lease?: string; readonly sessionID?: string }
-export type RunnerLedger = { readonly day: string; readonly count: number; readonly jobs: readonly InFlight[]; readonly offers: Readonly<Record<string, number>>; readonly pending?: readonly Settle[] }
+export type RunnerLedger = {
+  readonly day: string
+  readonly count: number
+  readonly jobs: readonly InFlight[]
+  readonly offers: Readonly<Record<string, number>>
+  readonly pending?: readonly Settle[]
+  /** The first local observation of each receipt, since legacy receipts store only the wire payload. */
+  readonly publicationObservedAt?: Readonly<Record<string, number>>
+}
 
 /** Storage is outside every job worktree. VE-21 supplies the private atomic file adapter. */
 export function createLedger(input: {
   readonly read: () => Promise<unknown>
   readonly write: (state: RunnerLedger) => Promise<void>
   readonly now: () => number
+  readonly onPublicationExpired?: () => void
 }) {
   let tail = Promise.resolve()
   function serial<T>(work: () => Promise<T>): Promise<T> {
@@ -19,17 +35,50 @@ export function createLedger(input: {
     tail = result.then(() => undefined, () => undefined)
     return result
   }
-  async function load(): Promise<RunnerLedger & { readonly pending: readonly Settle[] }> {
-    const day = new Date(input.now()).toISOString().slice(0, 10)
+  async function load(): Promise<Required<RunnerLedger>> {
+    const now = input.now()
+    const day = new Date(now).toISOString().slice(0, 10)
     const raw = await input.read()
-    if (raw === undefined) return { day, count: 0, jobs: [], offers: {}, pending: [] }
+    if (raw === undefined) return { day, count: 0, jobs: [], offers: {}, pending: [], publicationObservedAt: {} }
     if (typeof raw !== "object" || raw === null) throw new Error("Everywhere ledger is unavailable")
     const state = raw as Partial<RunnerLedger>
     if (typeof state.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(state.day) || !Number.isSafeInteger(state.count) || state.count! < 0 || !Array.isArray(state.jobs) || typeof state.offers !== "object" || state.offers === null) throw new Error("Everywhere ledger is invalid")
     if (state.jobs.some((job) => !JOB_ID_PATTERN.test(job.jid) || !Number.isSafeInteger(job.startedAt) || job.startedAt < 0 || (job.lease !== undefined && !RANDOM_ID_PATTERN.test(job.lease)) || (job.sessionID !== undefined && !/^ses[A-Za-z0-9_]+$/.test(job.sessionID)))) throw new Error("Everywhere ledger is invalid")
     if (state.pending !== undefined && (!Array.isArray(state.pending) || state.pending.length > 32 || state.pending.some((result) => !decodeSettle(result).ok) || new Set(state.pending.map((result) => result.jid)).size !== state.pending.length)) throw new Error("Everywhere ledger is invalid")
-    const offers = Object.fromEntries(Object.entries(state.offers).filter(([id, expires]) => RANDOM_ID_PATTERN.test(id) && Number.isSafeInteger(expires) && expires > input.now()))
-    return { day, count: state.day === day ? state.count! : 0, jobs: state.jobs, offers, pending: state.pending ?? [] }
+    const jobs = state.jobs
+    const pending = state.pending ?? []
+    const ids = new Set(pending.map((result) => result.jid))
+    const saved = state.publicationObservedAt
+    if (saved !== undefined && (
+      !saved || typeof saved !== "object" || Array.isArray(saved) ||
+      Object.entries(saved).some(([jid, at]) => !ids.has(jid) || !Number.isSafeInteger(at) || at < 0)
+    )) throw new Error("Everywhere ledger is invalid")
+
+    const offers = Object.fromEntries(Object.entries(state.offers).filter(([id, expires]) => RANDOM_ID_PATTERN.test(id) && Number.isSafeInteger(expires) && expires > now))
+    const observed = Object.fromEntries(pending.map(({ jid }) => [jid, saved?.[jid] ?? now]))
+    // Legacy receipts have no local creation time. Give them a full recovery window from the first time they are read.
+    // The time encoded by the service can only extend that window, and a clock moving backwards delays retirement.
+    const expired = pending.filter(({ jid }) =>
+      !jobs.some((job) => job.jid === jid) &&
+      now >= Math.max(observed[jid]!, jobIdTime(jid)!) + JOB_RECORD_RETENTION_MS,
+    )
+    if (expired.length && input.onPublicationExpired) {
+      try {
+        input.onPublicationExpired()
+        for (const { jid } of expired) delete observed[jid]
+      } catch { /* Keep the receipts when the local warning could not be recorded. */ }
+    }
+    const retained = pending.filter(({ jid }) => Object.hasOwn(observed, jid))
+    const current = {
+      day,
+      count: state.day === day ? state.count! : 0,
+      jobs,
+      offers,
+      pending: retained,
+      publicationObservedAt: observed,
+    }
+    if (retained.length !== pending.length || Object.keys(saved ?? {}).length !== pending.length) await input.write(current)
+    return current
   }
   return {
     inspect: () => serial(load),
@@ -55,11 +104,22 @@ export function createLedger(input: {
       const state = await load()
       const previous = state.pending.find((item) => item.jid === result.jid)
       if (!state.jobs.some((job) => job.jid === result.jid && job.lease === result.lease) || (previous && previous.lease !== result.lease) || (!previous && state.pending.length >= 32)) throw new Error("Everywhere result has no reservation")
-      await input.write({ ...state, pending: [...state.pending.filter((item) => item.jid !== result.jid), checked.value] })
+      await input.write({
+        ...state,
+        pending: [...state.pending.filter((item) => item.jid !== result.jid), checked.value],
+        publicationObservedAt: {
+          ...state.publicationObservedAt,
+          [result.jid]: state.publicationObservedAt[result.jid] ?? input.now(),
+        },
+      })
     }),
-    acknowledge: (result: Settle) => serial(async () => {
+    clearReceipt: (result: Settle) => serial(async () => {
       const state = await load()
-      await input.write({ ...state, pending: state.pending.filter((item) => item.jid !== result.jid || item.lease !== result.lease) })
+      const pending = state.pending.filter((item) => item.jid !== result.jid || item.lease !== result.lease)
+      if (pending.length === state.pending.length) return
+      const publicationObservedAt = { ...state.publicationObservedAt }
+      delete publicationObservedAt[result.jid]
+      await input.write({ ...state, pending, publicationObservedAt })
     }),
     useOnce: (id: string, expiresAt: number) => serial(async () => {
       const state = await load()
