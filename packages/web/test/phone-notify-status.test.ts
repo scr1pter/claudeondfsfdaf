@@ -116,6 +116,10 @@ test("only the same account and exact current endpoint and keys count as registe
     ["HGET", pushSubscriptionsKey(alice), pushSubscriptionId(`${endpoint}-rotated`)],
     ["HGET", pushSubscriptionsKey(alice), subscriptionId],
   ])
+  // Passive checks count against their own limit, so they never use up the registration budget.
+  const limits = commands.filter(([verb]) => verb === "EVAL").map(([, , , key]) => key.split(":").slice(0, 3).join(":"))
+  expect(limits).toHaveLength(4)
+  expect(new Set(limits)).toEqual(new Set(["vector:abuse:notify-subscribe-check"]))
 })
 
 test("expired records, raw passive data and unauthorized or malformed requests never enable alerts", async () => {

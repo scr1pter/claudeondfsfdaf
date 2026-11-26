@@ -16,6 +16,7 @@ test("the foreground checks the current account on worker invalidation and on re
   })
   let current = endpoint
   let permission = "granted"
+  let visibility = "visible"
   const calls: { token: string | null; body: unknown }[] = []
   const controller = {}
   const worker = Object.assign(new EventTarget(), {
@@ -36,7 +37,7 @@ test("the foreground checks the current account on worker invalidation and on re
     })
   }
   replace(navigator, "serviceWorker", { value: worker })
-  replace(document, "visibilityState", { value: "visible" })
+  replace(document, "visibilityState", { get: () => visibility })
   replace(globalThis, "Notification", {
     value: {
       get permission() {
@@ -69,7 +70,10 @@ test("the foreground checks the current account on worker invalidation and on re
   try {
     expect(await settled()).toBe("on")
     current += "-rotated"
+    // A message from anything but the controlling worker starts no check.
     message({})
+    expect(route.state.loading).toBe(false)
+    await settled()
     expect(calls).toHaveLength(1)
     message(controller)
     expect(route.state.loading).toBe(true)
@@ -80,13 +84,29 @@ test("the foreground checks the current account on worker invalidation and on re
     expect(route.state.loading).toBe(true)
     expect(await settled()).toBe("off")
     expect(calls.at(-1)?.token).toBe("Bearer fixture-b")
+    // Going into the background starts no check; coming back does.
+    visibility = "hidden"
+    document.dispatchEvent(new Event("visibilitychange"))
+    expect(route.state.loading).toBe(false)
+    visibility = "visible"
     permission = "denied"
     document.dispatchEvent(new Event("visibilitychange"))
     expect(await settled()).toBe("denied")
     expect(calls).toHaveLength(3)
+    // A new controlling worker rechecks too.
+    permission = "granted"
+    worker.dispatchEvent(new Event("controllerchange"))
+    expect(route.state.loading).toBe(true)
+    expect(await settled()).toBe("off")
+    expect(calls).toHaveLength(4)
+    // After the route is gone, nothing it listened to starts a check.
     route.dispose()
     message(controller)
-    expect(calls).toHaveLength(3)
+    worker.dispatchEvent(new Event("controllerchange"))
+    document.dispatchEvent(new Event("visibilitychange"))
+    expect(route.state.loading).toBe(false)
+    await settled()
+    expect(calls).toHaveLength(4)
   } finally {
     route.dispose()
     for (const reset of restore.reverse()) reset()
