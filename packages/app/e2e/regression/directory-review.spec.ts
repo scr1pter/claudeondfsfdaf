@@ -289,11 +289,28 @@ test("a lost review response persists one opaque unpaid request and only explici
     "at least 24 hours old",
   )
   expect(bodies).toHaveLength(1)
-  await dashboard.getByRole("button", { name: "Retry review start", exact: true }).click()
+  // 2026-11-25, P1-9 (CN-10 lead ruling): a retry of a marker at least 24 hours old sends nothing until "Retry anyway".
+  // Cancel keeps the request held and unsent; the confirmed retry then sends the same body once.
+  const retry = dashboard.getByRole("button", { name: "Retry review start", exact: true })
+  const confirm = dashboard.getByRole("group", { name: "Confirm review retry", exact: true })
+  await retry.click()
+  await expect(confirm.getByRole("button", { name: "Retry anyway", exact: true })).toBeEnabled()
+  await expect(retry).toHaveCount(0)
+  expect(bodies).toHaveLength(1)
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click()
+  await expect(confirm).toHaveCount(0)
+  await expect(retry).toBeEnabled()
+  await expect(dashboard.locator('[data-component="directory-review-retry-warning"]')).toContainText(
+    "at least 24 hours old",
+  )
+  expect(bodies).toHaveLength(1)
+  await retry.click()
+  await confirm.getByRole("button", { name: "Retry anyway", exact: true }).click()
   await expect(dashboard.locator('[data-component="directory-review"]')).toContainText("Review in progress")
   expect(bodies).toHaveLength(2)
   expect(bodies[1]).toEqual(bodies[0])
-  await expect(dashboard.getByRole("button", { name: "Retry review start", exact: true })).toHaveCount(0)
+  await expect(retry).toHaveCount(0)
+  await expect(confirm).toHaveCount(0)
 })
 
 for (const mutation of ["remove", "replace"] as const)

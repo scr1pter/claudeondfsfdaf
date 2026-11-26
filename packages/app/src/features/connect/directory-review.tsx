@@ -92,6 +92,7 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
         permission: undefined,
         error: "",
         admissionAnswer: undefined,
+        confirmRetry: undefined,
         epoch: identity.epoch,
       })
       return
@@ -108,9 +109,11 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
           run: value.run,
           permission: value.permission,
           admissionAnswer: value.admissionAnswer,
+          confirmRetry: value.confirmRetry,
           epoch: identity.epoch,
         }),
-      admission: saved,
+      // CN-10: a retry of a request whose age is unknown, in the future or a day old asks first (`confirmRetry`).
+      admission: { ...saved, stale: () => saved.retryStale() },
       transport: {
         runs: (signal) => client.runs(undefined, signal),
         get: (id, signal) => client.get(id, undefined, signal),
@@ -244,13 +247,37 @@ export function DirectoryReview(props: DirectoryReviewTarget) {
           </Show>
           {/* A consumed key whose marker another view replaced can only fail a retry here. */}
           <Show when={state.admissionAnswer?.code !== "consumed"}>
-            <button
-              type="button"
-              disabled={state.busy || state.phase !== "ready"}
-              onClick={() => void controller?.start(true)}
+            {/* CN-10: a retry that may start a new review waits for "Retry anyway", beside the warning above. */}
+            <Show
+              when={state.confirmRetry}
+              fallback={
+                <button
+                  type="button"
+                  disabled={state.busy || state.phase !== "ready"}
+                  onClick={() => void controller?.start(true)}
+                >
+                  Retry review start
+                </button>
+              }
             >
-              Retry review start
-            </button>
+              <div
+                class="mt-2 flex gap-3"
+                role="group"
+                aria-label="Confirm review retry"
+                data-component="directory-review-retry-confirm"
+              >
+                <button
+                  type="button"
+                  disabled={state.busy || state.phase !== "ready"}
+                  onClick={() => void controller?.confirmRetry()}
+                >
+                  Retry anyway
+                </button>
+                <button type="button" disabled={state.busy} onClick={() => controller?.cancelRetry()}>
+                  Cancel
+                </button>
+              </div>
+            </Show>
           </Show>
         </Show>
         <div class="mt-2 flex gap-3">

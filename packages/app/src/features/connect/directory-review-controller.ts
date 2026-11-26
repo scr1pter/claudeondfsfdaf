@@ -23,6 +23,11 @@ export type DirectoryReviewState = {
   admissionUncertain?: boolean
   /** The engine's answer for the saved key. Owner reads clear `error`, so it outlives the refresh after a start. */
   admissionAnswer?: DirectoryReviewAnswer
+  /**
+   * CN-10: a retry of a saved request whose age is unknown, in the future or at least a day old waits here, unsent,
+   * for an explicit confirmation. The engine may no longer retain its key, so that retry can start a new review.
+   */
+  confirmRetry?: boolean
 }
 
 /** The directory and base come from the native workspace record, never a chat or event. */
@@ -62,7 +67,14 @@ export function createDirectoryReviewController(input: {
   transport: DirectoryReviewTransport
   subscribe: (invalidate: () => void) => () => void
   changed: (state: DirectoryReviewState) => void
-  admission?: { pending: () => boolean; hold: (retry: boolean) => void; confirm: () => void; discard: () => void }
+  admission?: {
+    pending: () => boolean
+    hold: (retry: boolean) => void
+    confirm: () => void
+    discard: () => void
+    /** True when a retry of the held request may start a new review; such a retry first asks (`confirmRetry`). */
+    stale?: () => boolean
+  }
 }) {
   const abort = new AbortController()
   const answered = new Set<string>()
@@ -165,91 +177,121 @@ export function createDirectoryReviewController(input: {
   input.changed(state)
   if (input.enabled) void refresh()
 
+  // A check that cannot answer asks, as an old request does.
+  const stale = () => {
+    try {
+      return input.admission?.stale?.() ?? false
+    } catch {
+      return true
+    }
+  }
+  // `confirmed`: the person accepted a retry that may start a new review (`confirmRetry`).
+  const begin = async (retry: boolean, confirmed: boolean) => {
+    if (
+      !current() ||
+      state.phase !== "ready" ||
+      state.busy ||
+      (state.admissionUncertain && (!retry || !input.admission)) ||
+      (!state.admissionUncertain && retry) ||
+      (!retry && state.run && state.run.status !== "done")
+    )
+      return
+    // CN-10: a saved request of unknown age, from the future or at least a day old may no longer be retained, so its
+    // retry could start a new review. Nothing is held or sent until the person confirms that retry.
+    if (retry && !confirmed && stale()) {
+      update({ confirmRetry: true })
+      return
+    }
+    starting = true
+    runID = undefined
+    update({ busy: true, permission: undefined, error: "", admissionAnswer: undefined, confirmRetry: undefined })
+    // Persist only an unpaid uncertainty marker; a list cannot prove a lost POST will never admit later.
+    const held = (() => {
+      try {
+        input.admission?.hold(retry)
+        return true
+      } catch {
+        return false
+      }
+    })()
+    if (!held || !current()) {
+      starting = false
+      update({
+        busy: false,
+        admissionUncertain: true,
+        error: "This review start cannot be tracked safely. Starting another review is blocked.",
+      })
+      return
+    }
+    update({ admissionUncertain: true })
+    // A view change must not abort the admission POST or implicitly stop the durable job.
+    await input.transport
+      .start()
+      .then((run) => {
+        if (!current()) return false
+        if (!directoryRunMatches(run, input.target))
+          throw new Error("The engine returned a review for another workspace.")
+        runID = run.id
+        input.admission?.confirm()
+        update({ admissionUncertain: false })
+        update({ run: undefined })
+        return true
+      })
+      .catch((error: unknown) => {
+        if (!current()) return false
+        const answer = directoryReviewAnswer(error)
+        if (answer?.code === "pending") {
+          update({ admissionUncertain: true, admissionAnswer: answer })
+          return false
+        }
+        if (answer?.code !== "consumed") {
+          update({
+            admissionUncertain: true,
+            error:
+              "The review start was not confirmed. Refresh to inspect existing reviews; starting another review remains blocked until this request can be identified.",
+          })
+          return false
+        }
+        // The engine's terminal answer for this exact key: no review ran, so only a later click mints the next key.
+        const discarded = (() => {
+          try {
+            input.admission?.discard()
+            return true
+          } catch {
+            return false
+          }
+        })()
+        // A refused discard (another view replaced the marker) keeps the key held, but the engine's words still show.
+        consumedRun = state.run?.id
+        update({ admissionUncertain: !discarded, admissionAnswer: answer })
+        return false
+      })
+      .finally(() => {
+        starting = false
+      })
+    if (current()) await refresh()
+    update({ busy: false })
+  }
+
   return {
     get state() {
       return state
     },
     refresh,
     retire,
-    async start(retry = false) {
-      if (
-        !current() ||
-        state.phase !== "ready" ||
-        state.busy ||
-        (state.admissionUncertain && (!retry || !input.admission)) ||
-        (!state.admissionUncertain && retry) ||
-        (!retry && state.run && state.run.status !== "done")
-      )
-        return
-      starting = true
-      runID = undefined
-      update({ busy: true, permission: undefined, error: "", admissionAnswer: undefined })
-      // Persist only an unpaid uncertainty marker; a list cannot prove a lost POST will never admit later.
-      const held = (() => {
-        try {
-          input.admission?.hold(retry)
-          return true
-        } catch {
-          return false
-        }
-      })()
-      if (!held || !current()) {
-        starting = false
-        update({
-          busy: false,
-          admissionUncertain: true,
-          error: "This review start cannot be tracked safely. Starting another review is blocked.",
-        })
-        return
-      }
-      update({ admissionUncertain: true })
-      // A view change must not abort the admission POST or implicitly stop the durable job.
-      await input.transport
-        .start()
-        .then((run) => {
-          if (!current()) return false
-          if (!directoryRunMatches(run, input.target))
-            throw new Error("The engine returned a review for another workspace.")
-          runID = run.id
-          input.admission?.confirm()
-          update({ admissionUncertain: false })
-          update({ run: undefined })
-          return true
-        })
-        .catch((error: unknown) => {
-          if (!current()) return false
-          const answer = directoryReviewAnswer(error)
-          if (answer?.code === "pending") {
-            update({ admissionUncertain: true, admissionAnswer: answer })
-            return false
-          }
-          if (answer?.code !== "consumed") {
-            update({
-              admissionUncertain: true,
-              error:
-                "The review start was not confirmed. Refresh to inspect existing reviews; starting another review remains blocked until this request can be identified.",
-            })
-            return false
-          }
-          // The engine's terminal answer for this exact key: no review ran, so only a later click mints the next key.
-          const discarded = (() => {
-            try {
-              input.admission?.discard()
-              return true
-            } catch {
-              return false
-            }
-          })()
-          // A refused discard (another view replaced the marker) keeps the key held, but the engine's words still show.
-          consumedRun = state.run?.id
-          update({ admissionUncertain: !discarded, admissionAnswer: answer })
-          return false
-        })
-        .finally(() => {
-          starting = false
-        })
-      if (current()) await refresh()
-      update({ busy: false })
+    start(retry = false) {
+      return begin(retry, false)
+    },
+    /** Sends the retry `confirmRetry` holds, once and with the same saved key. */
+    async confirmRetry() {
+      if (!current() || !state.confirmRetry) return
+      update({ confirmRetry: undefined })
+      await begin(true, true)
+    },
+    /** Clears the question; the saved request stays held and unsent. */
+    cancelRetry() {
+      if (!state.confirmRetry) return
+      update({ confirmRetry: undefined })
     },
     async reply(id: string, reply: "once" | "reject") {
       if (!current() || state.busy || answered.has(id) || state.permission?.id !== id) return

@@ -174,6 +174,54 @@ test("invalid timestamps refuse without changing storage; future time remains un
   expect(f.minted()).toBe(0)
 })
 
+// CN-10 (P1-9, 2026-11-25): the view asks before a retry that may start a new review. retryStale and retryWarning read
+// one classification, so the question and the warning beside it always agree.
+const HOUR = 60 * 60_000
+const FRESH = "A retry sends the same saved request."
+
+for (const [name, savedAt, stale, warning] of [
+  ["a legacy 3-key marker", undefined, true, "age is unknown"],
+  ["a future savedAt", NOW + 1, true, "timestamp is in the future"],
+  ["a 25-hour-old marker", NOW - 25 * HOUR, true, "at least 24 hours old"],
+  ["a marker exactly 24 hours old", NOW - DAY, true, "at least 24 hours old"],
+  ["a 23-hour-old marker", NOW - 23 * HOUR, false, FRESH],
+  ["a marker saved just now", NOW, false, FRESH],
+] as const)
+  test(`retryStale is ${stale} for ${name}, and the warning agrees`, () => {
+    const f = fixture()
+    const raw = JSON.stringify({ requestKey: first, ...body, ...(savedAt === undefined ? {} : { savedAt }) })
+    f.storage.setItem(key, raw)
+    const saved = f.make()
+    expect(saved.retryStale()).toBe(stale)
+    expect(saved.retryWarning()).toContain(warning)
+    expect(saved.retryWarning()?.startsWith(FRESH)).toBe(!stale)
+    // A read only: the marker, its key and the wire body stay as they are.
+    expect(f.storage.getItem(key)).toBe(raw)
+    saved.hold(true)
+    expect(saved.request()).toEqual({ requestKey: first, ...body })
+    expect(f.minted()).toBe(0)
+  })
+
+test("retryStale is false with nothing retained and true when the clock cannot be read", () => {
+  const f = fixture()
+  const empty = f.make()
+  expect(empty.retryStale()).toBe(false)
+  expect(empty.retryWarning()).toBeUndefined()
+  empty.hold(false)
+  expect(empty.retryStale()).toBe(false)
+  f.clock.now = Number.NaN
+  expect(empty.retryStale()).toBe(true)
+  expect(empty.retryWarning()).toContain("age is unknown")
+  f.clock.now = -1
+  expect(empty.retryStale()).toBe(true)
+  f.clock.now = NOW + DAY
+  expect(empty.retryStale()).toBe(true)
+  f.clock.now = NOW + DAY - 1
+  expect(empty.retryStale()).toBe(false)
+  empty.confirm()
+  expect(empty.retryStale()).toBe(false)
+})
+
 test("a missing local timestamp is not inferred from now and an invalid new clock saves no request", () => {
   const f = fixture()
   f.clock.now = Number.NaN

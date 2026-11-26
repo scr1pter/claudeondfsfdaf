@@ -8,6 +8,7 @@ import {
   directoryRunMatches,
   type DirectoryReviewState,
 } from "./directory-review-controller"
+import { createDirectoryReviewReservation } from "./directory-review-reservation"
 import { reviewRun } from "./test-fixture"
 
 const target = { workspaceID: "workspace-fixture", directory: "/fixture/isolated", base: "a".repeat(40) }
@@ -642,5 +643,133 @@ test("a consumed retry beside another view's live run leaves only that run on th
   expect(controller.state.admissionUncertain).toBe(false)
   expect(controller.state.run?.status).toBe("running")
   expect(controller.state.admissionAnswer).toBeUndefined()
+  controller.dispose()
+})
+
+// CN-10 (P1-9, 2026-11-25): a retry of a saved request whose age is unknown, in the future or at least a day old may
+// start a new review, so it waits for an explicit "Retry anyway" and then sends the same saved key once. These cases
+// use the real reservation, wired as the view wires it.
+const HOUR = 60 * 60_000
+const NOW = Date.UTC(2026, 10, 25, 12)
+const SAVED_KEY = "0196aa50-50d0-4f17-9c1d-85eff018e829"
+const savedBody = { target: { kind: "branch" as const, base: target.base }, background: true }
+
+/** The real reservation over a marker a lost POST left behind, saved at `savedAt` (absent: a legacy 3-key marker). */
+function savedMarker(savedAt?: number) {
+  const values = new Map<string, string>()
+  const raw = JSON.stringify({ requestKey: SAVED_KEY, ...savedBody, ...(savedAt === undefined ? {} : { savedAt }) })
+  values.set("marker", raw)
+  const reservation = createDirectoryReviewReservation({
+    storage: {
+      getItem: (name: string) => values.get(name) ?? null,
+      setItem: (name: string, value: string) => void values.set(name, value),
+      removeItem: (name: string) => void values.delete(name),
+    },
+    key: "marker",
+    body: savedBody,
+    requestKey: () => {
+      throw new Error("A retry never mints a key.")
+    },
+    now: () => NOW,
+  })
+  return { values, raw, reservation, admission: { ...reservation, stale: () => reservation.retryStale() } }
+}
+
+for (const [name, savedAt] of [
+  ["an unknown-age", undefined],
+  ["a 25-hour-old", NOW - 25 * HOUR],
+  ["a future-dated", NOW + HOUR],
+] as const)
+  test(`${name} saved request sends nothing until its retry is confirmed, then its original key once`, async () => {
+    const saved = savedMarker(savedAt)
+    const posts: unknown[] = []
+    const { data, controller } = fixture(true, saved.admission)
+    data.start = async () => {
+      posts.push(saved.reservation.request())
+      return data.run
+    }
+    await controller.refresh()
+    expect(controller.state.admissionUncertain).toBe(true)
+    await controller.start(true)
+    expect(posts).toEqual([])
+    expect(data.calls).not.toContain("start")
+    expect(controller.state.confirmRetry).toBe(true)
+    expect(controller.state.busy).toBe(false)
+    expect(saved.values.get("marker")).toBe(saved.raw)
+    // Cancel leaves the request held and unsent, and the next retry asks again.
+    controller.cancelRetry()
+    expect(controller.state.confirmRetry).toBeUndefined()
+    expect(controller.state.admissionUncertain).toBe(true)
+    expect(saved.reservation.pending()).toBe(true)
+    expect(saved.values.get("marker")).toBe(saved.raw)
+    expect(data.calls).not.toContain("start")
+    await controller.start(true)
+    expect(posts).toEqual([])
+    expect(controller.state.confirmRetry).toBe(true)
+    // A double click on "Retry anyway" still sends one request.
+    await Promise.all([controller.confirmRetry(), controller.confirmRetry()])
+    expect(posts).toEqual([{ requestKey: SAVED_KEY, ...savedBody }])
+    expect(data.calls.filter((call) => call === "start")).toHaveLength(1)
+    expect(controller.state.confirmRetry).toBeUndefined()
+    expect(controller.state.admissionUncertain).toBe(false)
+    expect(saved.values.has("marker")).toBe(false)
+    await controller.confirmRetry()
+    expect(data.calls.filter((call) => call === "start")).toHaveLength(1)
+    controller.dispose()
+  })
+
+test("a saved request under 24 hours old retries at once with its original key, without asking", async () => {
+  const saved = savedMarker(NOW - 23 * HOUR)
+  const posts: unknown[] = []
+  const { data, controller } = fixture(true, saved.admission)
+  data.start = async () => {
+    posts.push(saved.reservation.request())
+    return data.run
+  }
+  await controller.refresh()
+  await controller.start(true)
+  expect(posts).toEqual([{ requestKey: SAVED_KEY, ...savedBody }])
+  expect(data.states.some((state) => state.confirmRetry)).toBe(false)
+  expect(controller.state.admissionUncertain).toBe(false)
+  controller.dispose()
+})
+
+test("retirement drops an unanswered retry question, and a later confirmation sends nothing", async () => {
+  const saved = savedMarker()
+  const { data, controller } = fixture(true, saved.admission)
+  await controller.refresh()
+  await controller.start(true)
+  expect(controller.state.confirmRetry).toBe(true)
+  controller.retire()
+  expect(controller.state.confirmRetry).toBeUndefined()
+  await controller.confirmRetry()
+  expect(data.calls).not.toContain("start")
+  expect(saved.values.get("marker")).toBe(saved.raw)
+})
+
+test("a stale check that throws asks before the retry, as an old request does", async () => {
+  const saved = marker()
+  const admission = {
+    ...saved.admission,
+    stale: () => {
+      throw new Error("The clock could not be read.")
+    },
+  }
+  const { data, controller } = fixture(true, admission)
+  await controller.refresh()
+  data.start = async () => {
+    throw new TypeError("The POST response was lost")
+  }
+  await controller.start()
+  expect(controller.state.admissionUncertain).toBe(true)
+  await controller.start(true)
+  expect(controller.state.confirmRetry).toBe(true)
+  expect(saved.value.holds).toEqual([false])
+  expect(data.calls.filter((call) => call === "start")).toHaveLength(1)
+  data.start = async () => data.run
+  await controller.confirmRetry()
+  expect(saved.value.holds).toEqual([false, true])
+  expect(saved.value.confirms).toBe(1)
+  expect(data.calls.filter((call) => call === "start")).toHaveLength(2)
   controller.dispose()
 })

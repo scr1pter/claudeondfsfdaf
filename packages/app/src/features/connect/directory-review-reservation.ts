@@ -3,6 +3,18 @@ import type { Connect } from "@vectordevai/schema/connect"
 // An advisory age for the default engine replay window, never proof that a server still retains a request.
 const REPLAY_NOTICE_MS = 24 * 60 * 60_000
 
+// How a retained request's age reads against the replay notice. retryWarning and retryStale both come from it, so the
+// warning beside the retry and the confirmation before it (CN-10) cannot disagree.
+type RetryAge = "unknown" | "future" | "old" | "fresh"
+
+const RETRY_WARNINGS: Record<RetryAge, string> = {
+  unknown: "This saved request's age is unknown. If the engine no longer retains it, retrying can start a new review.",
+  future:
+    "This saved request's timestamp is in the future. Its replay age cannot be verified, so retrying can start a new review.",
+  old: "This saved request is at least 24 hours old. The engine may no longer retain it, so retrying can start a new review.",
+  fresh: "A retry sends the same saved request. If the engine no longer retains it, retrying can start a new review.",
+}
+
 /** An unpaid admission marker. A retry must keep the identity captured before its first POST. */
 export function createDirectoryReviewReservation(input: {
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem">
@@ -45,18 +57,28 @@ export function createDirectoryReviewReservation(input: {
     input.storage.removeItem(input.key)
     retained = undefined
   }
+  const retryAge = (): RetryAge | undefined => {
+    if (!retained) return undefined
+    const current = now()
+    if (retained.savedAt === undefined || !Number.isSafeInteger(current) || current < 0) return "unknown"
+    if (retained.savedAt > current) return "future"
+    if (current - retained.savedAt >= REPLAY_NOTICE_MS) return "old"
+    return "fresh"
+  }
   return {
     /** A warning only: it neither expires the key nor claims that a fresh timestamp guarantees replay. */
     retryWarning: () => {
-      if (!retained) return undefined
-      const current = now()
-      if (retained.savedAt === undefined || !Number.isSafeInteger(current) || current < 0)
-        return "This saved request's age is unknown. If the engine no longer retains it, retrying can start a new review."
-      if (retained.savedAt > current)
-        return "This saved request's timestamp is in the future. Its replay age cannot be verified, so retrying can start a new review."
-      if (current - retained.savedAt >= REPLAY_NOTICE_MS)
-        return "This saved request is at least 24 hours old. The engine may no longer retain it, so retrying can start a new review."
-      return "A retry sends the same saved request. If the engine no longer retains it, retrying can start a new review."
+      const age = retryAge()
+      return age === undefined ? undefined : RETRY_WARNINGS[age]
+    },
+    /**
+     * True when a retry of the retained request may start a new review: its age is unknown, the clock cannot be read,
+     * its timestamp is in the future, or it is at least 24 hours old. The view asks before such a retry (CN-10). It
+     * reads only; the marker, its requestKey and the wire body stay as they are.
+     */
+    retryStale: () => {
+      const age = retryAge()
+      return age !== undefined && age !== "fresh"
     },
     pending: () => {
       try {
