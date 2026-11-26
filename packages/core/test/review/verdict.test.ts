@@ -1,3 +1,11 @@
+import {
+  decodeState,
+  encodeState,
+  emptyState,
+  nextState,
+  storedReviewVerdict,
+  withReviewVerdict,
+} from "@vectordevai/core/review/state"
 import { describe, expect, test } from "bun:test"
 import { decideSkip, type SkipInput, type SkipReason } from "@vectordevai/core/review/skip"
 import {
@@ -9,6 +17,7 @@ import {
   type ReviewState,
   type Selection,
   type Severity,
+  SKIPPED_FILE_REASONS,
   type SkippedFile,
 } from "@vectordevai/core/review/types"
 import {
@@ -242,6 +251,8 @@ describe("reviewVerdict over outcomes", () => {
       binary: verdict("clean-complete"),
       deleted: verdict("clean-complete"),
       "size-limit": verdict("incomplete", ["size-limit"]),
+      // VS-34: a held-back file is not reviewed (I-7), and a skip alone says nothing of a deletion.
+      "held-back": verdict("incomplete", ["held-back"]),
     }
     const reasons: SkippedFile["reason"][] = [
       "ignored",
@@ -252,8 +263,10 @@ describe("reviewVerdict over outcomes", () => {
       "binary",
       "deleted",
       "size-limit",
+      "held-back",
     ]
     expect(Object.keys(expected).toSorted()).toEqual(reasons.toSorted())
+    expect(reasons.toSorted()).toEqual([...SKIPPED_FILE_REASONS].toSorted())
     for (const reason of reasons) expect(judge(outcome({ skipped: [{ path: "x", reason }] }))).toEqual(expected[reason])
     // One cause however many files share the reason.
     expect(
@@ -289,6 +302,75 @@ describe("reviewVerdict over outcomes", () => {
       verdict("not-reviewed", ["privacy"], ["held-back-deletion"]),
     )
     expect(judge({ ...outcome(), held: [] })).toEqual(verdict("clean-complete"))
+  })
+
+  // VS-34 wiring records a held-back file in `skipped` (addendum A :836) beside its `held` entry, which carries the
+  // status. A skip counts unless a held deletion accounts for it, so VS-32's deletion rule stays expressible and a skip
+  // with nothing to account for it fails closed. These inputs carry no `held` paths, so the count rule decides; Review.run
+  // records both with paths (SF-13b), and the next test keys the match by path.
+  test("held-back skips: incomplete unless a held deletion accounts for each one", () => {
+    const skip = (path: string) => ({ path, reason: "held-back" as const })
+    // A held change and its skip give the cause once.
+    expect(judge({ ...outcome({ skipped: [skip("config/prod/.envrc")] }), held: [{ status: "modified" }] })).toEqual(
+      verdict("incomplete", ["held-back"]),
+    )
+    // A held deletion only, with nothing sent, accounts for its skip: a note, and the review is complete.
+    expect(judge({ ...outcome({ skipped: [skip(".env")] }), held: [{ status: "deleted" }] })).toEqual(
+      verdict("clean-complete", [], ["held-back-deletion"]),
+    )
+    // A skip with no held entry, or more skips than held deletions, leaves the review incomplete.
+    expect(judge(outcome({ skipped: [skip(".env")] }))).toEqual(verdict("incomplete", ["held-back"]))
+    expect(judge({ ...outcome({ skipped: [skip(".env")] }), held: [] })).toEqual(verdict("incomplete", ["held-back"]))
+    expect(judge({ ...outcome({ skipped: [skip(".env"), skip("id_rsa")] }), held: [{ status: "deleted" }] })).toEqual(
+      verdict("incomplete", ["held-back"], ["held-back-deletion"]),
+    )
+    // Beside a held change, the deletion keeps its note.
+    expect(
+      judge({
+        ...outcome({ skipped: [skip(".env"), skip("id_rsa")] }),
+        held: [{ status: "deleted" }, { status: "renamed" }],
+      }),
+    ).toEqual(verdict("incomplete", ["held-back"], ["held-back-deletion"]))
+    // Its cause keeps its fixed place after the size limit, whatever order the files come in.
+    for (const skipped of [
+      [skip(".env"), { path: "big.ts", reason: "size-limit" as const }],
+      [{ path: "big.ts", reason: "size-limit" as const }, skip(".env")],
+    ])
+      expect(judge(outcome({ skipped }))).toEqual(verdict("incomplete", ["size-limit", "held-back"]))
+  })
+
+  // SF-13b: when every held-back skip and held deletion names its path, as Review.run records them, a skip counts unless
+  // a held deletion has its path, so a held deletion of one file never accounts for another file's skip.
+  test("held-back skips with paths: a held deletion accounts only for its own skip", () => {
+    const skip = (path: string) => ({ path, reason: "held-back" as const })
+    const deleted = (path: string) => ({ path, status: "deleted" as const })
+    // The same file: a note, and the review is complete.
+    expect(judge({ ...outcome({ skipped: [skip(".env")] }), held: [deleted(".env")] })).toEqual(
+      verdict("clean-complete", [], ["held-back-deletion"]),
+    )
+    // A held deletion of .env beside a held-back skip for id_rsa, whose own held entry is missing: one of each, which
+    // the count rule would read complete, is incomplete by path.
+    expect(
+      judge({
+        ...outcome({ skipped: [{ path: ".env", reason: "deleted" }, skip("id_rsa")] }),
+        held: [deleted(".env")],
+      }),
+    ).toEqual(verdict("incomplete", ["held-back"], ["held-back-deletion"]))
+    // Two deletions account for their two skips, in any order.
+    expect(
+      judge({ ...outcome({ skipped: [skip("id_rsa"), skip(".env")] }), held: [deleted(".env"), deleted("id_rsa")] }),
+    ).toEqual(verdict("clean-complete", [], ["held-back-deletion"]))
+    // A held change counts whatever its path.
+    expect(
+      judge({
+        ...outcome({ skipped: [skip(".env"), skip("deploy/.netrc")] }),
+        held: [deleted(".env"), { path: "deploy/.netrc", status: "modified" }],
+      }),
+    ).toEqual(verdict("incomplete", ["held-back"], ["held-back-deletion"]))
+    // One held deletion without a path falls back to the count rule for all of them.
+    expect(judge({ ...outcome({ skipped: [skip("id_rsa")] }), held: [{ status: "deleted" }] })).toEqual(
+      verdict("clean-complete", [], ["held-back-deletion"]),
+    )
   })
 
   test("a strict result that is not complete leaves the review incomplete", () => {
@@ -416,6 +498,17 @@ describe("reviewVerdict over outcomes", () => {
     expect(judge({ ...trivial, strict: { complete: false } })).toEqual(
       verdict("incomplete", ["strict-incomplete", "no-reviewer"]),
     )
+    const skippedStrict = { complete: false, incomplete: ["no-reviewer"] }
+    expect(judge({ ...trivial, strict: skippedStrict })).toEqual(verdict("policy-skip", ["trivial"]))
+    expect(judge({ ...trivial, strict: skippedStrict, unreviewed: ["src/a.ts"] })).toEqual(
+      verdict("incomplete", ["unreviewed", "strict-incomplete", "no-reviewer"]),
+    )
+    expect(judge({ ...trivial, strict: { complete: false, incomplete: ["no-reviewer", "blob-unreadable"] } })).toEqual(
+      verdict("incomplete", ["strict-incomplete", "no-reviewer"]),
+    )
+    expect(
+      judge({ ...trivial, strict: skippedStrict, selection: selection({ stillOpen: [prior("blocking")] }) }),
+    ).toEqual(verdict("blocking", ["blocking"]))
     // So is a marker on a run whose passes ran.
     expect(judge({ ...outcome({ selection: selection({ inline: [placed("blocking")] }) }), trivial: true })).toEqual(
       verdict("blocking", ["blocking"]),
@@ -779,20 +872,20 @@ const INHERITED = ["toString", "constructor", "__proto__", "hasOwnProperty", "va
 
 describe("values the types do not name fail closed at runtime", () => {
   test("a skipped-file reason it does not name leaves the review incomplete", () => {
-    for (const reason of ["held-back", "", ...INHERITED])
+    for (const reason of ["withheld", "", ...INHERITED])
       expect(
         reviewVerdict(decodeInput({ kind: "outcome", outcome: { ...outcome(), skipped: [{ path: "x", reason }] } })),
       ).toEqual(verdict("incomplete", ["skipped-unknown"]))
     // Once, after the known causes, whatever order the files come in.
     for (const skipped of [
       [
-        { path: "a", reason: "held-back" },
+        { path: "a", reason: "withheld" },
         { path: "b", reason: "size-limit" },
       ],
       [
         { path: "b", reason: "size-limit" },
         { path: "c", reason: "lockfile" },
-        { path: "a", reason: "held-back" },
+        { path: "a", reason: "withheld" },
         { path: "d", reason: "toString" },
       ],
     ])
@@ -938,3 +1031,40 @@ function deepFreeze<T>(value: T): T {
   }
   return value
 }
+
+test("stored fail-closed verdicts round-trip only for the exact head and opt-in policy (SF-39)", () => {
+  const previous = { ...emptyState(), head: "a".repeat(40) }
+  const activeHead = "b".repeat(40)
+  const legacy = encodeState(previous)
+  expect(storedReviewVerdict(decodeState(legacy), previous.head)).toBeUndefined()
+  for (const result of REVIEW_VERDICTS) {
+    const saved = withReviewVerdict(previous, activeHead, "blocking-or-incomplete", result)
+    const round = decodeState(encodeState(saved))!
+    expect(round.head).toBe(previous.head)
+    expect(storedReviewVerdict(round, activeHead)).toBe(result)
+    expect(storedReviewVerdict(round, previous.head)).toBeUndefined()
+    for (const legacyPolicy of ["never", "blocking"] as const)
+      expect(encodeState(withReviewVerdict(round, activeHead, legacyPolicy, result))).toBe(legacy)
+  }
+  expect(encodeState(withReviewVerdict(previous, "short", "blocking-or-incomplete", "clean-complete"))).toBe(legacy)
+})
+
+test("only a requested verdict is persisted on a normal, carry or failed transition", () => {
+  const head = "c".repeat(40)
+  const prior = { ...emptyState(), head: "a".repeat(40) }
+  for (const mode of ["full", "carry"] as const) {
+    for (const failed of [true, false]) {
+      const fields = { mode, failed, head, base: "b".repeat(40), now: Date.UTC(2025, 0, 1) }
+      const old = encodeState(nextState(prior, fields))
+      const written = nextState(prior, {
+        ...fields,
+        verdict: { failOn: "blocking-or-incomplete", result: "incomplete" },
+      })
+      expect(storedReviewVerdict(decodeState(encodeState(written)), head)).toBe("incomplete")
+      expect(written.head).toBe(failed ? prior.head : head)
+      expect(
+        encodeState(nextState(withReviewVerdict(prior, prior.head, "blocking-or-incomplete", "findings"), fields)),
+      ).toBe(old)
+    }
+  }
+})

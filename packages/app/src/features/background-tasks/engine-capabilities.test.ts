@@ -55,6 +55,15 @@ describe("engine capabilities", () => {
     expect(
       parseCapabilities({ vectorscopeRuns: true, vectorscopeSettings: true }).vectorscopeReviewMemoryControls,
     ).toBe(false)
+    // SF-10b: the desktop's fix actions appear only on an engine that sent exactly true (SF-10a's routes exist).
+    expect(parseCapabilities({ vectorscopeLocalFixes: true }).vectorscopeLocalFixes).toBe(true)
+    for (const value of [undefined, null, false, 1, "true", {}, []])
+      expect(parseCapabilities({ vectorscopeLocalFixes: value }).vectorscopeLocalFixes).toBe(false)
+    expect(
+      parseCapabilities({ vectorscopeRuns: true, vectorscopeReviewMemoryControls: true }).vectorscopeLocalFixes,
+    ).toBe(false)
+    expect(FLAGS).toContain("vectorscopeLocalFixes")
+    expect(NO_CAPABILITIES.vectorscopeLocalFixes).toBe(false)
     expect(parseCapabilities({ vectorscopeRuns: "true" }).vectorscopeRuns).toBe(false)
     expect(parseCapabilities({ vectorscopeSettings: true }).vectorscopeRuns).toBe(false)
     expect(parsed.taskPromote).toBe(false)

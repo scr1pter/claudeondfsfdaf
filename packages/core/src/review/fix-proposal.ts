@@ -61,6 +61,7 @@ export type FixOperation =
       outputBytes: number
     }
   | { kind: "commit"; message: string }
+  // remote: an https URL (a GitHub scope: exactly its repository's), or for a local scope also file:///<absolute path>
   | { kind: "push"; remote: string; commit: string; mode: "branch" | "draft-pr" }
 
 export interface PreparedFixProposal {
@@ -350,8 +351,12 @@ function operationValue(input: unknown, target: FixScope): string | undefined {
     commit(input.commit) &&
     (input.mode === "branch" || input.mode === "draft-pr") &&
     typeof input.remote === "string" &&
-    /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9_./-]+$/.test(input.remote) &&
     input.remote.length <= 2_048 &&
+    (/^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9_./-]+$/.test(input.remote) ||
+      // A local fix may also push to a repository on this computer, named by its absolute path (SF-08).
+      (target.kind === "local" &&
+        /^file:\/\/\/[A-Za-z0-9_./-]+$/.test(input.remote) &&
+        absolute(input.remote.slice("file://".length)))) &&
     (target.kind !== "github" || input.remote === `https://github.com/${target.owner}/${target.repository}.git`)
   )
     return JSON.stringify(["push", input.remote, input.commit, input.mode])

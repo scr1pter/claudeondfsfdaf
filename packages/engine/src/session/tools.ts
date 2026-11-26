@@ -7,10 +7,12 @@ import { ComputerNativeContext } from "@/computer/native-context"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
+import { ReviewMcp } from "@/review/mcp"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import type { PermissionV1 } from "@vectordevai/core/v1/permission"
 import { scopeOf, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
+import { holdsBack } from "@vectordevai/core/review/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -75,6 +77,11 @@ export function taskOffered(
   )
 }
 
+/** Provider-facing definition shared with first-turn review sizing. */
+export function definition(model: Provider.Model, item: Tool.Def) {
+  return { description: item.description, schema: ProviderTransform.schema(model, ToolJsonSchema.fromTool(item)) }
+}
+
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
@@ -107,6 +114,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const sessions = yield* Session.Service
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
+  const restricted = yield* ReviewMcp.restrictedFamily(input.session, sessions.get)
+  const catalog = MCP.modelCatalog(mcp, restricted)
+  // The SDK executes JS callbacks after the listing fiber has returned. Carry the non-egress scope into them.
+  const runTool: typeof run.promise = (effect) =>
+    ReviewMcp.withinCall(restricted, () =>
+      run.promise(restricted ? Effect.provideService(effect, ReviewMcp.Restricted, true) : effect),
+    )
+
   const truncate = yield* Truncate.Service
   const brain = yield* Brain.Service
   // The prompt guard reads what this directory's prompts come from, so every caller must hand it the config.
@@ -171,6 +186,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   // It only tightens listing output; read permission remains independently enforced.
   const restrictedReadListing =
     input.session.internal?.startsWith("vectorscope.") && (!reviewScope || reviewScope.restrictedReads === true)
+  // VS-34's tool half (SF-14): in a review session whose stored rules are those of holdback "secrets", the read, grep
+  // and glob tools redact what they return. Read from the session's rules, which Review.run set from its config, never
+  // from a tool's model arguments or the prompt's metadata, which a compaction can fold away.
+  const holdback = input.session.internal?.startsWith("vectorscope.") === true && holdsBack(input.session.permission)
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
     parentID: input.session.parentID,
@@ -181,6 +200,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     extra: {
       model: input.model,
       ...(restrictedReadListing ? { restrictedReadListing: true } : {}),
+      ...(holdback ? { holdback: "secrets" } : {}),
       ...(input.session.internal?.startsWith(PINNED_SESSION_PREFIX) ? { pinnedReviewInstructions: true } : {}),
       // Whether the model may train on prompts, for tools that keep the owner's personal memory away from such a model.
       mayTrain: freeModelMayTrain(input.model),
@@ -320,16 +340,17 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       }).pipe(Effect.orDie),
   })
 
-  const builtinTask = (yield* registry.named()).task
+  const builtinTask = (yield* registry.named(restricted)).task
   const decodeTask = Schema.decodeUnknownResult(builtinTask.parameters)
   for (const item of yield* registry.tools({
     modelID: ModelV2.ID.make(input.model.api.id),
     providerID: input.model.providerID,
     agent: input.agent,
+    ...(restricted ? { review: true } : {}),
   })) {
-    const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
+    const { schema, description } = definition(input.model, item)
     tools[item.id] = tool({
-      description: item.description,
+      description,
       // The built-in Task advertises the concise batch form, while old model
       // calls and clients may still send a singular brief. Validate against its
       // real runtime decoder before tool hooks; changed plugin schemas keep the
@@ -351,15 +372,19 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           : undefined,
       ),
       execute(args, options) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            const review = restricted || (yield* ReviewMcp.blocked)
+            if (review && (item.id === "task" || ToolRegistry.isPluginToolDef(item)))
+              throw new Error(ReviewMcp.unavailable)
             const ctx = context(args, options)
             yield* access.output(args).pipe(Effect.orDie)
-            yield* plugin.trigger(
-              "tool.execute.before",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
-              { args },
-            )
+            if (!review)
+              yield* plugin.trigger(
+                "tool.execute.before",
+                { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+                { args },
+              )
             yield* access.output(args).pipe(Effect.orDie)
             const result = yield* item.execute(args, ctx).pipe(
               // The owner approved these changes, so they are not held at the next start.
@@ -377,11 +402,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
             // Before plugins: an after-hook must not receive a guest family's private raw output.
             yield* checked(options.toolCallId, output)
-            yield* plugin.trigger(
-              "tool.execute.after",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
-              output,
-            )
+            if (!review)
+              yield* plugin.trigger(
+                "tool.execute.after",
+                { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                output,
+              )
             if (options.abortSignal?.aborted) {
               yield* input.processor.completeToolCall(options.toolCallId, output)
             }
@@ -400,8 +426,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   // The MCP servers a run on GitHub Actions withholds whole (INV-S13): none of their tools is offered, and none of their
   // resources is listed or read. The resource tools ask again when they run, since a server can connect later.
-  const mcpClients = yield* mcp.clients()
-  const mcpTools = yield* mcp.tools()
+  const mcpClients = yield* catalog.clients()
+  const mcpTools = yield* catalog.tools()
   const withheldServers = ToolRegistry.actionsWithheldServers(Object.keys(mcpClients), Object.keys(mcpTools))
   const hasMcpResourceServer = Object.entries(mcpClients).some(
     ([name, client]) => !withheldServers.includes(name) && !!client.getServerCapabilities()?.resources,
@@ -423,12 +449,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }),
       ),
       execute(args, opts) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            ReviewMcp.checkCall(opts.abortSignal)
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
-            const clients = yield* mcp.clients()
-            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
+            const clients = yield* catalog.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(
+              Object.keys(clients),
+              Object.keys(yield* catalog.tools()),
+            )
             const resourceServers = Object.entries(clients)
               .filter((entry) => !withheld.includes(entry[0]) && !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
@@ -455,7 +485,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               always: permissionPatterns,
             })
 
-            const resources = Object.values(yield* mcp.resources(parsed.server))
+            const resources = Object.values(yield* catalog.resources(parsed.server))
             const filtered = resources
               .filter(
                 (resource) =>
@@ -512,12 +542,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }),
       ),
       execute(args, opts) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            ReviewMcp.checkCall(opts.abortSignal)
             const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
-            const clients = yield* mcp.clients()
-            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
+            const clients = yield* catalog.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(
+              Object.keys(clients),
+              Object.keys(yield* catalog.tools()),
+            )
             const resourceServers = Object.entries(clients)
               .filter((entry) => !withheld.includes(entry[0]) && !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
@@ -544,7 +578,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               always: permissionPatterns,
             })
 
-            const templates = Object.values(yield* mcp.resourceTemplates(parsed.server))
+            const templates = Object.values(yield* catalog.resourceTemplates(parsed.server))
             const filtered = templates
               .filter(
                 (template) =>
@@ -605,12 +639,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         }),
       ),
       execute(args, opts) {
-        return run.promise(
+        return runTool(
           Effect.gen(function* () {
+            ReviewMcp.checkCall(opts.abortSignal)
             const parsed = parseReadMcpResourceArgs(args)
             const ctx = context(toRecord(args), opts)
-            const clients = yield* mcp.clients()
-            const withheld = ToolRegistry.actionsWithheldServers(Object.keys(clients), Object.keys(yield* mcp.tools()))
+            const clients = yield* catalog.clients()
+            const withheld = ToolRegistry.actionsWithheldServers(
+              Object.keys(clients),
+              Object.keys(yield* catalog.tools()),
+            )
             const client = withheld.includes(parsed.server) ? undefined : clients[parsed.server]
             if (!client) {
               throw new Error(`MCP server "${parsed.server}" is not connected`)
@@ -670,7 +708,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
-  const cloud = yield* mcp.cloudTools()
+  const cloud = yield* catalog.cloudTools()
   for (const [key, item] of Object.entries(mcpTools)) {
     // A computer-use server's tools, and any id the registry withholds, are never offered on GitHub Actions (INV-S13).
     if (ToolRegistry.actionsWithheldMcpTool(key, withheldServers)) continue
@@ -681,8 +719,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     const transformed = ProviderTransform.schema(input.model, { ...schema, properties: schema.properties ?? {} })
     item.inputSchema = jsonSchema(transformed)
     item.execute = (args, opts) =>
-      run.promise(
+      runTool(
         Effect.gen(function* () {
+          ReviewMcp.checkCall(opts.abortSignal)
           const ctx = context(args, opts)
           yield* access.output(args).pipe(Effect.orDie)
           yield* plugin.trigger(

@@ -57,6 +57,7 @@ const Refusals = [
   "grounding-tool",
   "durable-cache",
   "anthropic-non-zdr-feature",
+  "attestation-unverified",
 ] as const satisfies readonly RouteRefusal[]
 const Route = Schema.Struct({
   requestID: ID,

@@ -64,8 +64,23 @@ function withRetired(schema: JsonSchema) {
   return schema
 }
 
+// VS-23d (SF-15): the user config's `review` block ships hidden until the owner decides it is user-facing (I-14, Q16).
+// Vector decodes it, but the published schema leaves it out, so an editor offers no completion for it. Un-hiding it is
+// deleting this step and regenerating. A generator that no longer produces either part fails here, not silently.
+function withHidden(schema: JsonSchema) {
+  const defs = schema.$defs
+  const config = isRecord(defs) ? defs.Config : undefined
+  if (!isRecord(defs) || !isRecord(config) || !isRecord(config.properties) || !config.properties.review)
+    throw new Error("schema generator lost Config.review")
+  if (!defs.GlobalReviewConfig) throw new Error("schema generator lost GlobalReviewConfig")
+  const { review: _, ...properties } = config.properties
+  config.properties = properties
+  delete defs.GlobalReviewConfig
+  return schema
+}
+
 console.log(configFile)
-await Bun.write(configFile, JSON.stringify(withRetired(generateEffect(ConfigV1.Info)), null, 2))
+await Bun.write(configFile, JSON.stringify(withHidden(withRetired(generateEffect(ConfigV1.Info))), null, 2))
 
 if (tuiFile) {
   console.log(tuiFile)

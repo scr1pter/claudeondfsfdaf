@@ -425,6 +425,16 @@ const layer: Layer.Layer<
       return (yield* canonicalPath(abs)) ?? folded(abs)
     })
 
+    const unattendedRoot = pathSvc.join(Global.Path.data, "everywhere-worktree")
+    const overlapsUnattended = Effect.fnUntraced(function* (requested: string, directory: string) {
+      // The ordinary remove path can also erase an unregistered parent. Check both the requested spelling and
+      // the real path so neither a parent nor an alias can discard a job's reservation and unfinished work.
+      return (
+        FSUtil.overlaps(folded(unattendedRoot), folded(pathSvc.resolve(requested))) ||
+        FSUtil.overlaps(yield* canonical(unattendedRoot), directory)
+      )
+    })
+
     // Vector everywhere's git: the runner's hardening, an environment that inherits nothing from this process (no
     // GIT_DIR, GIT_CONFIG_* or GIT_SSH*, no system or global config), and on Windows never a git.exe in a repository.
     // Nothing here connects and every protocol is off, so neither the Local refusal nor gitEnvironment applies. Failing
@@ -515,7 +525,7 @@ const layer: Layer.Layer<
         return yield* new CreateFailedError({
           message: `The unattended worktree could not be created.${common.error ? ` git: ${common.error}` : ""}`,
         })
-      const root = pathSvc.join(Global.Path.data, "everywhere-worktree", ctx.project.id)
+      const root = pathSvc.join(unattendedRoot, ctx.project.id)
       const directory = pathSvc.join(root, input.jid)
       const reserved = new CreateFailedError({ message: "This job's branch or folder is already reserved." })
       const failed = new CreateFailedError({
@@ -716,6 +726,12 @@ const layer: Layer.Layer<
 
       const directory = yield* canonical(input.directory)
 
+      if (yield* overlapsUnattended(input.directory, directory)) {
+        return yield* new RemoveFailedError({
+          message: "Cannot remove a Vector Everywhere worktree through this command.",
+        })
+      }
+
       // Preserve the loaded path casing for the store cache; `directory` is lowercased on Windows.
       if (directory !== (yield* canonical(ctx.worktree))) yield* store.disposeDirectory(input.directory)
 
@@ -871,6 +887,9 @@ const layer: Layer.Layer<
       const primary = yield* canonical(ctx.worktree)
       if (directory === primary) {
         return yield* new ResetFailedError({ message: "Cannot reset the primary workspace" })
+      }
+      if (yield* overlapsUnattended(input.directory, directory)) {
+        return yield* new ResetFailedError({ message: "Cannot reset a Vector Everywhere worktree through this command." })
       }
 
       const list = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
