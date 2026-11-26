@@ -2,9 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { randomBytes } from "node:crypto"
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -15,6 +18,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Effect, Exit, Layer } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@vectordevai/core/cross-spawn-spawner"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -34,6 +38,7 @@ import { MessageID, SessionID } from "../../src/session/schema"
 import { UnattendedShell } from "../../src/session/unattended-shell"
 import { ShellTool } from "../../src/tool/shell"
 import { Sandbox } from "../../src/tool/shell/sandbox"
+import * as UnattendedSeccomp from "../../src/tool/shell/unattended-seccomp"
 import type { Tool } from "../../src/tool/tool"
 import { Truncate } from "../../src/tool/truncate"
 import { resetDatabase } from "../fixture/db"
@@ -83,8 +88,14 @@ const works =
 // Where this engine advertises the offline sandbox: Linux, a bubblewrap only root can change, and a start that works.
 const offline = works && Sandbox.unattendedBinary() !== undefined
 const liveIf = (run: boolean) => (run ? it.live : it.live.skip)
+let foregroundProgress: { phase: string } | undefined
 
 afterEach(async () => {
+  const progress = foregroundProgress
+  foregroundProgress = undefined
+  if (progress) {
+    console.info(`[offline-shell foreground] last phase=${progress.phase} (Bun deadline starts at test entry)`)
+  }
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -455,8 +466,12 @@ describe("an offline-only session's commands (R-M2)", () => {
     "reach no server on this computer, no host socket and no secret variable, and write only in the checkout",
     () =>
       Effect.gen(function* () {
+        // Snapshot before the existing teardown can obscure a Bun timeout. Updates stay local to this invocation.
+        const progress = { phase: "starting HTTP harness" }
+        foregroundProgress = progress
         const llm = yield* TestLLMServer
         const h = yield* harness(llm.url)
+        progress.phase = "preparing local fixtures"
         const fixtures = scratch()
         const tcp = yield* Effect.acquireRelease(
           Effect.sync(() => Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reached-tcp") })),
@@ -514,22 +529,32 @@ describe("an offline-only session's commands (R-M2)", () => {
           ),
         )
 
+        progress.phase = "creating marked session"
         const marked = yield* created(h, { title: "Unattended", metadata: MARKS })
+        progress.phase = "creating plain session"
         const plain = yield* created(h, { title: "Plain" })
         // A session below an offline-only one is offline-only too, with no mark of its own.
+        progress.phase = "creating child session"
         const child = yield* created(h, { title: "Below", parentID: marked.id })
         expect(child.metadata?.[UNATTENDED_SHELL_KEY]).toBeUndefined()
 
+        progress.phase = "preparing marked prompt"
         yield* llm.tool("bash", { command: "sh ./probe.sh marked", description: "Probe" })
         yield* llm.text("done")
+        progress.phase = "awaiting marked prompt and history"
         const inside = completed(yield* prompt(h, marked.id), "bash")
+        progress.phase = "preparing plain prompt"
         yield* llm.tool("bash", { command: "sh ./probe.sh plain", description: "Probe" })
         yield* llm.text("done")
+        progress.phase = "awaiting plain prompt and history"
         const outside = completed(yield* prompt(h, plain.id), "bash")
+        progress.phase = "preparing child prompt"
         yield* llm.tool("bash", { command: "sh ./probe.sh child", description: "Probe" })
         yield* llm.text("done")
+        progress.phase = "awaiting child prompt and history"
         const below = completed(yield* prompt(h, child.id), "bash")
 
+        progress.phase = "asserting probe results"
         for (const state of [inside, below]) {
           expect(state?.output).toStartWith(`${Sandbox.UNATTENDED_NOTICE}\n\n`)
           expect(state?.metadata.sandbox).toBe(Sandbox.UNATTENDED_NOTICE)
@@ -554,6 +579,7 @@ describe("an offline-only session's commands (R-M2)", () => {
         expect(outside?.output).toContain(`token=token-${secret} pat=pat-${secret}`)
         expect(outside?.output).toContain("hook=written")
         expect(existsSync(path.join(h.directory, "made-plain.txt"))).toBe(true)
+        progress.phase = "assertions complete"
       }),
   )
 
@@ -792,7 +818,7 @@ describe("the capability an engine reports", () => {
   )
 
   // The self-test alone, past the root-ownership check, so a runner that is not root covers it too.
-  ;(process.platform === "win32" ? tool.live.skip : tool.live)(
+  ;(process.platform === "win32" || !UnattendedSeccomp.supported() ? tool.live.skip : tool.live)(
     "comes from a self-test that runs the fixed arguments and counts only exit 0",
     () =>
       Effect.gen(function* () {
@@ -800,20 +826,62 @@ describe("the capability an engine reports", () => {
         const folder = scratch()
         yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(folder, { recursive: true, force: true })))
         const recorded = path.join(folder, "args")
+        const policy = path.join(folder, "policy")
+        const shell = "/bin/sh"
         const fake = (code: number) => {
           const file = path.join(folder, `bwrap-${code}`)
-          writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' "$@" > '${recorded}'\nexit ${code}\n`)
+          writeFileSync(
+            file,
+            `#!/bin/sh\nprintf '%s\\0' "$@" > '${recorded}'\ncat > '${policy}' || exit 1\nexit ${code}\n`,
+          )
           chmodSync(file, 0o755)
           return file
         }
-        expect(yield* UnattendedShell.selfTest(spawner, fake(1))).toBe(false)
-        expect(readFileSync(recorded, "utf8").split("\n").slice(0, -1)).toEqual([...UnattendedShell.SELF_TEST])
-        // The program it starts is one every system bubblewrap runs on has, NixOS included.
-        expect(UnattendedShell.SELF_TEST.slice(-3)).toEqual(["/bin/sh", "-c", ":"])
-        expect(yield* UnattendedShell.selfTest(spawner, fake(0))).toBe(true)
+        expect(yield* UnattendedShell.selfTest(spawner, fake(1), shell)).toBe(false)
+        expect(readFileSync(recorded, "utf8").split("\0").slice(0, -1)).toEqual(UnattendedShell.selfTestArgs(shell))
+        expect(readFileSync(policy)).toEqual(Buffer.from(UnattendedSeccomp.filter()!))
+        expect(UnattendedShell.selfTestArgs(shell).slice(-3)).toEqual([shell, "-c", ":"])
+        expect(yield* UnattendedShell.selfTest(spawner, fake(0), shell)).toBe(true)
+      }),
+  )
+
+  // Bun closes an extra stdio pipe (fd 3 and up) once more when it collects the child, after the descriptor number
+  // may belong to something else in this process: an HTTP socket, a database, the file watcher's epoll descriptor.
+  ;(process.platform === "win32" || !UnattendedSeccomp.supported() ? tool.live.skip : tool.live)(
+    "hands bubblewrap its policy without leaving a descriptor number to be closed again later",
+    () =>
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner
+        const folder = scratch()
+        yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(folder, { recursive: true, force: true })))
+        const policy = path.join(folder, "policy")
+        // Reads the policy from whichever descriptor `--seccomp` names, as bubblewrap does.
+        const fake = path.join(folder, "bwrap")
+        writeFileSync(
+          fake,
+          `#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != --seccomp ]; do shift; done\neval "cat <&$2" > '${policy}' || exit 1\n`,
+        )
+        chmodSync(fake, 0o755)
+        for (const _ of [1, 2, 3]) expect(yield* UnattendedShell.selfTest(spawner, fake, "/bin/sh")).toBe(true)
+        expect(readFileSync(policy)).toEqual(Buffer.from(UnattendedSeccomp.filter()!))
+        const held = Array.from({ length: 16 }, () => openSync("/dev/null", "r"))
+        yield* Effect.addFinalizer(() => Effect.sync(() => held.filter(isOpen).forEach((fd) => closeSync(fd))))
+        Bun.gc(true)
+        yield* spawner.exitCode(ChildProcess.make("/bin/sh", ["-c", ":"], { stdin: "ignore" }))
+        Bun.gc(true)
+        expect(held.filter((fd) => !isOpen(fd))).toEqual([])
       }),
   )
 })
+
+function isOpen(fd: number) {
+  try {
+    fstatSync(fd)
+    return true
+  } catch {
+    return false
+  }
+}
 
 describe("Sandbox.unattended", () => {
   const input = (env: NodeJS.ProcessEnv = process.env, cwd = os.tmpdir()) => ({
@@ -860,7 +928,7 @@ describe("Sandbox.unattended", () => {
     }
   })
 
-  test.skipIf(!offline)(
+  test.skipIf(Sandbox.unattendedBinary() === undefined)(
     "wraps a command with no network, private /tmp and /run, the secrets hidden and a scrubbed environment",
     () => {
       const workspace = scratch()
@@ -901,9 +969,13 @@ describe("Sandbox.unattended", () => {
         if (decided.type !== "sandboxed") return
         expect(decided.notice).toBe(Sandbox.UNATTENDED_NOTICE)
         expect(decided.wrapped.mechanism).toBe("bubblewrap")
+        expect(decided.wrapped.seccomp).toEqual(UnattendedSeccomp.filter())
+        const command = UnattendedSeccomp.command(Sandbox.unattendedBootstrap()!, ["/bin/sh", "-c", "true"])
+        expect(decided.wrapped.args.slice(-command.length)).toEqual(command)
         const args = decided.wrapped.args.join("\n")
         for (const expected of [
           "--unshare-net",
+          "--seccomp\n0",
           "--cap-drop\nALL",
           "--tmpfs\n/tmp",
           `--tmpfs\n${home}/.ssh`,
@@ -980,7 +1052,19 @@ describe("Sandbox.unattended", () => {
         })
         expect(decided.type).toBe("sandboxed")
         if (decided.type !== "sandboxed") return
-        const inside = Bun.spawnSync([decided.wrapped.command, ...decided.wrapped.args], { env: decided.wrapped.env })
+        const filter = path.join(workspace, "test-filter")
+        writeFileSync(filter, decided.wrapped.seccomp!)
+        const fd = openSync(filter, "r")
+        const inside = (() => {
+          try {
+            return Bun.spawnSync([decided.wrapped.command, ...decided.wrapped.args], {
+              env: decided.wrapped.env,
+              stdio: [fd, "pipe", "pipe"],
+            })
+          } finally {
+            closeSync(fd)
+          }
+        })()
         const outside = Bun.spawnSync(["/bin/sh", "-c", command], { env: { PATH: process.env.PATH, HOME: home } })
         expect(inside.stdout.toString()).toBe(`readable home=${home}\n`)
         expect(outside.stdout.toString()).toBe(

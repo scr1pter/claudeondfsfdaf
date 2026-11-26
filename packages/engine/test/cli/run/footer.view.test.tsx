@@ -24,6 +24,7 @@ import type {
   FooterSubagentState,
   FooterSubagentTab,
   FooterView,
+  PermissionReply,
   RunCommand,
   RunInput,
   RunPrompt,
@@ -32,7 +33,7 @@ import type {
   StreamCommit,
 } from "@/cli/cmd/run/types"
 import { RunQuestionBody } from "@/cli/cmd/run/footer.question"
-import { RejectField } from "@/cli/cmd/run/footer.permission"
+import { RejectField, RunPermissionBody } from "@/cli/cmd/run/footer.permission"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 const tuiConfig = createTuiResolvedConfig()
@@ -1232,6 +1233,49 @@ test("direct custom answer submits through keymap return binding", async () => {
     app.renderer.currentFocusedRenderable?.blur()
     app.renderer.currentFocusedEditor?.blur()
     off?.()
+    app.renderer.destroy()
+  }
+})
+
+test("direct Connect write replies only after selecting Allow once with the patch visible", async () => {
+  const replies: PermissionReply[] = []
+  const app = await testRender(
+    () => (
+      <RunPermissionBody
+        request={{
+          id: "perm-connect-write",
+          sessionID: "session-1",
+          permission: "connect_write",
+          patterns: ["src/a.ts"],
+          always: [],
+          metadata: {
+            runID: "cr_1",
+            description: "Merge a fix into your checkout.",
+            diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-before\n+after\n",
+          },
+        }}
+        theme={RUN_THEME_FALLBACK.footer}
+        block={RUN_THEME_FALLBACK.block}
+        onReply={(reply) => {
+          replies.push(reply)
+        }}
+      />
+    ),
+    { width: 100, height: 22 },
+  )
+
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Merge a fix into your checkout.")
+    expect(frame).toContain("after")
+    expect(frame).toContain("Allow once")
+    expect(replies).toEqual([])
+
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    expect(replies).toEqual([{ requestID: "perm-connect-write", reply: "once", confirm: true }])
+  } finally {
     app.renderer.destroy()
   }
 })

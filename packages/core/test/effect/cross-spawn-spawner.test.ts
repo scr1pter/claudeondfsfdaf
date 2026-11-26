@@ -404,6 +404,61 @@ await new Promise((resolve, reject) => process.stdout.write(${method === "exitCo
     )
   })
 
+  describe("private input descriptor startup", () => {
+    const input = process.platform === "linux" ? fx.live : fx.live.skip
+    const bytes = new Uint8Array([0, 1, 2, 127, 128, 255])
+    const reader = `const fs = require("node:fs");
+(async () => {
+  const chunks = [];
+  for await (const chunk of fs.createReadStream(null, { fd: 3, autoClose: true })) chunks.push(chunk);
+  process.exitCode = Buffer.concat(chunks).equals(Buffer.from([0, 1, 2, 127, 128, 255])) ? 0 : 41;
+})().catch(() => { process.exitCode = 42; });`
+
+    for (const runtime of [
+      { name: "Node", file: "node", args: ["-e", reader] },
+      { name: "Bun", file: process.execPath, args: ["--no-env-file", "-e", reader] },
+    ])
+      input(
+        `${runtime.name} receives exact fd3 input and EOF with ignored standard streams`,
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+          const code = yield* spawner
+            .exitCode(
+              ChildProcess.make(runtime.file, runtime.args, {
+                stdin: "ignore",
+                stdout: "ignore",
+                stderr: "ignore",
+                additionalFds: { fd3: { type: "input", stream: Stream.make(bytes) } },
+                forceKillAfter: "100 millis",
+              }),
+            )
+            .pipe(Effect.timeout("3 seconds"))
+          expect(code).toBe(ChildProcessSpawner.ExitCode(0))
+        }),
+        5_000,
+      )
+
+    input(
+      "missing private-input command refuses without an already-spawned PID",
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+        const result = yield* spawner
+          .exitCode(
+            ChildProcess.make("vector-missing-private-input-command-73504", [], {
+              stdin: "ignore",
+              stdout: "ignore",
+              stderr: "ignore",
+              additionalFds: { fd3: { type: "input", stream: Stream.make(bytes) } },
+              forceKillAfter: "100 millis",
+            }),
+          )
+          .pipe(Effect.timeout("3 seconds"), Effect.exit)
+        expect(Exit.isFailure(result)).toBe(true)
+      }),
+      5_000,
+    )
+  })
+
   describe("stdin", () => {
     fx.effect(
       "allows providing standard input to a command",

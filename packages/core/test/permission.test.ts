@@ -104,6 +104,54 @@ function waitForRequest() {
 }
 
 describe("PermissionV2", () => {
+  it.effect("Connect writes and cloud need explicit Allow once", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+      const service = yield* PermissionV2.Service
+      const saved = yield* PermissionSaved.Service
+      const before = yield* saved.list({ projectID: Project.ID.global })
+      for (const action of ["connect_write", "connect_cloud"]) {
+        const input = assertion({ action, save: ["*"] })
+        expect(yield* service.ask(input)).toMatchObject({ effect: "ask" })
+        const refusals = [{ reply: "once" }, { reply: "always" }, { reply: "always", confirm: true }] as const
+        for (const reply of refusals) {
+          expect(yield* service.reply({ requestID: input.id, ...reply }).pipe(Effect.flip)).toBeInstanceOf(
+            PermissionV2.ConfirmationRequiredError,
+          )
+          expect(yield* service.list()).toEqual([expect.objectContaining({ id: input.id })])
+        }
+        const confirmed = { requestID: input.id, reply: "once", confirm: true } as const
+        yield* service.reply(confirmed)
+        expect(yield* service.reply(confirmed).pipe(Effect.flip)).toBeInstanceOf(PermissionV2.NotFoundError)
+        expect(yield* saved.list({ projectID: Project.ID.global })).toEqual(before)
+        expect(yield* service.ask(input)).toMatchObject({ effect: "ask" })
+        yield* service.reply({ requestID: input.id, reply: "reject" })
+        expect(yield* service.list()).toEqual([])
+      }
+    }),
+  )
+
+  it.effect("a Connect reply can be retried when publishing it fails", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const permission = yield* PermissionV2.Service
+      const events = yield* EventV2.Service
+      const input = assertion({ action: "connect_write" })
+      expect(yield* permission.ask(input)).toMatchObject({ effect: "ask" })
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === PermissionV2.Event.Replied.type ? Effect.die(new Error("fixture listener failed")) : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const reply = { requestID: input.id, reply: "once", confirm: true } as const
+      const first = yield* permission.reply(reply).pipe(Effect.exit)
+      expect(first._tag).toBe("Failure")
+      expect(yield* permission.get(input.id)).toBeDefined()
+      yield* unsubscribe
+      yield* permission.reply(reply)
+      expect(yield* permission.get(input.id)).toBeUndefined()
+    }),
+  )
+
   test("after-screen shell markers require a fresh answer without Always or auto-accept", () => {
     for (const action of ["bash", "shell", "terminal", "pwsh", "powershell", "cmd"]) {
       const patterns = [`${PermissionPolicy.AFTER_SCREEN_COMMAND_PREFIX}git status`]

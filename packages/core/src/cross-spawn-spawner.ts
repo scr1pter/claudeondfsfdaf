@@ -501,10 +501,33 @@ export const make = Effect.gen(function* () {
         end = true
         Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
       })
-      proc.on("spawn", () => {
+      const started = () => {
+        if (spawned) return
         spawned = true
         resume(Effect.succeed([proc, signal, captured, owner, owned]))
-      })
+      }
+      proc.on("spawn", started)
+      // Bun can emit spawn before cross-spawn returns for an ignored-stdio command with a private input pipe.
+      // The confirmed PID proves this launch started; otherwise retain the ordinary error/spawn event path.
+      if (
+        process.versions.bun !== undefined &&
+        process.platform === "linux" &&
+        !owner &&
+        !owned &&
+        typeof proc.pid === "number" &&
+        Number.isSafeInteger(proc.pid) &&
+        proc.pid > 0 &&
+        Array.isArray(opts.stdio) &&
+        opts.stdio.length === 4 &&
+        opts.stdio[0] === "ignore" &&
+        opts.stdio[1] === "ignore" &&
+        opts.stdio[2] === "ignore" &&
+        opts.stdio[3] === "pipe" &&
+        command.options.additionalFds?.fd3?.type === "input" &&
+        Object.keys(command.options.additionalFds).length === 1 &&
+        Stream.isStream(command.options.additionalFds.fd3.stream)
+      )
+        started()
       if (owner) return owner.cleanup().pipe(Effect.orDie)
       if (owned) return Effect.promise(owned.stop).pipe(Effect.asVoid, Effect.ensuring(Effect.sync(captured.dispose)))
       return Effect.sync(() => {

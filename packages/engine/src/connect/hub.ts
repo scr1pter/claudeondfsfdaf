@@ -1,6 +1,6 @@
 export * as ConnectHub from "./hub"
 
-import { readdir, realpath, stat } from "node:fs/promises"
+import { lstat, readdir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from "effect"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
@@ -1019,7 +1019,14 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             reviews(state, requester.sessionID, request.requestID, saved, entry.run.id),
           )
           if (!capped.ok) return yield* capped.refusal
-          yield* checkReads(request.directory, rules)
+        }
+        const checkedPlace =
+          request.action === "review"
+            ? yield* checkReads(request.directory, rules, {
+                qualify: adapter.id === "vectorscope" && !!entry.call.promptOps,
+              })
+            : undefined
+        if (request.action === "review") {
           if (entry.directory) {
             const canonical = yield* Effect.tryPromise(() => realpath(request.directory)).pipe(
               Effect.catch(() => refusal("read-rule", "Connect could not resolve this directory's read authority.")),
@@ -1043,7 +1050,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             })
             if (!denies.ok) return yield* denies.refusal
             entry.readDenies = denies.value
-            yield* checkReads(placed.directory, rules, [placed.parentDirectory, roots[0]!])
+            yield* checkReads(placed.directory, rules, { aliases: [placed.parentDirectory, roots[0]!] })
           }
         }
         const previous = request.action === "review" && request.since ? yield* earlier(request, requester) : undefined
@@ -1099,13 +1106,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
         const remainingUsd =
           spend.limitUsd !== undefined ? Math.max(0, spend.limitUsd - (spend.spentUsd ?? 0) - heldUsd) : undefined
         const ops = entry.call.promptOps
-        const yieldInstance = yield* InstanceState.context
-        const readPlace =
-          request.action === "review" && adapter.id === "vectorscope" && ops
-            ? yield* Effect.tryPromise(() => reviewRoot(request.directory, yieldInstance)).pipe(
-                Effect.catch(() => refusal("read-rule", "Connect could not resolve the review's read authority.")),
-              )
-            : undefined
+        if (checkedPlace)
+          yield* Effect.tryPromise(() => verifyReadPlace(checkedPlace)).pipe(
+            Effect.catch(() => refusal("read-rule", "The review's original read aliases are no longer available.")),
+          )
+        const readPlace = adapter.id === "vectorscope" && ops ? checkedPlace : undefined
         const readSources = readPlace ? [...new Set([readPlace.root, ...(placed ? [placed.parentDirectory] : [])])] : []
         const readOrigins = readPlace
           ? yield* Effect.tryPromise(async () => [
@@ -1133,7 +1138,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                   Effect.gen(function* () {
                     if (!originAuthority.valid)
                       return yield* refusal("read-rule", "The review's original read aliases are no longer available.")
-                    yield* Effect.tryPromise(() => verifyReadOrigins(readPlace.origins)).pipe(
+                    yield* Effect.tryPromise(() => verifyReadPlace(readPlace)).pipe(
                       Effect.catch(() => {
                         originAuthority.valid = false
                         return refusal("read-rule", "The review's original read aliases are no longer available.")
@@ -1171,7 +1176,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 yield* directoryCurrent(entry)
                 // Uncommitted/staged input is collected after model consent. A newly restricted file must not enter
                 // that diff just because it did not exist at the first preflight; tool denies remain in force too.
-                yield* checkReads(request.directory, rules)
+                yield* checkReads(request.directory, rules, { existing: checkedPlace })
               }
               // The adapter's own cap is never above what was held for it; a review with no dollar cap holds none.
               if (cap && entry.reservedUsd !== undefined)
@@ -1224,32 +1229,41 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
       const checkReads = Effect.fnUntraced(function* (
         directory: string,
         rules: PermissionV1.Ruleset,
-        aliases: readonly string[] = [],
+        options: {
+          readonly aliases?: readonly string[]
+          readonly existing?: CheckedReadPlace
+          readonly qualify?: boolean
+        } = {},
       ) {
         const patterns = ConnectPolicy.readPatterns(rules)
-        if (patterns.length === 0) return
+        if (patterns.length === 0 && !options.qualify && !options.existing) return
         const instance = yield* InstanceState.context
-        const scanned = yield* Effect.tryPromise(async () => {
-          const place = await reviewRoot(directory, instance)
+        const checked = yield* Effect.tryPromise(async () => {
+          const place = options.existing ?? (await checkedReadPlace(directory, instance, rules))
+          if (options.existing) await verifyReadPlace(place)
+          if (patterns.length === 0) return { place, scanned: {} }
+          const aliases = options.aliases ?? []
           const roots = await Promise.all([place.root, ...aliases].map((root) => realpath(root)))
           const prefixes = [...new Set([...place.prefixes, ...roots, place.root, ...aliases])].map((root) =>
             root.replaceAll("\\", "/").replace(/\/$/, ""),
           )
           const scanned = await scan(place.root, patterns, rules, { prefixes, origins: place.origins })
-          await verifyReadOrigins(place.origins)
-          return scanned
+          await verifyReadPlace(place)
+          return { place, scanned }
         }).pipe(Effect.orElseSucceed(() => ({ error: true as const })))
-        if ("error" in scanned)
+        if ("error" in checked)
           return yield* refusal(
             "read-rule",
             "Connect could not check this directory against this session's read rules, so it did not review it.",
           )
+        const scanned = checked.scanned
         if ("tooMany" in scanned)
           return yield* refusal(
             "read-rule",
             `This repository holds more than ${MAX_SCAN.toLocaleString("en-US")} files, too many for connect to check against this session's read rules, so it did not review it.`,
           )
-        if (scanned.block) return yield* ConnectPolicy.readRefusal(scanned.block)
+        if ("block" in scanned && scanned.block) return yield* ConnectPolicy.readRefusal(scanned.block)
+        return checked.place
       })
 
       const progress = Effect.fnUntraced(function* (entry: Entry, update: ConnectAdapter.ProgressUpdate) {
@@ -2065,7 +2079,7 @@ interface ReadOrigin {
 export async function reviewRoot(
   directory: string,
   instance: { readonly directory: string; readonly worktree: string },
-): Promise<{ readonly root: string; readonly prefixes: readonly string[]; readonly origins: readonly ReadOrigin[] }> {
+) {
   const folder = await realpath(directory)
   const place = async (root: string, prefixes: readonly string[] = []) => {
     const origins: ReadOrigin[] = []
@@ -2091,6 +2105,7 @@ export async function reviewRoot(
     await verifyReadOrigins(origins)
     return {
       root,
+      requested: { alias: path.resolve(directory), canonical: folder },
       prefixes: alias ? [...new Set([...prefixes, requested])] : prefixes,
       origins: Object.freeze(origins),
     }
@@ -2108,6 +2123,101 @@ export async function reviewRoot(
   }
 }
 
+type CheckedReadPlace = Awaited<ReturnType<typeof checkedReadPlace>>
+
+async function checkedReadPlace(
+  directory: string,
+  instance: Parameters<typeof reviewRoot>[1],
+  rules: PermissionV1.Ruleset,
+) {
+  const place = await reviewRoot(directory, instance)
+  const rulePrefixes = literalRulePrefixes(place.root, rules)
+  const ruleOrigins = await literalRuleOrigins(place.root, rulePrefixes)
+  return {
+    ...place,
+    origins: [...place.origins, ...ruleOrigins],
+    requestedOrigins: place.origins,
+    rulePrefixes,
+    ruleOrigins,
+  }
+}
+
+async function verifyReadPlace(place: CheckedReadPlace) {
+  await verifyReadOrigins([place.requested, { alias: place.root, canonical: place.root }, ...place.requestedOrigins])
+  const current = await literalRuleOrigins(place.root, place.rulePrefixes)
+  if (
+    current.length !== place.ruleOrigins.length ||
+    current.some((origin, index) => {
+      const previous = place.ruleOrigins[index]!
+      return origin.alias !== previous.alias || path.relative(origin.canonical, previous.canonical) !== ""
+    })
+  )
+    throw new Error("The review's original read aliases changed")
+}
+
+function literalRulePrefixes(root: string, rules: PermissionV1.Ruleset) {
+  const literals = new Map<string, string[]>()
+  const rootDrive = root.slice(0, 3).replaceAll("\\", "/").toLowerCase()
+  // The diff is collected outside the read tool. Keep its blocking rules even if that tool would deny the file.
+  for (const pattern of ConnectPolicy.readPatterns(rules, [])) {
+    const normalized = pattern.replaceAll("\\", "/")
+    if (!path.isAbsolute(normalized)) continue
+    // For Windows, keep probing on the local project drive. UNC and device paths can open a remote connection.
+    const drive = normalized.match(/^[A-Za-z]:\//)?.[0]
+    if (process.platform === "win32" && drive?.toLowerCase() !== rootDrive) continue
+    const wildcard = normalized.search(/[*?]/)
+    const boundary =
+      wildcard < 0
+        ? normalized.length
+        : Math.max(normalized.lastIndexOf("/", wildcard), path.parse(normalized).root.length)
+    const literal = normalized.slice(0, boundary)
+    const matching = literals.get(literal) ?? []
+    matching.push(pattern)
+    literals.set(literal, matching)
+  }
+  return literals
+}
+
+async function literalRuleOrigins(root: string, prefixes: ReadonlyMap<string, readonly string[]>) {
+  const origins = new Map<string, ReadOrigin>()
+  for (const [alias, patterns] of prefixes) {
+    const canonical = await resolveRulePath(alias)
+    if (Wildcard.match(canonical, alias)) continue
+    if (FSUtil.contains(root, canonical)) {
+      origins.set(alias, { alias, canonical })
+      continue
+    }
+    if (!FSUtil.contains(canonical, root)) continue
+    // A verified alias of an ancestor only contributes the spelling that still resolves to this checkout.
+    const projected = originCandidatePath(canonical, path.relative(canonical, root), { alias, canonical })
+    if (projected === undefined || !patterns.some((pattern) => ConnectPolicy.overlaps(pattern, `${projected}/*`)))
+      continue
+    if (path.relative(await realpath(projected), root) === "")
+      origins.set(projected, { alias: projected, canonical: root })
+  }
+  return [...origins.values()]
+}
+
+async function resolveRulePath(literal: string) {
+  // A diff can name a file absent from the current checkout. Pin its projected path under the deepest verified
+  // parent. The projection stays the same if an ordinary file appears, but changes if an alias is redirected.
+  let current = literal
+  for (let depth = 0; depth < 128; depth++) {
+    const canonical = await realpath(current).catch((error: unknown) => {
+      if (!gone(error)) throw error
+      return undefined
+    })
+    if (canonical !== undefined) return path.join(canonical, path.relative(current, literal))
+    const entry = await lstat(current).catch((error: unknown) => {
+      if (!gone(error)) throw error
+      return undefined
+    })
+    if (entry || path.dirname(current) === current) break
+    current = path.dirname(current)
+  }
+  throw new Error("The review's absolute read rule cannot be resolved")
+}
+
 async function verifyReadOrigins(origins: readonly ReadOrigin[]) {
   for (const origin of origins)
     if (path.relative(await realpath(origin.alias), origin.canonical) !== "")
@@ -2119,7 +2229,9 @@ function originCandidatePath(root: string, relative: string, origin: ReadOrigin)
   if (path.isAbsolute(relative) || relative.split(/[\\/]/).includes("..")) return undefined
   const target = path.resolve(root, relative)
   if (!FSUtil.contains(origin.canonical, target)) return undefined
-  return path.join(origin.alias, path.relative(origin.canonical, target)).replaceAll("\\", "/")
+  const suffix = path.relative(origin.canonical, target).replaceAll("\\", "/")
+  const alias = origin.alias.replaceAll("\\", "/")
+  return suffix ? `${alias.replace(/\/$/, "")}/${suffix}` : alias
 }
 
 /**

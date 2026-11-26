@@ -104,6 +104,7 @@ on:
       - packages/engine/src/session/unattended-shell.ts
       - packages/engine/src/tool/shell.ts
       - packages/engine/src/tool/shell/sandbox.ts
+      - packages/engine/src/tool/shell/unattended-seccomp.ts
       # Vector Local's everywhere source (EV-15, R-M1), and the settings registry and dialog that the settings page
       # joins (EV-21).
       - packages/core/src/local-mode/sources.ts
