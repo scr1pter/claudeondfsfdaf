@@ -986,10 +986,10 @@ export function localLoosening(block: ConfigLocalV1.Info | undefined) {
 }
 
 /**
- * How the owner applies a held change from where this Vector runs. The desktop app has no confirmation of its own yet,
- * and keeps its own copy of the block the owner let apply, which `vector local confirm` never writes. A terminal's
- * `vector local confirm` runs in a process of its own, so a Vector that is running applies what it confirmed only
- * when it next starts; the terminal UI confirms in this Vector itself.
+ * How the owner applies a held change from where this Vector runs. The desktop app confirms it itself, from Settings →
+ * Vector Local → Review and apply, and keeps its own copy of the block the owner let apply, which `vector local
+ * confirm` never writes. A terminal's `vector local confirm` runs in a process of its own, so a Vector that is running
+ * applies what it confirmed only when it next starts; the terminal UI confirms in this Vector itself.
  */
 export function localHeldAdvice() {
   if (agentMarked())

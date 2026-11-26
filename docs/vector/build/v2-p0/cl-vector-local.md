@@ -78,3 +78,28 @@ Narrowing after a registry audit is owner item O5. The public docs page says not
 - Fails without the fix: `packages/app/src/components/settings-v2/local-model.test.ts`, new describe "which Vector the switch is for": `surfaceNote({ desktop: true, remote: false })` is `SURFACE` (which names `vector local on`); `{ desktop: false, remote: false }` and `{ desktop: true, remote: true }` give undefined. Red-before: revert `packages/app/src/components/settings-v2/local-model.ts`.
 
 **Mutation checks.** (1) Make `surfaceNote` return undefined: the app test fails. (2) Remove the `SURFACE` println from `describe()`: the CLI test fails. Restore each with `git checkout`. Not run in the drafting step.
+
+## 2026-11-25, VL-4: the "Vector Local provider identity" Windows failure (record only)
+
+**What it closes.** The failing case was `packages/engine/test/local-mode/local-run.test.ts`, "the provider under Vector Local > refuses a model call to a server whose identity changed since it was added, before any request". It failed on Windows shard 1/12 in main run 42515544563 (2026-11-08): `LocalProbe.verify` returned `unreachable` instead of `changed`, because the production 400 ms loopback identify deadline expired on a slow runner (`docs/vector/build/main-ci-followup.md`).
+
+**Fix.** None here. main fixed it with `3d027edae` (2026-11-10, the fixture), `e817fe511` (2026-11-16: probe and verify default to `IDENTIFY_TIMEOUT.remote`, 3 s, for every address) and `183a402cd` (2026-11-21).
+
+**Evidence.** It passes on main: run 45732340721 at `dbeb06661`, job 139618053114, "engine (windows, shard 10/18)", 616 ms. Of main's last 10 `test.yml` runs at planning time, 8 passed and 2 failed for unrelated reasons (45580448953: the Windows containment helper's startup; 45675088518: the computer-helper Windows build).
+
+**Test.** No new test, because nothing changes. Nothing is loosened and no timeout is touched.
+
+**Lead ruling.** Record only. The dated 2026-11-14 row in `docs/vector/build/v2-finish-plan.md` is a snapshot and stays as it is; this entry is the update.
+
+## 2026-11-25, VL-5: stale comments
+
+**What it closes.** Two comments that described the code as it was before later work landed. Comment-only, no behaviour change.
+
+**Fix.**
+
+- `packages/core/src/local-mode/egress-proxy.ts`, the header: "Nothing starts it yet: phase W3 starts it in desktop main …" now says desktop main's `research-proxy.ts` starts one for each research browser while it is open (`research-browser.ts`, `startResearchProxy`), points that browser's session at it with `session.setProxy` with Chromium's loopback bypass removed, and answers Electron's `login` with the secret. "Phase W3 wires this one into desktop main and writes no second proxy" is now "research-proxy.ts wires this one; there is no second proxy."
+- `packages/engine/src/config/config.ts`, the `localHeldAdvice` doc comment: "The desktop app has no confirmation of its own yet" is now "The desktop app confirms it itself, from Settings → Vector Local → Review and apply".
+
+**Tests.** Lead ruling: no new test for comments. The behaviour each corrected comment describes is already pinned: `packages/desktop/src/main/research-proxy.test.ts` (the research proxy's challenge, secret and session wiring), `packages/core/test/local-mode/egress-proxy.test.ts`, and `packages/engine/test/config/local-policy.test.ts`, "the held change says how to apply it from where this Vector runs" (the desktop advice "Review and apply"). Checks on this branch: `git grep -n "Nothing starts it yet"` and `git grep -n "no confirmation of its own yet"` both come back empty. No mutation check, since nothing executes.
+
+**Waiting (VL-5c, W1).** `packages/engine/src/tool/shell/sandbox.ts`, the `offline()` docstring, says "on macOS and Linux it runs in the sandbox with no network but this computer's", but Linux bubblewrap's `--unshare-net` leaves no network at all (`OFFLINE_NOTICE.bubblewrap`, and the docs page already says so). The file is held by #128, #161, #162, #163, #167 and #170, and #161 edits the lines right after that docstring. When they have merged or closed, the docstring becomes: "on macOS it runs in the sandbox with no network but this computer's; on Linux, bubblewrap's --unshare-net leaves it no network at all, not even this computer's". Comment-only, pinned by the existing `OFFLINE_NOTICE` copy.
