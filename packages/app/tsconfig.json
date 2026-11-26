@@ -27,7 +27,8 @@
     "test-browser/vectorscope-owner.test.ts",
     "test-browser/vectorscope-local.test.ts",
     "test-browser/vectorscope-fix.test.ts",
-    "test-browser/model-picker-state.test.ts"
+    "test-browser/model-picker-state.test.ts",
+    "test-browser/phone-alert-state.test.ts"
   ],
   "exclude": ["dist", "ts-dist"]
 }
