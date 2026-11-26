@@ -52,6 +52,7 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
 import { EgressHttpClient } from "@vectordevai/core/local-mode/http-client"
 import { EgressLogStore } from "@vectordevai/core/local-mode/log-store"
+import { LocalRecommend } from "@vectordevai/core/local-mode/recommend"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { ModelCatalog } from "@vectordevai/core/model-catalog"
 import { ConfigLocalV1 } from "@vectordevai/core/v1/config/local"
@@ -759,6 +760,8 @@ const localState: {
   announced: string | undefined
   /** The network log's options as last handed to Egress, as JSON, which reopens the log only when they change. */
   log: string | undefined
+  /** The company's `local.recommend` as its policy sets it, unchecked (LocalRecommend.table checks it). */
+  recommend: unknown
   /** Cloud AI hosts from the bundled model catalog, read the first time a user's model server is checked. */
   bundledCloud: readonly string[] | undefined
   /** The model catalog the engine loaded last, whose hosts are read the first time a user's model server is checked. */
@@ -777,6 +780,7 @@ const localState: {
   pending: undefined,
   announced: undefined,
   log: undefined,
+  recommend: undefined,
   bundledCloud: undefined,
   catalog: undefined,
   scanned: new WeakSet(),
@@ -789,6 +793,11 @@ const localState: {
 /** The Vector Local policy in effect for this process. Nothing else may be read for Vector Local's settings. */
 export function local() {
   return localState.policy
+}
+
+/** The company's own model recommendation table, as its policy sets it; LocalRecommend.table checks it. */
+export function localRecommend(): unknown {
+  return localState.recommend
 }
 
 /**
@@ -879,6 +888,7 @@ export function refreshLocal() {
   localState.policy = policy
   localState.pending = next.pending
   localState.confirmed = next.confirmed
+  localState.recommend = next.recommend
   saveLocalConfirmed(next.confirmed.user)
   // Children inherit the floor of the policy in effect, and the agent marker: every untrusted child of this process
   // may be the agent or a program it started.
@@ -1157,6 +1167,8 @@ function evaluateLocal() {
     confirmed: sources.failed ? confirmed : effect,
     pending: held ? { proposed, changes, inputs: current } : undefined,
     retainDays: retention(sources.managed, (sources.failed ? confirmed : effect).user),
+    // Only the company's policy sets it (LocalPolicy strips it from the user's block); it changes no decision.
+    recommend: sources.managed?.recommend,
   }
 }
 
@@ -1320,6 +1332,8 @@ function readLocalSources() {
   // The company's blocks merge as config merges files: a later source's list replaces an earlier one's.
   const company =
     undecodable(managedBlocks) || managedUnread.length > 0 ? LOCAL_FAIL_CLOSED : mergeLocalBlocks(managedBlocks)
+  // A recommendation table Vector cannot use falls back to the bundled one, never silently.
+  const recommend = LocalRecommend.problem(company?.recommend)
   return {
     managed: company,
     user: undecodable(userBlocks) ? LOCAL_FAIL_CLOSED : mergeLocalBlocks(userBlocks),
@@ -1357,6 +1371,11 @@ function readLocalSources() {
               (key) =>
                 `Ignored ${key} in your company's locked_keys: Vector locks top-level config keys only, such as model or provider.`,
             )
+        : []),
+      ...(recommend
+        ? [
+            `Ignored local.recommend in your company's policy: ${recommend}. Vector suggests models from its own examples.`,
+          ]
         : []),
     ],
   }

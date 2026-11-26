@@ -103,6 +103,38 @@ describe("recommendations per memory tier", () => {
     expect(LocalRecommend.table({ ...override, tiers: [{ ...override.tiers[0], min_gb: 8 }] }).label).toBe(table.label)
     expect(LocalRecommend.table(null).label).toBe(table.label)
   })
+
+  // The engine puts the reason in the policy's warnings, so a company table Vector ignores never falls back silently.
+  test("says why a company table cannot be used", () => {
+    const tier = { id: "all", min_gb: 0, summary: "Our server.", roles: { agent: "glm-4.6" }, alternatives: [] }
+    const override = { ...table, label: "Company models. Check each model's licence.", tiers: [tier] }
+    const tierWith = (change: Record<string, unknown>) => ({ ...override, tiers: [{ ...tier, ...change }] })
+    const modelWith = (change: Record<string, unknown>) => ({
+      ...override,
+      models: { ...table.models, "glm-4.6": { ...table.models["glm-4.6"], ...change } },
+    })
+    expect(LocalRecommend.problem(undefined)).toBeUndefined()
+    expect(LocalRecommend.problem(null)).toBeUndefined()
+    expect(LocalRecommend.problem(table)).toBeUndefined()
+    expect(LocalRecommend.problem(override)).toBeUndefined()
+    expect(LocalRecommend.problem(42)).toBe("it is not a recommendation table")
+    expect(LocalRecommend.problem(tierWith({ min_gb: 8 }))).toBe("no tier starts at 0 GB")
+    expect(LocalRecommend.problem(tierWith({ roles: { agent: "missing" } }))).toBe(
+      "a tier names a model the table does not have",
+    )
+    // A key every object inherits is not a model of the table.
+    expect(LocalRecommend.problem(tierWith({ roles: { agent: "constructor" } }))).toBe(
+      "a tier names a model the table does not have",
+    )
+    expect(LocalRecommend.problem(modelWith({ memory_gb: Infinity }))).toBe(
+      "a model's memory_gb or context is not a finite number",
+    )
+    // The CLI prints a model's first link as it is, so only a web address may be one.
+    const scripted = modelWith({ links: ["javascript:alert(1)"] })
+    expect(LocalRecommend.problem(scripted)).toBe("a model's link is not an http or https address")
+    expect(LocalRecommend.table(scripted).label).toBe(table.label)
+    expect(LocalRecommend.table(override).label).toBe("Company models. Check each model's licence.")
+  })
 })
 
 describe("roles from the models servers already have", () => {

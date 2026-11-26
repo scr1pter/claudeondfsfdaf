@@ -415,9 +415,10 @@ const choose = Effect.fn("Cli.local.choose")(function* <S extends { readonly ori
 // Nothing answered on this computer: what it has room for, and what to install.
 const noServer = Effect.fn("Cli.local.noServer")(function* () {
   const { LocalHardware } = yield* Effect.promise(() => import("@vectordevai/core/local-mode/hardware"))
-  const { LocalRecommend } = yield* Effect.promise(() => import("@vectordevai/core/local-mode/recommend"))
+  const { LocalSettings } = yield* Effect.promise(() => import("@/config/local-settings"))
   const hardware = yield* Effect.promise(() => LocalHardware.read())
-  const suggested = LocalRecommend.recommend({ usable: hardware.usable })
+  // The company's table when its policy sets one Vector can use, else the bundled examples.
+  const suggested = LocalSettings.recommendation(hardware.usable)
   UI.println("No model server answered on this computer.")
   UI.println(LocalHardware.describe(hardware))
   const agent = suggested.roles.agent
