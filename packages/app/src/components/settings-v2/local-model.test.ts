@@ -5,11 +5,13 @@ import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { AGENT, LOCKED, NOT_ENCRYPTED, SHARED_MACHINE } from "@/features/local/local-model"
 import {
   SECTIONS,
+  SURFACE,
   allowedRows,
   certificateLines,
   checkVerdict,
   heldText,
   serverRows,
+  surfaceNote,
   switchView,
   webChoices,
   webNote,
@@ -83,6 +85,18 @@ describe("the switch", () => {
     expect(switchView(status({ agent: true })).disabled).toBe(true)
     expect(switchView(status({ agent: true, policy: { enabled: false } })).disabled).toBe(false)
     expect(AGENT).toContain("nothing here can loosen Vector Local")
+  })
+})
+
+describe("which Vector the switch is for", () => {
+  test("the desktop app says its switch is its own, and how to turn it on in a terminal", () => {
+    expect(surfaceNote({ desktop: true, remote: false })).toBe(SURFACE)
+    expect(SURFACE).toContain("vector local on")
+  })
+
+  test("a browser, or a desktop app reading another computer's engine, says nothing about it", () => {
+    expect(surfaceNote({ desktop: false, remote: false })).toBeUndefined()
+    expect(surfaceNote({ desktop: true, remote: true })).toBeUndefined()
   })
 })
 

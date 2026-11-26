@@ -21,6 +21,13 @@ const NEEDS_TERMINAL =
 // of the block the owner let apply that the terminal's Vector reads when it starts, never the desktop app's.
 const ELSEWHERE =
   "A Vector that is already running keeps holding it until it next starts, or until you confirm it with /local in its terminal UI. The desktop app keeps a record of its own, so it still holds the change."
+/**
+ * Which Vector these settings are for. A terminal's Vector and the desktop app read different config folders and keep
+ * separate confirmed copies (Config.localConfirmedFile), so `vector local on` never turns it on in the app; only the
+ * company's policy and VECTOR_LOCAL reach both.
+ */
+export const SURFACE =
+  "This is Vector Local for Vector in a terminal. The desktop app keeps its own setting, in its Settings → Vector Local. Your company's policy applies to both."
 
 export const LocalCommand = cmd({
   command: "local",
@@ -359,6 +366,7 @@ function describe(status: {
   UI.println(
     `${UI.Style.TEXT_DIM}Network log: kept for ${status.log.retain_days} days in ${status.log.directory} while Vector Local is on.${UI.Style.TEXT_NORMAL}`,
   )
+  UI.println(`${UI.Style.TEXT_DIM}${SURFACE}${UI.Style.TEXT_NORMAL}`)
 }
 
 function serverLine(server: {

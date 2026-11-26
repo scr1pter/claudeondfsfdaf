@@ -59,3 +59,22 @@ Narrowing after a registry audit is owner item O5. The public docs page says not
 - Fails without the fix: `packages/core/test/local-mode/recommend.test.ts`, "recommendations per memory tier > says why a company table cannot be used": undefined, null, the bundled table and the company table have no problem; `42`, an 8 GB-only tier, a missing model, a `constructor` model key, an infinite `memory_gb` and a `javascript:alert(1)` link each give their reason; the link table falls back to the bundled label and the company table keeps its own. Red-before: revert `packages/core/src/local-mode/recommend.ts`. The existing "a company's table replaces the bundled one only when it is whole" stays as it is.
 
 **Mutation checks.** (1) In `LocalSettings.recommendation` drop `table:`: the server test fails on the label. (2) Remove the link rule from the check in `recommend.ts`: the core test fails on the `javascript:` case. Restore each with `git checkout`. Not run in the drafting step.
+
+## 2026-11-25, VL-3: the CLI and the desktop app keep separate Vector Local settings
+
+**What it closes.** The desktop's engine reads `XDG_CONFIG_HOME=<userData>/xdg-config` (`packages/desktop/src/main/sidecar.ts`, `packages/desktop/src/main/local-policy.ts`); a terminal's `vector` reads `~/.config/vector`. The confirmed copies are one per config folder on purpose (`Config.localConfirmedFile`, `packages/engine/src/config/config.ts`). So `vector local on` never reaches the app, and the app's switch never reaches the terminal, and neither said so. Company policy and `VECTOR_LOCAL` reach both.
+
+**Lead ruling.** Clear messages in both places, not a shared setting. A shared switch would cross two config folders and two confirmed copies that are separate by design, and a CLI "on" reaching the app would turn Vector Local on there with the app's own server list, which may be empty and would break its chats. The messages remove the surprise with no change to enforcement. The TUI is not changed: it follows whichever engine it is attached to, so a fixed sentence there could be wrong.
+
+**Fix.**
+
+- `packages/engine/src/cli/cmd/local.ts`: exported `SURFACE` ("This is Vector Local for Vector in a terminal. The desktop app keeps its own setting, in its Settings → Vector Local. Your company's policy applies to both."), printed last and dim by `describe()`, so `vector local status`, `on`, `off`, `web`, `allow` and `confirm` all say it. `--json` returns before `describe()`, so JSON output is unchanged.
+- `packages/app/src/components/settings-v2/local-model.ts`: exported `SURFACE` ("This switch is for the desktop app. Vector in a terminal keeps its own setting: vector local on turns it on there. Your company's policy applies to both.") and `surfaceNote({ desktop, remote })`, which returns it only when `desktop && !remote`.
+- `packages/app/src/components/settings-v2/local.tsx`: `SwitchCard` takes `surface` and renders it first in the card body as a `local-muted` note. The page passes `surfaceNote({ desktop: desktop.latest !== undefined, remote: reader.remote() !== undefined })`: `desktopLocal()` is undefined outside the desktop app, and `reader.remote()` is undefined for this computer's engine (`packages/app/src/features/local/use-local.ts`). A browser, or the app reading another computer's engine, shows no note.
+
+**Tests.**
+
+- Fails without the fix: `packages/engine/test/cli/local.test.ts`, "asks at a terminal before loosening, so without one nothing changes": after the existing `held` assertion, `expect(held.stderr).toContain(SURFACE)`, with `SURFACE` imported beside `sinceOf`. No new spawn and no timeout change. Red-before: revert `packages/engine/src/cli/cmd/local.ts` (no `SURFACE` export, no line).
+- Fails without the fix: `packages/app/src/components/settings-v2/local-model.test.ts`, new describe "which Vector the switch is for": `surfaceNote({ desktop: true, remote: false })` is `SURFACE` (which names `vector local on`); `{ desktop: false, remote: false }` and `{ desktop: true, remote: true }` give undefined. Red-before: revert `packages/app/src/components/settings-v2/local-model.ts`.
+
+**Mutation checks.** (1) Make `surfaceNote` return undefined: the app test fails. (2) Remove the `SURFACE` println from `describe()`: the CLI test fails. Restore each with `git checkout`. Not run in the drafting step.

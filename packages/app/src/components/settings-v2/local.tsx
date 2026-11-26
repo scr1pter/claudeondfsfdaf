@@ -52,6 +52,7 @@ import {
   checkVerdict,
   heldText,
   serverRows,
+  surfaceNote,
   switchView,
   webChoices,
   webNote,
@@ -169,6 +170,7 @@ export function SettingsLocalV2() {
                 pending={pending()}
                 restart={desktop.latest?.restartNeeded === true && status().policy.enabled}
                 mismatch={desktop.latest?.mismatch}
+                surface={surfaceNote({ desktop: desktop.latest !== undefined, remote: reader.remote() !== undefined })}
                 onToggle={(enabled) => void run({ enabled }, enabled ? "Vector Local is on." : "Vector Local is off.")}
                 onApplyHeld={(changes) => void run({ held: [...changes] }, "The change in your config applies now.")}
                 onSetup={setup}
@@ -260,6 +262,8 @@ function SwitchCard(props: {
   pending: boolean
   restart: boolean
   mismatch?: string
+  /** Which Vector the switch is for, in the desktop app (surfaceNote). */
+  surface?: string
   onToggle: (enabled: boolean) => void
   onApplyHeld: (changes: readonly string[]) => void
   onSetup: () => void
@@ -283,6 +287,7 @@ function SwitchCard(props: {
         </Switch>
       </div>
       <div class="settings-v2-card-body">
+        <Show when={props.surface}>{(note) => <p data-slot="local-muted">{note()}</p>}</Show>
         <Show when={view().note}>{(note) => <p data-slot="local-note">{note()}</p>}</Show>
         <Show when={props.status.agent}>
           <p data-slot="local-note">{AGENT}</p>

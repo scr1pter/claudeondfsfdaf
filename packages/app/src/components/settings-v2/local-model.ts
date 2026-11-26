@@ -31,6 +31,21 @@ export const SECTIONS = [
   { id: "check", title: "Run a check" },
 ] as const
 
+/**
+ * Which Vector the switch is for. The desktop app and Vector in a terminal read different config folders and keep
+ * separate confirmed copies, so neither switch reaches the other; only the company's policy reaches both.
+ */
+export const SURFACE =
+  "This switch is for the desktop app. Vector in a terminal keeps its own setting: vector local on turns it on there. Your company's policy applies to both."
+
+/**
+ * The switch's note on which Vector it is for: only in the desktop app, reading this computer's engine. A remote
+ * engine's switch is that engine's own, and in a browser there is no desktop app to tell apart.
+ */
+export function surfaceNote(input: { readonly desktop: boolean; readonly remote: boolean }) {
+  return input.desktop && !input.remote ? SURFACE : undefined
+}
+
 /** The switch: on or off, and whether the company decides. */
 export function switchView(status: Pick<LocalStatus, "policy" | "locked" | "agent">) {
   const locked = status.locked.includes("enabled")
