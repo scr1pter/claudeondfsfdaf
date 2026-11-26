@@ -1,6 +1,6 @@
 # cx-everywhere-pref-authority: finish and merge PR #144
 
-Branch `cx-everywhere-pref-authority`, cut from the PR's head `everywhere-pref-authority` (`00671daea`). PR #144, "feat(everywhere): save owner settings through the desktop sidecar", had been an idle draft for more than a day. This v2 run took it over to finish it and merge it before the Saturday 2026-11-28 deadline. No flag changes: the Everywhere tab still shows only when the plan lists Vector everywhere (the hosted switch), and `VECTOR_EVERYWHERE_ENABLED` stays off. No public claims.
+Branch `cx-everywhere-pref-authority`, cut from the PR's head `everywhere-pref-authority` (`00671daea`). PR #144, "feat(everywhere): save owner settings through the desktop sidecar", had been an idle draft for more than a day. This v2 run took it over to finish it and merge it before the redesign starts. No flag changes: the Everywhere tab still shows only when the plan lists Vector everywhere (the hosted switch), and `VECTOR_EVERYWHERE_ENABLED` stays off. No public claims.
 
 ## 2026-11-25, takeover state
 
@@ -38,5 +38,7 @@ CI only:
 
 ## Lead rulings
 
-- The PR's own fallback stays: when the sidecar answers `unsupported` (version skew), the runner and the panel read the legacy `/global/config` block for viewing only. Any other failure (`unavailable`, `invalid`, a locked snapshot) keeps jobs off. This is the fail-closed option and needs no change.
+2026-11-25, corrected after review: the first ruling used to say the legacy block was read "for viewing only". The runner and admission really use it as settings on version skew, as the wiring test expects (`refresh()` returns `needs-remote` for `unsupported`). Docs only, no code change.
+
+- The PR's own fallback stays. On `unsupported` (a sidecar without the preferences channel, that is version skew), or when Desktop has no preferences bridge at all, the panel shows the legacy `/global/config` block read-only, and the runner and the engine's admission both keep using the legacy user config, consistently: the runner takes the legacy block as its real settings (`fetchSettings` in `everywhere-wiring.ts`), and admission falls back to legacy when no preferences path is bound or the file is missing (`effective()` in `config/everywhere-preferences.ts`). Every other failure (`unavailable`, `invalid`, a locked snapshot, an unreadable or replaced preferences file) keeps jobs off. This is the fail-closed option and needs no code change.
 - No owner decision is needed. The write path stays behind the existing plan gate, and no public copy, Terms, Privacy or consent text changes.
