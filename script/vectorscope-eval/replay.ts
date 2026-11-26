@@ -167,41 +167,56 @@ export const VARIANTS = {
     engine: { from: "VS-06" },
     desktop: { from: "VS-06" },
   },
+  // The engine half: Review.run's admission (VS-23b), the transport and the session runtime (VS-23c) enforce it, and the
+  // scope records the zdr route. The eval attests nothing (Q7), so only a model server on this computer is admitted.
+  // The desktop half is a documented difference since VS-23d: the desktop asks for it in its sessions' review scope and
+  // the engine server holds them to the route rules, which a desktop replay through a recording client, with no engine
+  // server, cannot show.
   "privacy-zdr": {
-    planned: 'privacy: "zdr", enforced inside Review.run (VS-23b) and at the transport (VS-23c)',
-    engine: { pending: "VS-23c" },
-    desktop: { pending: "VS-23d" },
+    planned: 'privacy: "zdr", enforced in Review.run (VS-23b), at the transport and in the session runtime (VS-23c)',
+    keys: { privacy: "zdr" },
+    engine: { from: "VS-23c" },
+    desktop: {
+      pending:
+        "VS-23d: the engine server's hold on the desktop's review sessions, which only a desktop replay on an engine server can show; a documented difference",
+    },
   },
   "trivial-skip": {
     planned: 'trivial: "skip"',
-    engine: { pending: "VS-24 wiring" },
-    desktop: { pending: "VS-24 wiring" },
+    keys: { trivial: "skip" },
+    engine: { from: "VS-24" },
+    desktop: { pending: "VS-24: the desktop replay has no private Git view to prove a trivial change" },
   },
   "impact-graph": {
     planned: 'impact: "graph"',
-    engine: { pending: "VS-25b wiring" },
+    keys: { impact: "graph" },
+    engine: { from: "VS-25b" },
     desktop: { pending: "VS-25's desktop half, after VS-10" },
   },
   "cards-brain": {
     planned: 'cards: "brain", in a local-only eval with a Brain seeded from the base commit',
-    engine: { pending: "VS-26" },
+    keys: { cards: "brain" },
+    engine: { from: "VS-26" },
     desktop: { pending: "VS-26's desktop half, after VS-10" },
   },
   "guardrail-strict": {
     planned: 'guardrail: "strict"',
-    engine: { pending: "VS-27c" },
-    desktop: { pending: "VS-27c" },
+    keys: { guardrail: "strict" },
+    engine: { from: "VS-27c" },
+    desktop: { pending: "VS-27c requires immutable base and head files on desktop" },
   },
   "depth-auto": {
     planned: 'depth: "auto"',
-    engine: { pending: "VS-28 wiring" },
+    keys: { depth: "auto" },
+    engine: { from: "VS-28" },
     desktop: { pending: "VS-28's desktop half, after VS-10" },
   },
   // Lenses run only on the high band under depth "auto", so this variant sets both, and its ablation baseline is
-  // engine:depth-auto. VS-28 may revise it before it flips.
+  // engine:depth-auto.
   "lenses-high": {
     planned: 'depth: "auto" and lenses: "high"',
-    engine: { pending: "VS-28 wiring" },
+    keys: { depth: "auto", lenses: "high" },
+    engine: { from: "VS-28" },
     desktop: { pending: "VS-28's desktop half, after VS-10" },
   },
   // No key: the existing triageModel/model pair, which the eval config supplies (VS-29a: the entry point's
@@ -222,13 +237,18 @@ export const VARIANTS = {
     desktop: { pending: "VS-31" },
   },
   // Addendum A §1a's variants (pending Q18), registered once their package's first part has landed here, so a name
-  // whose package has begun reads as pending, not unknown. Each package's pure part landed with no key a runner applies,
-  // so every half is pending and none has keys. The desktop halves that §1a calls documented differences
-  // (`variant.applied: false`) say so.
+  // whose package has begun reads as pending, not unknown. A package's pure part lands with no key a runner applies, so
+  // its halves stay pending and set no keys until its wiring flips one. The desktop halves that §1a calls documented
+  // differences (`variant.applied: false`) say so.
+  // The engine half: Review.run holds credential files back from the prompt and redacts values in it, and its sessions'
+  // rules and tools hold them back from the read and grep tools too (VS-34). The desktop half: the desktop runner reads
+  // the key and calls the same functions, and its sessions get the same rules (VS-34's desktop half, built with VS-23d).
   "holdback-secrets": {
-    planned: 'holdback: "secrets"',
-    engine: { pending: "VS-34 wiring" },
-    desktop: { pending: "VS-34 wiring" },
+    planned:
+      'holdback: "secrets": credential files held back and values redacted in the prompt and in the reviewer\'s read and grep results',
+    keys: { holdback: "secrets" },
+    engine: { from: "VS-34" },
+    desktop: { from: "VS-34" },
   },
   "team-guarded": {
     planned: 'teamMemory: "guarded"',
@@ -239,19 +259,22 @@ export const VARIANTS = {
   // engine:guardrail-strict. VS-42 wiring may revise it before it flips.
   "scope-introduced": {
     planned: 'guardrail: "strict" and scopeGate: "introduced"',
-    engine: { pending: "VS-42 wiring" },
-    desktop: { pending: "VS-42 wiring, after VS-27c" },
+    keys: { guardrail: "strict", scopeGate: "introduced" },
+    engine: { from: "VS-42" },
+    desktop: { pending: "VS-27c desktop strict selection requires immutable base and head evidence" },
   },
   "rule-strict": {
     planned: 'ruleCheck: "strict"',
-    engine: { pending: "VS-43 wiring" },
-    desktop: { pending: "VS-43 wiring" },
+    keys: { ruleCheck: "strict" },
+    engine: { from: "VS-43" },
+    desktop: { from: "VS-43" },
   },
-  // As scope-introduced: verifyEvidence acts only under guardrail "strict". VS-44 wiring may revise it before it flips.
+  // The blind verifier uses certificates only in strict reviews.
   "verify-cert": {
     planned: 'guardrail: "strict" and verifyEvidence: "certificate"',
-    engine: { pending: "VS-44 wiring" },
-    desktop: { pending: "VS-44 wiring, after VS-27c" },
+    keys: { guardrail: "strict", verifyEvidence: "certificate" },
+    engine: { from: "VS-44" },
+    desktop: { pending: "blind verification with immutable desktop blobs" },
   },
   "explore-slice": {
     planned: 'explore: "slice"',
@@ -264,6 +287,17 @@ export const VARIANTS = {
     planned: 'receipt: "json", built only from recorded execution facts',
     engine: { pending: "VS-47 runner wiring" },
     desktop: { pending: "VS-47 desktop wiring" },
+  },
+  // Addendum B §1.10's ablation candidate (VS-44c), registered with its planner, core plan.ts planIsolatedVerify, and
+  // an ablation candidate only (Q9), never a default. It sets no key yet, and no runner calls the planner before
+  // runner-wiring R3, which admits each call (I-5) on the review model's route (I-3). The class the planner orders by
+  // and the failure fields a blind verifier sees exist only under guardrail "strict", so without it the order falls
+  // back to path and line: R3 or VS-44 wiring may revise this variant to set guardrail "strict" before it flips, as
+  // verify-cert does. Its desktop half is a documented difference until VS-27's desktop guardrail.
+  "verify-isolated": {
+    planned: "the top 3 blocking candidates verified blind, one verify call each, and the rest in the batched pass",
+    engine: { pending: "VS-44c wiring (R3)" },
+    desktop: { pending: "VS-27 desktop guardrail" },
   },
 } as const satisfies Record<string, VariantEntry>
 
@@ -846,8 +880,8 @@ export function projectedRun(record: ProjectionRecord): ProjectedRun {
 
 // VS-21e: a projection record's passes by token kind, under projectedRun's variant, model, case and repetition: each
 // pass's two estimateCostUsd bands split as the report shows them (projectionSplit), at the price snapshot of the
-// pass's own model. A pass with no first request or no price has no estimate and is left out. Lens passes have no lens
-// in the record, so they share the name "lens". Read only a record projectionProblems passes. A pass pricedPass leaves
+// pass's own model. A pass with no first request or no price has no estimate and is left out. Older unlabelled lens passes
+// retain the name "lens". Read only a record projectionProblems passes. A pass pricedPass leaves
 // out is left out too, rather than read as $NaN (I-8).
 export function projectedPassCosts(record: ProjectionRecord): PassCost[] {
   const variant = replayVariant("engine", record.variant)
@@ -860,7 +894,7 @@ export function projectedPassCosts(record: ProjectionRecord): PassCost[] {
         model: record.models.review.id,
         case: record.label,
         repetition: record.repetition,
-        pass: pass.pass,
+        pass: pass.lens ? `lens:${pass.lens}` : pass.pass,
         basis: "projected" as const,
         ...projectionSplit({ promptTokens: priced.promptTokens, maxSteps: pass.maxSteps, price: priced.price }),
       },
@@ -918,7 +952,7 @@ export function tieredPasses(
         model: record.models.review.id,
         case: record.label,
         repetition: record.repetition,
-        pass: pass.pass,
+        pass: pass.lens ? `lens:${pass.lens}` : pass.pass,
         base,
         tiered: estimate.tiered ?? base,
       },

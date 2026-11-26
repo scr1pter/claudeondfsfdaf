@@ -101,8 +101,10 @@ export type OutcomeFacts = Pick<ReviewOutcome, "partial" | "specialists" | "unre
 /**
  * The verdict, until VectorScope supplies one. `incomplete` when the changes edit VectorScope's settings (check 1),
  * the outcome is partial, a pass failed, timed out or stopped, a file went unreviewed, or a file was skipped for its
- * size. Then `blocking` when any finding still counting is blocking, in any bucket; `findings` when any is a concern;
- * `clean` otherwise. With no outcome (nothing to review), `not-reviewed`. A partial review is never clean.
+ * size or held back from the model (VS-34, I-7). Then `blocking` when any finding still counting is blocking, in any
+ * bucket; `findings` when any is a concern; `clean` otherwise. With no outcome (nothing to review), `not-reviewed`. A
+ * partial review is never clean. The outcome carries no held-file statuses yet, so every held-back file counts, as
+ * VectorScope's own verdict counts one that no held deletion accounts for (verdict.ts unfinishedCauses).
  */
 export function verdict(input: {
   readonly outcome?: OutcomeFacts
@@ -118,7 +120,7 @@ export function verdict(input: {
       (pass) => pass.status === "failed" || pass.status === "timeout" || pass.status === "stopped",
     ) ||
     outcome.unreviewed.length > 0 ||
-    outcome.skipped.some((file) => file.reason === "size-limit")
+    outcome.skipped.some((file) => file.reason === "size-limit" || file.reason === "held-back")
   )
     return "incomplete"
   const counting = input.findings.filter(active)
@@ -136,6 +138,7 @@ const SKIP_WORDS: Record<SkippedFile["reason"], string> = {
   binary: "binary",
   deleted: "deleted",
   "size-limit": "too large to review",
+  "held-back": "held back from the model",
 }
 
 const PARTIAL_WORDS: Record<NonNullable<ReviewOutcome["partial"]>, string> = {

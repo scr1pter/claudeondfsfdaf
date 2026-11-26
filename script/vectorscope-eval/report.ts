@@ -24,6 +24,8 @@ import {
   type StrictIncomplete,
 } from "../../packages/core/src/review/guardrail"
 import { verifyCandidates, verifyUnanswered } from "../../packages/core/src/review/plan"
+import { parseFindingMarker, readState } from "../../packages/core/src/review/state"
+import { noteBudgetEstimate, noteTrivialSkip } from "../../packages/core/src/review/format"
 import {
   buildReport,
   DEFAULT_GATE,
@@ -366,30 +368,55 @@ export interface StrictReselection {
 
 export function reselectRun(artifact: ReplayArtifact, run: EvalRun): { run: EvalRun; reselection: StrictReselection } {
   const outcome = artifact.outcome
-  const selection = outcome?.selection
+  const selection = run.status === "not-sent" ? undefined : outcome?.selection
   const posted = postedParts(artifact, run.status === "failed")
-  const records = selection
+  const recorded =
+    run.status !== "not-sent" && artifact.config?.value?.guardrail === "strict" && outcome?.strict
+      ? artifact.strictCandidates
+      : undefined
+  const postedIds = recorded ? strictPostedIds(artifact) : undefined
+  const selected = selection
     ? [
         ...selection.inline.map((finding) => ({
           finding,
           anchored: true,
           suggestion: finding.suggestionAllowed,
-          posted: posted.review,
+          posted: posted.review && (!postedIds || postedIds.review.has(finding.id)),
         })),
         ...[...selection.overflow, ...selection.elsewhere, ...selection.nits].map((finding) => ({
           finding,
           anchored: true,
           suggestion: false,
-          posted: posted.summary,
+          posted: posted.summary && (!postedIds || postedIds.summary.has(finding.id)),
         })),
         ...selection.outsideDiff.map((finding) => ({
           finding,
           anchored: false,
           suggestion: false,
-          posted: posted.summary,
+          posted: posted.summary && (!postedIds || postedIds.summary.has(finding.id)),
         })),
       ]
     : []
+  // The pre-guardrail pool can contain rejected findings and duplicate fingerprints. Only a matching
+  // final placement with a recorded post can have the original's judgement.
+  const records = recorded
+    ? recorded.findings.map((finding) => {
+        const index = selected.findIndex(
+          (entry) =>
+            entry.finding.id === finding.id &&
+            entry.finding.verified === finding.verified &&
+            findingKey(entry.finding) === findingKey(finding) &&
+            entry.finding.source === finding.source,
+        )
+        const match = index === -1 ? undefined : selected.splice(index, 1)[0]
+        return {
+          finding,
+          anchored: finding.anchored,
+          suggestion: match?.suggestion === true && finding.suggestionAllowed,
+          posted: match?.posted ?? false,
+        }
+      })
+    : selected
   const config = { ...DEFAULT_REVIEW_CONFIG, ...artifact.config.value }
   const pool = records.map((record) => record.finding)
   const triaged = artifact.models.triage !== undefined
@@ -398,23 +425,25 @@ export function reselectRun(artifact: ReplayArtifact, run: EvalRun): { run: Eval
       finding.verified === undefined ? [] : [[finding.id, finding.verified ? "confirmed" : "rejected"] as const],
     ),
   )
-  const unanswered = outcome?.specialists.some((entry) => entry.name === "verify")
-    ? verifyUnanswered(
-        verifyCandidates(
-          pool,
-          {
-            verify: config.verify,
-            policy: config.verifyPolicy,
-            minConfidence: config.minConfidence,
-            trust: artifact.trust,
-            triaged,
-          },
-          "engine",
-        ),
-        verdicts,
-        triaged,
-      ).map((finding) => finding.id)
-    : []
+  const unanswered =
+    recorded?.unanswered ??
+    (outcome?.specialists.some((entry) => entry.name === "verify")
+      ? verifyUnanswered(
+          verifyCandidates(
+            pool,
+            {
+              verify: config.verify,
+              policy: config.verifyPolicy,
+              minConfidence: config.minConfidence,
+              trust: artifact.trust,
+              triaged,
+            },
+            "engine",
+          ),
+          verdicts,
+          triaged,
+        ).map((finding) => finding.id)
+      : [])
   const candidates = records.filter((record) => record.posted)
   const pass = strictRules(
     candidates.map(
@@ -441,9 +470,13 @@ export function reselectRun(artifact: ReplayArtifact, run: EvalRun): { run: Eval
         skipped: outcome?.skipped ?? [],
         specialists: outcome?.specialists ?? [],
       },
-      pass.unreadable,
+      {
+        verdict:
+          pass.unreadable.verdict || (recorded && outcome?.strict?.incomplete?.includes("verdict-unreadable")) === true,
+        blob: pass.unreadable.blob || (recorded && outcome?.strict?.incomplete?.includes("blob-unreadable")) === true,
+      },
     ),
-    ...(triaged && unconfirmed > 0 ? ["verdicts-unrecorded" as const] : []),
+    ...(!recorded && triaged && unconfirmed > 0 ? ["verdicts-unrecorded" as const] : []),
   ]
   const kept = pass.kept.map((entry) => entry.finding)
   const copy: EvalRun = {
@@ -487,7 +520,7 @@ function reselectSource(reselections: readonly StrictReselection[]) {
   return [
     `strict re-selection of ${reselections.length} engine replay(s), offline`,
     "applied: S1, S2's blocking half, S3 and S4 as the recorded anchors, S6 from the recorded suggestion rule, S7 by id or sameFinding, S8",
-    "left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), and S9 (no base blobs are recorded)",
+    "left out: S2's class half, S4's quotes and S5 (legacy output has no failure block and no quotes), S9 (no base blobs are recorded), and S1's certificate check (private trace blobs are not recorded)",
     `kept ${sum((item) => item.kept.length)} of ${sum((item) => item.candidates)} posted finding(s), ${sum((item) => item.unposted)} selected but never posted left out`,
     `dropped: ${dropped.length ? dropped.join(", ") : "none"}`,
     `${sum((item) => item.fixUnchecked)} fix(es) unchecked`,
@@ -653,44 +686,72 @@ export function fromArtifact(
   const failed = reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed")
   const unfinished =
     outcome?.specialists.filter((entry) => ["failed", "timeout", "stopped"].includes(entry.status)) ?? []
-  const status = !outcome
-    ? "partial"
-    : failed
-      ? "failed"
-      : outcome.partial || outcome.unreviewed.length || unfinished.length
+  // A graph plan may collect context before a provider admits its first reviewer. Planning supplies no review coverage.
+  const graphUnsent =
+    artifact.config?.value?.impact === "graph" &&
+    !artifact.files.reviewed.length &&
+    !artifact.attempts.some((attempt) => attempt.admitted && (attempt.pass === "review" || attempt.pass === "security"))
+  const notReviewed = outcome?.trivial
+    ? noteTrivialSkip()
+    : outcome?.partial === "budget-estimate"
+      ? noteBudgetEstimate(outcome.notes)
+      : graphUnsent
+        ? "Not reviewed. No reviewer request was admitted."
+        : undefined
+  const status = failed
+    ? "failed"
+    : notReviewed
+      ? "not-sent"
+      : !outcome ||
+          outcome.partial ||
+          outcome.unreviewed.length ||
+          unfinished.length ||
+          outcome.strict?.complete === false
         ? "partial"
         : "completed"
   const detail = !outcome
     ? `every changed file was skipped (${artifact.files.skipped.length}), so nothing was reviewed`
     : failed
       ? (reviewers.find((entry) => entry.detail)?.detail ?? "every reviewer failed")
-      : status === "partial"
-        ? [
-            ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
-            ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
-            ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
-          ].join(", ")
-        : undefined
-  const selection = outcome?.selection
+      : notReviewed
+        ? notReviewed
+        : status === "partial"
+          ? [
+              ...(outcome.partial ? [`stopped early (${outcome.partial})`] : []),
+              ...(outcome.unreviewed.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
+              ...unfinished.map((entry) => `${entry.name} ${entry.status}`),
+              ...(outcome.strict?.complete === false ? (outcome.strict.incomplete ?? ["guardrail incomplete"]) : []),
+            ].join(", ")
+          : undefined
+  const selection = notReviewed ? undefined : outcome?.selection
   const writes = postedParts(artifact, failed)
+  const strictIds = outcome?.strict ? strictPostedIds(artifact) : undefined
   const posted = selection
     ? [
-        ...(writes.review ? selection.inline.map((finding) => evalFinding(finding, true)) : []),
+        ...(writes.review
+          ? selection.inline
+              .filter((finding) => !strictIds || strictIds.review.has(finding.id))
+              .map((finding) => evalFinding(finding, true))
+          : []),
         ...(writes.summary
-          ? [...selection.overflow, ...selection.outsideDiff, ...selection.elsewhere, ...selection.nits].map(
-              (finding) => evalFinding(finding, false),
-            )
+          ? [...selection.overflow, ...selection.outsideDiff, ...selection.elsewhere, ...selection.nits]
+              .filter((finding) => !strictIds || strictIds.summary.has(finding.id))
+              .map((finding) => evalFinding(finding, false))
           : []),
       ]
     : []
   const charge = replayCharge(artifact.attempts)
+  const proposed =
+    artifact.config?.value?.guardrail === "strict" && outcome?.strict && artifact.strictCandidates
+      ? artifact.strictCandidates.findings
+      : (outcome?.report.findings ?? [])
   const paid = artifact.attempts.some((attempt) => attempt.admitted)
   // The variant the eval asked for names the run's pipeline, so a variant's replays form their own group and pair
   // with the frozen pipeline's under --candidate and --baseline, and its admission is its own.
   const variant = replayVariant("engine", artifact.variant)
   const caseKey = replayCaseKey({ variant, models, id: artifact.label, repetition: artifact.repetition })
   const tokens = artifact.attempts.flatMap((attempt) => (attempt.settled?.tokens ? [attempt.settled.tokens] : []))
-  const timed = artifact.passes.flatMap((pass) => (pass.ms === undefined ? [] : [{ pass: pass.pass, ms: pass.ms }]))
+  const timed = artifact.passes.flatMap((pass) => (pass.ms === undefined ? [] : [{ pass: pass.lens ? `lens:${pass.lens}` : pass.pass, ms: pass.ms }]))
   const written = artifact.posted
     .flatMap((write) =>
       write.write === "createReview"
@@ -707,7 +768,7 @@ export function fromArtifact(
     trust: artifact.trust,
     status,
     ...(detail ? { detail } : {}),
-    proposed: (outcome?.report.findings ?? []).map((finding) => evalFinding(finding)),
+    proposed: (notReviewed ? [] : proposed).map((finding) => evalFinding(finding)),
     posted,
     ...(outcome ? { ms: outcome.durationMs } : {}),
     attempts: artifact.attempts.filter((attempt) => attempt.admitted).length,
@@ -754,13 +815,16 @@ export function fromArtifact(
 // VS-21e: a paid replay's passes by token kind, from what each pass's sessions reported (ReviewOutcome.passes) and the
 // artifact's record of each pass's cache writes and reasoning tokens. Input is the pass's prompt tokens less its cache
 // reads and writes, and output keeps its reasoning. Each kind is priced at the price snapshot of the pass's model, cache
-// reads and writes at the input rate where the snapshot lists none, beside the cost the pass reported. A lens pass takes
-// the artifact's cache writes and reasoning only when it is the only lens pass, since neither record names its lens:
-// otherwise its cache writes stay inside its input. An artifact with no passes gives none.
+// reads and writes at the input rate where the snapshot lists none, beside the cost the pass reported. A labelled lens is matched by class. Older
+// unlabelled lens usage is attributable only when both records have exactly one lens pass.
 function settledCosts(artifact: ReplayArtifact, run: EvalRun): PassCost[] {
-  return (artifact.outcome?.passes ?? []).map((pass) => {
+  const passes = artifact.outcome?.passes ?? []
+  const lensCount = passes.filter((pass) => pass.name === "lens").length
+  return passes.map((pass) => {
     const recorded = artifact.passes.filter((entry) => entry.pass === pass.name)
-    const own = recorded.length === 1 ? recorded[0] : undefined
+    const exact = recorded.filter((entry) => entry.lens === pass.lens && (pass.name !== "lens" || !!pass.lens))
+    const singleLegacyLens = pass.name === "lens" && lensCount === 1 && recorded.length === 1 && !recorded[0]?.lens
+    const own = exact.length === 1 ? exact[0] : singleLegacyLens ? recorded[0] : undefined
     const cacheWrite = own?.cacheWrite ?? 0
     const tokens = {
       input: Math.max(0, pass.input - pass.cacheRead - cacheWrite),
@@ -802,6 +866,39 @@ function postedParts(artifact: ReplayArtifact, failed: boolean) {
   }
 }
 
+// A replay's posting guard may remove one comment from an otherwise successful write. For strict
+// runs, only finding IDs present in the writes that survived can join a proposal to an original post.
+function strictPostedIds(artifact: ReplayArtifact) {
+  const review = new Set<string>()
+  const summary = new Set<string>()
+  for (const write of artifact.posted) {
+    if (write.write === "createReview") {
+      for (const comment of write.payload.comments) {
+        const marker = parseFindingMarker(comment.body)
+        if (marker) review.add(marker.id)
+      }
+    } else {
+      const stateIds = new Set(readState(write.body)?.findings.map((finding) => finding.id))
+      const sections = write.body.matchAll(
+        /^<details><summary>More findings \(\d+\)<\/summary>\n([\s\S]*?)^<\/details>$/gm,
+      )
+      const section = [...sections].at(-1)?.[1] ?? ""
+      const visible = section
+        .split("\n")
+        .filter((line) => line.startsWith("- "))
+        .map((line) => createHash("sha256").update(line).digest("hex"))
+      for (const row of artifact.strictCandidates?.summaryRows ?? []) {
+        const at = visible.indexOf(row.digest)
+        if (stateIds.has(row.id) && at !== -1) {
+          visible.splice(at, 1)
+          summary.add(row.id)
+        }
+      }
+    }
+  }
+  return { review, summary }
+}
+
 // A desktop replay's artifact (desktop.ts): the desktop runner on a dataset case, or a variant of it. Its reviewers'
 // findings are what was proposed, and what the panel's Post button would send is what would be posted: the line
 // comments, then the findings its summary lists. A run whose variant never reached the runner (variant.applied false)
@@ -811,30 +908,39 @@ export function fromDesktopArtifact(artifact: DesktopArtifact, manifest: Manifes
   if (artifact.variant?.applied === false) return undefined
   const item = manifest?.cases.find((entry) => entry.id === artifact.label)
   const outcome = artifact.outcome
+  const notReviewed = outcome?.partial === "budget-estimate" ? noteBudgetEstimate(outcome.notes) : undefined
   // The desktop runner's specialists are its reviewers; its double-check is reported apart, as `verification`.
   const reviewers = outcome?.specialists ?? []
   const failed =
     artifact.error !== undefined || (reviewers.length > 0 && reviewers.every((entry) => entry.status === "failed"))
   const unfinished = [
+    ...(outcome?.partial === "budget"
+      ? [
+          "stopped early (budget)",
+          ...(outcome.unreviewed?.length ? [`${outcome.unreviewed.length} file(s) unreviewed`] : []),
+        ]
+      : []),
     ...reviewers.filter((entry) => entry.status !== "ok").map((entry) => `${entry.name} ${entry.status}`),
     ...(outcome?.verification?.status === "failed" ? ["verify failed"] : []),
   ]
   const status = failed
     ? "failed"
-    : !outcome
-      ? "partial"
-      : artifact.aborted.length || unfinished.length
+    : notReviewed
+      ? "not-sent"
+      : !outcome || artifact.aborted.length || unfinished.length
         ? "partial"
         : "completed"
   const detail =
     status === "failed"
       ? (artifact.error ?? reviewers.find((entry) => entry.detail)?.detail ?? "every reviewer failed")
-      : !outcome
-        ? "nothing was reviewed"
-        : status === "partial"
-          ? [...(artifact.aborted.length ? [`aborted ${artifact.aborted.join(", ")}`] : []), ...unfinished].join(", ")
-          : undefined
-  const selection = outcome?.selection
+      : notReviewed
+        ? notReviewed
+        : !outcome
+          ? "nothing was reviewed"
+          : status === "partial"
+            ? [...(artifact.aborted.length ? [`aborted ${artifact.aborted.join(", ")}`] : []), ...unfinished].join(", ")
+            : undefined
+  const selection = notReviewed ? undefined : outcome?.selection
   const posted =
     selection && artifact.proposed && !failed
       ? [
@@ -879,10 +985,11 @@ export function fromDesktopArtifact(artifact: DesktopArtifact, manifest: Manifes
     trust: artifact.trust ?? "untrusted",
     status,
     ...(detail ? { detail } : {}),
-    proposed: (outcome?.report.findings ?? []).map((finding) => evalFinding(finding)),
+    proposed: (notReviewed ? [] : (outcome?.report.findings ?? [])).map((finding) => evalFinding(finding)),
     posted,
     ...(outcome ? { ms: outcome.durationMs } : {}),
     attempts: artifact.attempts.length,
+    ...(outcome?.partial ? { stop: outcome.partial } : {}),
     ...(timed.length ? { passes: timed } : {}),
     spend: {
       ...(priced.length ? { costUsd: priced.reduce((total, attempt) => total + (attempt.costUsd ?? 0), 0) } : {}),

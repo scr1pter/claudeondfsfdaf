@@ -6,7 +6,14 @@ import os from "node:os"
 import path from "node:path"
 
 import { legacyName } from "@vectordevai/core/flag/legacy"
-import { credentialStorePaths, sandboxAvailability, sandboxEnabled, seatbeltProfile, wrapCommand } from "./sandbox"
+import {
+  credentialStorePaths,
+  offline,
+  sandboxAvailability,
+  sandboxEnabled,
+  seatbeltProfile,
+  wrapCommand,
+} from "./sandbox"
 
 const darwin = process.platform === "darwin"
 const home = fs.realpathSync(os.homedir())
@@ -559,4 +566,204 @@ test.skipIf(!darwin)("a profile with no writable roots is still a valid read-onl
   })
   expect(result.stdout.trim()).toBe("alive")
   expect(result.status).toBe(0)
+})
+
+// SF-08: the review fix executor's checks ask for writes to the workspace alone. The shell tool never does, and its
+// argv is pinned unchanged below.
+const bubblewrap = process.platform === "linux" && sandboxAvailability("linux").supported
+const flagValues = (args: readonly string[], flag: string) =>
+  args.flatMap((arg, index) => (arg === flag ? [args[index + 1]] : []))
+
+test.skipIf(!bubblewrap)(
+  "workspace writes bind only the workspace, hide /tmp, /run and Vector's data, and drop capabilities",
+  () => {
+    const scratch = workspace("sbx-fix-")
+    const data = path.join(scratch, "data")
+    const tools = path.join(data, "bin")
+    const root = path.join(data, "task-worktree", "fix")
+    for (const folder of [tools, root]) fs.mkdirSync(folder, { recursive: true })
+    try {
+      const wrapped = wrapCommand({
+        shell: "/bin/sh",
+        command: "true",
+        cwd: root,
+        env: { PATH: `${tools}:/usr/bin:/bin` },
+        workspaceRoot: root,
+        allowNetwork: false,
+        data,
+        writes: "workspace",
+      })
+      expect(wrapped.sandboxed).toBe(true)
+      const args = wrapped.args
+      // No --new-session: bwrap's namespace init stays in the caller's process group (fix.ts `execute`).
+      expect(args.slice(0, 3)).toEqual(["--die-with-parent", "--cap-drop", "ALL"])
+      expect(args).not.toContain("--new-session")
+      expect(args).toContain("--unshare-net")
+      expect(flagValues(args, "--bind")).toEqual([root])
+      const tmpfs = flagValues(args, "--tmpfs")
+      expect(tmpfs.slice(0, 2)).toEqual(["/tmp", "/run"])
+      expect(tmpfs).toContain(data)
+      // The data folder's tmpfs, then its PATH folder put back, then the workspace, then the data folder made read-only.
+      const at = args.indexOf(data)
+      expect(args.slice(at - 1, at + 1)).toEqual(["--tmpfs", data])
+      expect(args.indexOf(tools)).toBeGreaterThan(at)
+      expect(args[args.indexOf(tools) - 1]).toBe("--ro-bind")
+      expect(args.indexOf("--bind")).toBeGreaterThan(args.indexOf(tools))
+      expect(args.indexOf("--bind")).toBeGreaterThan(args.lastIndexOf("/run"))
+      expect(args.slice(-7)).toEqual(["--remount-ro", data, "--chdir", root, "/bin/sh", "-c", "true"])
+      // A data folder that holds the home folder (where the user's tools live) is not hidden.
+      const home = wrapCommand({
+        shell: "/bin/sh",
+        command: "true",
+        cwd: root,
+        env: {},
+        workspaceRoot: root,
+        allowNetwork: false,
+        home: path.join(data, "home"),
+        data,
+        writes: "workspace",
+      })
+      expect(home.args).not.toContain("--remount-ro")
+      expect(flagValues(home.args, "--tmpfs")).not.toContain(data)
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true })
+    }
+  },
+)
+
+// Outside /tmp, which the sandbox already replaces, so only the data folder's own mask can hide it.
+const varTmp = bubblewrap && fs.existsSync("/var/tmp") && fs.statSync("/var/tmp").isDirectory()
+
+test.skipIf(!varTmp)("in workspace mode Vector's data folder is empty and read-only, but for the workspace", () => {
+  const data = fs.realpathSync(fs.mkdtempSync("/var/tmp/sbx-fix-data-"))
+  const root = path.join(data, "task-worktree", "fix")
+  const secret = path.join(data, "other", "secret.txt")
+  fs.mkdirSync(root, { recursive: true })
+  fs.mkdirSync(path.dirname(secret))
+  fs.writeFileSync(secret, "planted\n")
+  try {
+    const wrapped = wrapCommand({
+      shell: "/bin/sh",
+      command: [
+        `cat ${secret} 2>/dev/null || echo HIDDEN`,
+        `touch ${path.join(data, "written")} 2>/dev/null && echo WROTE || echo DENIED`,
+        "echo inside > inside.txt",
+      ].join("; "),
+      cwd: root,
+      env: { PATH: "/usr/bin:/bin" },
+      workspaceRoot: root,
+      allowNetwork: false,
+      data,
+      writes: "workspace",
+    })
+    const result = spawnSync(wrapped.command, wrapped.args, { cwd: root, env: wrapped.env, encoding: "utf8" })
+    expect(result.status).toBe(0)
+    expect(result.stdout.split("\n")).toEqual(["HIDDEN", "DENIED", ""])
+    expect(fs.readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("inside\n")
+    expect(fs.existsSync(path.join(data, "written"))).toBe(false)
+  } finally {
+    fs.rmSync(data, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(!bubblewrap)("workspace writes keep a linked worktree's Git metadata out of reach", () => {
+  const main = workspace("sbx-fix-main-")
+  const linked = path.join(workspace("sbx-fix-linked-"), "linked")
+  try {
+    git(main, ["init", "-q", "-b", "main"])
+    git(main, ["-c", "user.name=V", "-c", "user.email=v@v", "commit", "-q", "--allow-empty", "-m", "initial"])
+    git(main, ["worktree", "add", "-q", "--detach", linked])
+    const wrapped = wrapCommand({
+      shell: "/bin/sh",
+      command: "true",
+      cwd: linked,
+      env: { PATH: "/usr/bin:/bin" },
+      workspaceRoot: linked,
+      allowNetwork: false,
+      writes: "workspace",
+    })
+    const real = fs.realpathSync(linked)
+    expect(flagValues(wrapped.args, "--bind")).toEqual([real])
+    expect(flagValues(wrapped.args, "--ro-bind")).toContain(path.join(real, ".git"))
+    // The default policy grants the linked worktree's own Git folder.
+    const shell = wrapCommand({ shell: "/bin/sh", command: "true", cwd: linked, env: {}, workspaceRoot: linked })
+    expect(flagValues(shell.args, "--bind").some((file) => file.includes(`${path.sep}worktrees${path.sep}`))).toBe(true)
+  } finally {
+    fs.rmSync(main, { recursive: true, force: true })
+    fs.rmSync(path.dirname(linked), { recursive: true, force: true })
+  }
+})
+
+test.skipIf(!bubblewrap)("a working folder outside the workspace is refused, not run with wider writes", () => {
+  const root = workspace("sbx-fix-")
+  try {
+    const input = { shell: "/bin/sh", command: "true", cwd: os.tmpdir(), env: {}, workspaceRoot: root } as const
+    const wrapped = wrapCommand({ ...input, writes: "workspace" })
+    expect(wrapped.sandboxed).toBe(false)
+    expect(wrapped.reason).toContain("outside")
+    // The refusal carries the sandbox's own reason beside the shell tool's message.
+    expect(offline({ ...input, writes: "workspace" })).toMatchObject({
+      type: "refused",
+      reason: "the working folder is outside the folder the command may write",
+    })
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(!bubblewrap)("without workspace writes the shell tool's argv is the one before SF-08, in full", () => {
+  const scratch = workspace("sbx-fix-")
+  const root = path.join(scratch, "workspace")
+  const home = path.join(scratch, "home")
+  const data = path.join(scratch, "data", "vector")
+  for (const folder of [root, home, data]) fs.mkdirSync(folder, { recursive: true })
+  const tmp = fs.realpathSync(os.tmpdir())
+  try {
+    const input = { shell: "/bin/sh", command: "true", cwd: root, env: {}, workspaceRoot: root, home, data }
+    // Printed by wrapCommand at 1f5d62ad (before SF-08) for these inputs, with an empty home and data folder; only
+    // the paths are variables, and the resolver mask depends on the host as it always has.
+    const before = (network: string[], resolver: string[]) => [
+      "--die-with-parent",
+      "--unshare-ipc",
+      "--unshare-uts",
+      "--unshare-pid",
+      ...network,
+      "--ro-bind",
+      "/",
+      "/",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+      "--tmpfs",
+      "/tmp",
+      ...resolver,
+      "--bind",
+      root,
+      root,
+      "--bind",
+      root,
+      root,
+      "--bind",
+      tmp,
+      tmp,
+      "--chdir",
+      root,
+      "/bin/sh",
+      "-c",
+      "true",
+    ]
+    expect(wrapCommand({ ...input, allowNetwork: true })).toEqual({
+      command: Bun.which("bwrap") ?? "bwrap",
+      args: before([], []),
+      shell: false,
+      env: {},
+      sandboxed: true,
+      mechanism: "bubblewrap",
+    })
+    const resolver = fs.existsSync("/run/systemd/resolve") ? ["--tmpfs", "/run/systemd/resolve"] : []
+    expect(wrapCommand({ ...input, allowNetwork: false }).args).toEqual(before(["--unshare-net"], resolver))
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
 })

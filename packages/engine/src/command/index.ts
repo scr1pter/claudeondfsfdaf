@@ -6,6 +6,7 @@ import type { InstanceContext } from "@/project/instance-context"
 import { Effect, Layer, Context, Schema } from "effect"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { ReviewMcp } from "@/review/mcp"
 import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { Global } from "@vectordevai/core/global"
@@ -60,8 +61,8 @@ export const Default = {
 } as const
 
 export interface Interface {
-  readonly get: (name: string) => Effect.Effect<Info | undefined>
-  readonly list: () => Effect.Effect<Info[]>
+  readonly get: (name: string, internal?: string) => Effect.Effect<Info | undefined>
+  readonly list: (internal?: string) => Effect.Effect<Info[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@vector/Command") {}
@@ -75,7 +76,7 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
 
-    const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
+    const init = Effect.fn("Command.state")(function* (ctx: InstanceContext, restricted = false) {
       const cfg = yield* config.get()
       const bridge = yield* EffectBridge.make()
       const commands: Record<string, Info> = {}
@@ -128,7 +129,7 @@ const layer = Layer.effect(
         }
       }
 
-      for (const [name, prompt] of Object.entries(yield* mcp.prompts())) {
+      for (const [name, prompt] of Object.entries(yield* MCP.modelCatalog(mcp, restricted).prompts())) {
         commands[name] = {
           name,
           source: "mcp",
@@ -187,13 +188,22 @@ const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>((ctx) => init(ctx))
 
-    const get = Effect.fn("Command.get")(function* (name: string) {
-      const s = yield* InstanceState.get(state)
+    // Keep separate caches: a command list initialized for an ordinary session contains live prompt templates.
+    const reviewState = yield* InstanceState.make<State>((ctx) => init(ctx, true))
+    const forSession = (internal?: string) =>
+      Effect.gen(function* () {
+        return yield* InstanceState.get(
+          ReviewMcp.restrictsModel(internal) || (yield* ReviewMcp.blocked) ? reviewState : state,
+        )
+      })
+
+    const get = Effect.fn("Command.get")(function* (name: string, internal?: string) {
+      const s = yield* forSession(internal)
       return s.commands[name]
     })
 
-    const list = Effect.fn("Command.list")(function* () {
-      const s = yield* InstanceState.get(state)
+    const list = Effect.fn("Command.list")(function* (internal?: string) {
+      const s = yield* forSession(internal)
       return Object.values(s.commands)
     })
 
