@@ -1,10 +1,10 @@
 # phone-review-hold takeover: detached phone reviews stay manually approved (#110)
 
-Branch `phone-review-hold` (PR #110), finished on the local branch `cx-phone-review-hold`. The draft had been idle for more than a day, so this v2 run took it over to finish and merge it before the Saturday deadline. No flag changes: Remote, `VECTOR_EXPERIMENTAL_CONNECT` and every other v2 switch stay off. No public claims.
+Branch `phone-review-hold` (PR #110), finished on the local branch `cx-phone-review-hold`. The draft had been idle for more than a day, so this v2 run took it over to finish and merge it as part of the v2 P0 list. No flag changes: Remote, `VECTOR_EXPERIMENTAL_CONNECT` and every other v2 switch stay off. No public claims.
 
 Fold into `connected-workspace-deviations.md` later. This closes the CN-17 Known limit "Asks after detach are not held (for CN-18)" and the open item that repeats it in the CN-18 notes ("The hold for a detached run's later questions").
 
-## 2026-11-26, a phone-started review's later asks could be auto-accepted after it detached
+## 2026-11-25, a phone-started review's later asks could be auto-accepted after it detached
 
 **Bug.** When a phone started a background VectorScope review, the desktop held the conversation only until its next idle. `owner.ts` sets the conversation idle right after a background start returns. The run's later `connect` and `connect_model` asks go to the requester's session, and after that idle they were treated as asks from a review started at the desktop, so the app's auto-accept could answer them without a person.
 
