@@ -1,6 +1,6 @@
 # phone-alert-status takeover: the phone checks the signed-in account's push registration
 
-Branch `cx-phone-alert-status`, cut from `phone-alert-status` (draft PR #143) and merged with origin/main `b57b8d53`. This v2 run took the draft over to finish and merge it before the Saturday 2026-11-28 deadline, because it had been idle for more than a day. No flag changes, no public claims, no production configuration.
+Branch `cx-phone-alert-status`, cut from `phone-alert-status` (draft PR #143) and merged with origin/main `b57b8d53`. This v2 run took the draft over to finish it so it lands in main before the redesign starts, because it had been idle for more than a day. No flag changes, no public claims, no production configuration.
 
 ## 2026-11-25, the phone said alerts were on for an account that had none
 
