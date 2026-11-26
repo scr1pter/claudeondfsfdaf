@@ -809,7 +809,7 @@ describe("productionPorts", () => {
 /*
  * VE-30b (EV-30): the listeners on @vector's run hooks, registered through the real registry (cloud-agents-runs.ts
  * notifyRunStart and notifyRunSettle, with their 5 s budget) over the router fixture's store, and the cron's run read
- * through @vector's real listCloudRuns over a stub of @vector's store.
+ * through @vector's real readCloudRunOutcome over a stub of @vector's store.
  */
 
 /** The router fixture's Slack job, dispatched with its own ticket, and EV-30's listeners registered over its store. */
@@ -1130,6 +1130,12 @@ describe("the cron's run read (VE-30b)", () => {
     await expect(
       createActionsRunEnd({ store: async () => Object.entries(swapped).flat(), enabled: () => true })(account, ended),
     ).rejects.toMatchObject({ code: "PERSISTENT_STORE_UNAVAILABLE" })
+    // A settled run that the sponsor's history index no longer lists still answers its own outcome.
+    const unlisted = vectorStore(() => [vectorRun({ account, rid: ended, outcome: "changes" })])
+    const history = async (command: readonly (string | number)[]) =>
+      command[0] === "ZREVRANGE" ? [] : unlisted.store(command)
+    expect(await createActionsRunEnd({ store: history, enabled: () => true })(account, ended)).toBe("changes")
+    expect(unlisted.commands).toEqual([["EVAL", expect.any(String), "1", `${VECTOR_RUN_KEY}${ended}`]])
   })
 
   test("C2: while the cloud-agents service is off nothing is read, by the default gate too", async () => {
