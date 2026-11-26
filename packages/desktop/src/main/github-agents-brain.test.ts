@@ -4,6 +4,9 @@ import type { BrainExport } from "@vectordevai/core/brain/export"
 import { BrainUpload } from "@vectordevai/core/brain/upload"
 import { RunProposalsCodec } from "@vectordevai/core/brain/run-proposals-codec"
 import { createGithubAgentsBrain } from "./github-agents-brain"
+import { registerGithubAgentsReturnedIpc } from "./github-agents-returned-ipc"
+import { isTrustedRendererEvent } from "./trusted-renderer"
+import { returnedBrainPreloadApi } from "../preload/github-agents-returned"
 import { encryptConversation } from "../../../engine/src/cli/cmd/github.session"
 import { cloudBrainArtifactKey, cloudRunArtifactKey } from "../../../../api/_lib/cloud-agents-artifact"
 import { ZipWriter, Uint8ArrayReader, Uint8ArrayWriter } from "@zip.js/zip.js"
@@ -68,7 +71,7 @@ function fixture() {
       state.localRequests++
       await hooks.preview?.()
       expect(url.origin).toBe("http://127.0.0.1:4096")
-      expect(url.pathname).toBe("/experimental/brain/preview")
+      expect(url.pathname).toBe("/experimental/brain/run-bundle/preview")
       expect(new Headers(init?.headers).get("authorization")).toBe(
         "Basic " + Buffer.from("vector:local-owner-only").toString("base64"),
       )
@@ -242,6 +245,81 @@ const MASTER = { VECTOR_RUN_ARTIFACT_SECRET: "m".repeat(32) }
 const CLAIMS = { sub: "00000000-0000-4000-8000-0000000000bb", repo: RUN.repositoryId, gen: 1, thr: RUN.thread }
 const ENGINE_ANSWER = { proposed: 1, known: 1, refused: 0, over: 0 }
 const RETURNED = { cwd: "/fixture", rid: RUN.rid, artifactId: "7" }
+
+test("returned Brain IPC accepts one exact import from the trusted renderer", async () => {
+  const artifact = await brainArtifact({ publicRun: false, drafts: "lessons" })
+  const proposals = artifact.proposals!
+  using desk = returnedDesk(artifact)
+  const trustedUrl = "vector://renderer/index.html"
+  const sender = { isDestroyed: () => false, getURL: () => trustedUrl }
+  const event = { sender, senderFrame: { url: "https://untrusted.invalid/frame" } }
+  const handlers = new Map<string, (request: typeof event, input: unknown) => unknown>()
+  registerGithubAgentsReturnedIpc(
+    (channel, handler) => handlers.set(channel, handler),
+    (request: typeof event) => {
+      if (
+        !isTrustedRendererEvent(request, {
+          windowFor: (value) => (value === sender ? {} : undefined),
+          trustedUrl: (url) => url === trustedUrl,
+        })
+      )
+        throw new Error("Vector rejected a desktop command from an untrusted page.")
+    },
+    {
+      returnedArtifacts: desk.brain.artifacts,
+      previewReturned: desk.brain.previewReturned,
+      importReturned: desk.brain.importReturned,
+    },
+  )
+  const renderer = returnedBrainPreloadApi({
+    async invoke(channel, input: unknown) {
+      const handler = handlers.get(channel)
+      if (!handler) throw new Error(`Missing IPC handler for ${channel}`)
+      return structuredClone(await handler(event, structuredClone(input)))
+    },
+  })
+  await expect(renderer.previewReturned(RETURNED)).rejects.toThrow("untrusted page")
+  expect(desk.seen.vector).toHaveLength(0)
+
+  event.senderFrame.url = trustedUrl
+  expect(await renderer.returnedArtifacts({ cwd: RETURNED.cwd, rid: RETURNED.rid })).toEqual([
+    { artifactId: "7", name: "vector-session-dispatch-99", expiresAt: EXPIRES },
+  ])
+  const approve = async () => {
+    const preview = await renderer.previewReturned(RETURNED)
+    expect(preview.sha256).toBe(proposals.sha256)
+    return { previewId: preview.id, approvedSha256: preview.sha256 }
+  }
+  const old = await approve()
+  await expect(renderer.importReturned({ ...old, approvedSha256: 7 } as never)).rejects.toThrow("approve this exact")
+  event.senderFrame.url = "https://untrusted.invalid/frame"
+  await expect(renderer.importReturned(old)).rejects.toThrow("untrusted page")
+  event.senderFrame.url = trustedUrl
+  desk.state.authority++
+  await expect(renderer.importReturned(old)).rejects.toThrow("authority changed")
+  desk.state.authority--
+  await expect(renderer.importReturned(old)).rejects.toThrow("approve this exact")
+
+  const mismatched = await approve()
+  desk.state.ownerArtifactId = "8"
+  await expect(renderer.importReturned(mismatched)).rejects.toThrow("no longer authorized")
+  expect(desk.seen.engine).toHaveLength(0)
+  desk.state.ownerArtifactId = "7"
+  await expect(renderer.importReturned(mismatched)).rejects.toThrow("approve this exact")
+
+  const consent = await approve()
+  expect(await renderer.importReturned(consent)).toEqual(ENGINE_ANSWER)
+  await expect(renderer.importReturned(consent)).rejects.toThrow("approve this exact")
+  expect(desk.seen.vector).toHaveLength(5)
+  expect(desk.seen.engine.map((call) => call.json)).toEqual([
+    {
+      path: RunProposalsCodec.PATH,
+      base64url: proposals.bytes.toString("base64url"),
+      sha256: consent.approvedSha256,
+      publicRepository: false,
+    },
+  ])
+})
 
 test("a desktop Brain run's returned drafts, sealed as its save writes them, are found, previewed only as drafts and imported once at the previewed digest", async () => {
   const artifact = await brainArtifact({ publicRun: false, drafts: "lessons-and-skill" })
@@ -673,6 +751,7 @@ function returnedDesk(artifact: { zip: Uint8Array; key: { key: string; keyId: st
     ownerPublic: undefined as boolean | undefined,
     // The owner read's `historicalPublicRepository`: left out when undefined, as a server before B08's field answers.
     historical: undefined as unknown,
+    ownerArtifactId: "7",
     ownerKey: artifact.key,
     authority: 0,
     name: "vector-session-dispatch-99",
@@ -751,7 +830,7 @@ function returnedDesk(artifact: { zip: Uint8Array; key: { key: string; keyId: st
         repositoryId: RUN.repositoryId,
         thread: RUN.thread,
         rid: RUN.rid,
-        artifactId: "7",
+        artifactId: state.ownerArtifactId,
         publicRepository: state.ownerPublic ?? !state.private,
         ...(state.historical === undefined ? {} : { historicalPublicRepository: state.historical }),
       }

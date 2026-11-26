@@ -661,6 +661,16 @@ function agents(options = CODIUM) {
 }
 
 describe("workflow v3", () => {
+  test("the task and review mint steps own separate environment objects", async () => {
+    // The YAML writer already prints separate mappings, so parsing its output cannot catch an earlier shared mutation.
+    const source = await Bun.file(new URL("../../../core/src/review/workflow.ts", import.meta.url)).text()
+    const lines = source.split("\n")
+    for (const purpose of ["task", "review"]) {
+      const mint = lines.find((line) => line.includes(`run: "vector github mint --purpose ${purpose}"`))
+      expect(mint).toContain("env: { ...mintEnv }")
+    }
+  })
+
   for (const [name, options] of [
     ["Codium", CODIUM],
     ["own key auto-review", OWN_KEY],
@@ -841,6 +851,27 @@ describe("workflow v3", () => {
     expect(agents().jobs.route.steps.some((step) => step.uses?.includes("checkout"))).toBe(false)
   })
 
+  test("publish downloads only the artifact ID emitted by this agent's trusted bundle upload", () => {
+    for (const options of [CODIUM, OWN_KEY, SCHEDULED]) {
+      const workflow = agents(options)
+      const upload = workflow.jobs.agent.steps.find((step) => step.with?.path === "${{ runner.temp }}/vector-out/")!
+      expect(upload.uses).toBe("actions/upload-artifact@v4")
+      expect(upload.id).toBe("bundle")
+      expect(workflow.jobs.agent.steps.filter((step) => step.id === "bundle")).toHaveLength(1)
+      expect(workflow.jobs.agent.outputs!.bundle).toBe("${{ steps.bundle.outputs.artifact-id }}")
+      const download = workflow.jobs.publish.steps.find((step) => step.uses === "actions/download-artifact@v4")!
+      // Empty ID means skipped/failed upload. Without this guard the action would download every artifact by default.
+      expect(download.if).toBe("needs.agent.outputs.bundle != ''")
+      expect(download.with).toEqual({
+        "artifact-ids": "${{ needs.agent.outputs.bundle }}",
+        "merge-multiple": true,
+        path: "${{ runner.temp }}/vector-bundle",
+      })
+      // A missing or failed download still reaches the publisher's existing fail-closed missing-bundle report.
+      expect(download["continue-on-error"]).toBe(true)
+    }
+  })
+
   test("hostile schedule prompts survive JSON and YAML without becoming expressions", () => {
     const workflow = agents(SCHEDULED)
     const value = workflow.jobs.agent.steps.find((step) => step.id === "agent")!.env!.VECTOR_SCHEDULE_PROMPTS
@@ -920,6 +951,7 @@ describe("workflow v3", () => {
         status: "${{ steps.mint.outputs.status }}",
         rid: "${{ steps.mint.outputs.rid }}",
         capture: "${{ steps.capture.outputs.capture }}",
+        bundle: "${{ steps.bundle.outputs.artifact-id }}",
       })
       const publish = workflow.jobs.publish!
       expect(publish.outputs).toEqual({ pr: "${{ steps.publish.outputs.pr }}" })
@@ -1021,6 +1053,8 @@ describe("workflow v3", () => {
       "steps.mint.outputs.rid",
       "needs.agent.outputs.status",
       "needs.agent.outputs.rid",
+      "steps.bundle.outputs.artifact-id",
+      "needs.agent.outputs.bundle",
       // Ship Desk (V31): the ticket step's output and the pull request publish names.
       "steps.capture.outputs.capture",
       "needs.agent.outputs.capture",

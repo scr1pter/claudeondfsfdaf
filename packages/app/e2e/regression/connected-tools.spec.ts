@@ -73,6 +73,50 @@ test("connected settings keep an unsaved draft and focus when a run refreshes", 
   expect(app.capture.config).toEqual([])
 })
 
+test("Connected tools offers report mode but cannot newly select automatic repair", async ({ page }) => {
+  const app = await setup(page, { capabilities: { connections: true }, globalConfig: {} })
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, (route) => reply(route, []))
+  await app.open()
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.locator(".settings-v2-workspace")
+  await settings.getByRole("tab", { name: "Agents", exact: true }).click()
+  const tools = settings.locator('[data-component="connected-tools"]')
+  const mode = tools.getByRole("combobox", { name: "After-run review", exact: true })
+  await expect(mode).toHaveValue("off")
+  // Playwright's disabled matcher follows the enclosing label to the select.
+  await expect(mode.locator('option[value="repair"]')).toHaveJSProperty("disabled", true)
+  await mode.selectOption("report")
+  await tools.getByRole("button", { name: "Save review settings", exact: true }).click()
+  await expect
+    .poll(() => app.capture.config)
+    .toEqual([{ connect: { review: { after_run: "report", before_commit: "offer", max_rounds: 1, max_cost_usd: 2 } } }])
+})
+
+test("Connected tools retains a saved repair setting when another review setting changes", async ({ page }) => {
+  const app = await setup(page, {
+    capabilities: { connections: true },
+    globalConfig: {
+      connect: { review: { after_run: "repair", before_commit: "offer", max_rounds: 1, max_cost_usd: 2 } },
+    },
+  })
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, (route) => reply(route, []))
+  await app.open()
+  await page.getByRole("button", { name: "Settings", exact: true }).click()
+  const settings = page.locator(".settings-v2-workspace")
+  await settings.getByRole("tab", { name: "Agents", exact: true }).click()
+  const tools = settings.locator('[data-component="connected-tools"]')
+  const mode = tools.getByRole("combobox", { name: "After-run review", exact: true })
+  await expect(mode).toHaveValue("repair")
+  await expect(mode.locator('option[value="repair"]')).toHaveJSProperty("disabled", true)
+  await tools.getByRole("textbox", { name: "Review cap", exact: true }).fill("1.25")
+  await tools.getByRole("button", { name: "Save review settings", exact: true }).click()
+  await expect
+    .poll(() => app.capture.config)
+    .toEqual([
+      { connect: { review: { after_run: "repair", before_commit: "offer", max_rounds: 1, max_cost_usd: 1.25 } } },
+    ])
+})
+
 test("Connected tools fixes an existing owned run through an identifier-only composer handoff", async ({ page }) => {
   const fixture = reviewRun()
   const run = { ...fixture, request: { ...fixture.request, directory, requester: { kind: "user", sessionID: rootID } } }

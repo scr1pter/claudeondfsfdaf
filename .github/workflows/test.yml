@@ -159,7 +159,8 @@ jobs:
       # Hosted native jobs use a disposable desktop and the driver's fixed isolated target only. Local and direct
       # workflow callers retain the off default; missing native scenarios are reported as skipped, never passed.
       isolated-desktop: true
-      stop_repeat: ${{ github.event_name == 'workflow_dispatch' && inputs.stop_repeat || 1 }}
+      # Dispatch can supply a numeric input as text. The reusable workflow requires a number.
+      stop_repeat: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('{0}', inputs.stop_repeat) || '1') }}
 
   # Measurement uses the registered dispatcher without enabling isolated input, desktop fixtures or publication.
   # The existing helper still enforces the old measured Mac lock after reproducibility and grant-free core checks.
@@ -704,6 +705,11 @@ jobs:
             node ./test/computer/helper-node.ts "$RUNNER_TEMP/computer-helper.mjs" "$RUNNER_TEMP/computer-fake-helper.mjs" || status=1
           exit $status
 
+      - name: Run returned Brain IPC tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/desktop
+        run: GITHUB_ACTIONS=false bun --no-env-file test --timeout 30000 ./src/main/github-agents-brain.test.ts
+
       # packages/cloud has no turbo test task, so on Linux its compliance file runs in the lane workflows only. This
       # one case starts Bun and git with the Codium picker's explicit environment, so it also runs here on Windows,
       # where PATH uses ';' and only the named system variables pass through.
@@ -880,8 +886,16 @@ jobs:
         env:
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "false"
 
-  engine-windows:
+  windows-holder-build:
     needs: validate-dispatch
+    if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
+    uses: ./.github/workflows/windows-holder-bundle.yml
+    with:
+      source_revision: ${{ github.sha }}
+      targets: x64
+
+  engine-windows:
+    needs: [validate-dispatch, windows-holder-build]
     if: github.event_name != 'workflow_dispatch' || (!inputs.desktop_engine_node && !inputs.computer_helper && !inputs.hands_ui && !inputs.hands_benchmark && !inputs.release_evidence && !inputs.production_benchmark && !inputs.offline_footprint)
     name: engine (windows, shard ${{ matrix.shard }}/18)
     strategy:
@@ -905,6 +919,15 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+
+      - name: Download the exact holder built for this run
+        if: needs.windows-holder-build.outputs.artifact-id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          # A consumer-only retry keeps the successful producer's ID rather than looking for a new attempt name.
+          artifact-ids: ${{ needs.windows-holder-build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/vector-windows-holder-bundle
+          merge-multiple: true
 
       # The engine suite runs under the strict network guard, so Vector may not download ripgrep for the tests that
       # search files: it has to be installed (engine/test/preload.ts).
@@ -935,9 +958,22 @@ jobs:
         timeout-minutes: 45
         working-directory: packages/engine
         # Whole-file shards retain the configured preloads and per-test deadlines; print passes to locate any stall.
-        run: GITHUB_ACTIONS=false bun test --timeout 30000 --shard=${{ matrix.shard }}/18
+        run: GITHUB_ACTIONS=false bun test --preload=./script/windows-holder-ci.ts --timeout 30000 --shard=${{ matrix.shard }}/18
         env:
+          VECTOR_WINDOWS_HOLDER_BUILD_RUN: ${{ needs.windows-holder-build.outputs.run }}
+          VECTOR_WINDOWS_HOLDER_REVISION: ${{ needs.windows-holder-build.outputs.revision }}
+          VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256: ${{ needs.windows-holder-build.outputs.manifest-digest }}
           VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
+
+      - name: Verify the Windows holder in the Node and standalone bundles
+        if: matrix.shard == 1
+        timeout-minutes: 5
+        working-directory: packages/engine
+        run: bun --no-env-file script/verify-windows-holder-bundle.ts
+        env:
+          VECTOR_WINDOWS_HOLDER_BUILD_RUN: ${{ needs.windows-holder-build.outputs.run }}
+          VECTOR_WINDOWS_HOLDER_REVISION: ${{ needs.windows-holder-build.outputs.revision }}
+          VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256: ${{ needs.windows-holder-build.outputs.manifest-digest }}
 
   e2e:
     needs: validate-dispatch

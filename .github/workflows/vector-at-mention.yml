@@ -305,17 +305,18 @@ jobs:
           bun build --target=node packages/engine/test/fixture/sandbox-runner.ts --outfile "$RUNNER_TEMP/vector-probe-tools/runner.mjs"
           bun packages/engine/script/stage-sandbox-probe.ts node
           bun packages/engine/script/stage-sandbox-probe.ts bun
-          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-probe.mjs
-          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe-bun.mjs" /opt/vector-sandbox-probe-bun.mjs
+          sudo -n mkdir -m 0755 /opt/vector-sandbox-runtime
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe.mjs" /opt/vector-sandbox-runtime/probe.mjs
+          sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/probe-bun.mjs" /opt/vector-sandbox-runtime/probe-bun.mjs
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/inspector-guard.mjs" /opt/vector-inspector-guard.mjs
           sudo -n install -m 0555 "$(command -v bun)" /opt/vector-probe-bun
           cc -shared -fPIC -O2 packages/engine/test/fixture/sandbox-loader-probe.c -o "$RUNNER_TEMP/vector-probe-tools/loader-probe.so"
           sudo -n install -m 0555 "$RUNNER_TEMP/vector-probe-tools/loader-probe.so" /opt/vector-probe-loader.so
-          if [ -d "$RUNNER_TEMP/vector-probe-tools/assets" ]; then
-            sudo -n mkdir -p /opt/assets
-            sudo -n cp -R "$RUNNER_TEMP/vector-probe-tools/assets/." /opt/assets/
-            sudo -n chmod -R a+rX,go-w /opt/assets
-          fi
+          for directory in assets node_modules rust-pty; do
+            sudo -n mkdir -m 0755 "/opt/vector-sandbox-runtime/$directory"
+            sudo -n cp -R --no-preserve=ownership,mode -- "$RUNNER_TEMP/vector-probe-tools/$directory/." "/opt/vector-sandbox-runtime/$directory/"
+            sudo -n chmod -R a+rX,go-w -- "/opt/vector-sandbox-runtime/$directory"
+          done
           node "$RUNNER_TEMP/vector-probe-tools/runner.mjs" --install
 
       # The Codium agent job's Ship Desk ticket step writes its capture ticket to $GITHUB_OUTPUT before the sandbox
@@ -332,14 +333,14 @@ jobs:
         shell: env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN bash --noprofile --norc -eo pipefail {0}
         run: |
           if [ "$PROBE_SCENARIO" = bundle-refusal ]; then
-            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --bundle-refusal
+            vector github sandbox run -- node /opt/vector-sandbox-runtime/probe.mjs --bundle-refusal
           elif [ "$PROBE_SCENARIO" = session-replaced ]; then
-            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs --session-replaced
+            vector github sandbox run -- node /opt/vector-sandbox-runtime/probe.mjs --session-replaced
           elif [ "$PROBE_RUNTIME" = bun ]; then
-            # Plain Bun auto-installs unresolved bare specifiers; the probe bundle has no node_modules and runs under strict egress.
-            vector github sandbox run -- /opt/vector-probe-bun --no-install /opt/vector-sandbox-probe-bun.mjs
+            # Bun runs the staged fixture dependencies under strict egress.
+            vector github sandbox run -- /opt/vector-probe-bun --no-install /opt/vector-sandbox-runtime/probe-bun.mjs
           else
-            vector github sandbox run -- node /opt/vector-sandbox-probe.mjs
+            vector github sandbox run -- node /opt/vector-sandbox-runtime/probe.mjs
           fi
 
       - name: Observe the synthetic probe report
@@ -365,4 +366,4 @@ jobs:
           PROBE_FINISH_OUTCOME: ${{ steps.sandbox_finish.outcome }}
           PROBE_UPLOAD_OUTCOME: ${{ steps.artifact_boundary.outcome }}
           PROBE_PLANTED: ${{ steps.plant.outputs.capture }}
-        run: node /opt/vector-sandbox-probe.mjs --assert
+        run: node /opt/vector-sandbox-runtime/probe.mjs --assert

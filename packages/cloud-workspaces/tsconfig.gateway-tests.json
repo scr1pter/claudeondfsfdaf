@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "bun"]
+  },
+  "include": [
+    "../../test/cloud-workspaces-api.test.ts",
+    "../../test/cloud-workspaces-node.test.ts",
+    "../../test/account-delete-api.test.ts",
+    "../../test/account-delete.test.ts",
+    "../../test/site-publication.test.ts"
+  ]
+}
