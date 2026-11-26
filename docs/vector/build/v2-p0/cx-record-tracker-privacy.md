@@ -1,6 +1,6 @@
 # cx-record-tracker-privacy: dated tracker privacy marks (#157)
 
-Branch `record-tracker-privacy` (PR #157), finished locally on `cx-record-tracker-privacy`. Codex opened the draft on 2026-11-24 and left it idle for more than a day, so this v2 run took it over to land it in main with the rest of v2. The owner's deadline is 1 January 2027, for the redesign and for everything else (GTM strategy, Stripe, signing). Vector Everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`, which stays off. No public claims, no production configuration.
+Branch `record-tracker-privacy` (PR #157), finished locally on `cx-record-tracker-privacy`. Codex opened the draft on 2026-11-24 and left it idle for more than a day, so this v2 run took it over to land it in main with the rest of v2. Vector Everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`, which stays off. No public claims, no production configuration.
 
 ## 2026-11-26, takeover: a tracker privacy mark had no time of its own
 
@@ -26,4 +26,8 @@ Branch `record-tracker-privacy` (PR #157), finished locally on `cx-record-tracke
 
 ## 2026-11-26, finalize: wording only
 
-The review found nothing to fix in code. This entry's deadline line now names the owner's 1 January 2027 deadline instead of the run's Saturday working date, and the stacking ruling records #123's current owner. #108's later main-merge commit `2762464c` is not in this branch, which is harmless: landing #157 lands #108's change itself.
+The review found nothing to fix in code. The stacking ruling records #123's current owner. #108's later main-merge commit `2762464c` is not in this branch, which is harmless: landing #157 lands #108's change itself.
+
+## 2026-11-26, finalize: no schedule in the entry
+
+The second review asked to drop the intro's deadline sentence that commit `3061460de` added. This repository is public and every push to main deploys the site, so a build note must not carry the owner's private schedule or business plans, and it must not read as a public ship date. The sentence is gone; the rest of the intro (Vector Everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`, which stays off) is unchanged. Docs only, no code or test change.
