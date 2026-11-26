@@ -477,7 +477,13 @@ export function cardState(card: OpsCard) {
 
 // ── Monitors and domains ───────────────────────────────────────────────────────────────────────────────────────────
 
-export type OpsMonitor = { id: string; url: string; domainVerified: boolean; checked: boolean }
+export type OpsMonitor = {
+  id: string
+  url: string
+  domainVerified: boolean
+  checked: boolean
+  resolverFailedAt?: number
+}
 
 export function decodeMonitors(body: unknown) {
   const value = isRecord(body) ? body : {}
@@ -491,11 +497,21 @@ export function decodeMonitors(body: unknown) {
             url: item.url as string,
             domainVerified: item.domainVerified === true,
             checked: item.checked === true,
+            ...(item.domainVerified === true && item.checked === true && time(item.resolverFailedAt)
+              ? { resolverFailedAt: item.resolverFailedAt }
+              : {}),
           }
         : undefined,
     ),
     limits: limits ? { urls: limits.urls as number, intervalSec: limits.intervalSec as number } : undefined,
   }
+}
+
+export function monitorStatusLine(monitor: OpsMonitor) {
+  if (!monitor.domainVerified) return "Domain not verified"
+  if (!monitor.checked) return "Past your plan's URLs"
+  if (monitor.resolverFailedAt !== undefined) return "Last check skipped: DNS lookup failed"
+  return "Checks configured"
 }
 
 export type OpsDomainHealth = {

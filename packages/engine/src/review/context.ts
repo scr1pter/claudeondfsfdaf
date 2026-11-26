@@ -2,8 +2,15 @@
 // and blame of the lines it rewrites, and, in CI, the repository instructions from the base commit. Vector's code
 // gathers all of it with git, so the reviewer needs no shell.
 
-import { Effect } from "effect"
+import path from "node:path"
+import { createHash } from "node:crypto"
+import { Cause, Effect } from "effect"
+import { contextCardFits } from "@vectordevai/core/review/prompt"
+import { holdbackText, heldReason } from "@vectordevai/core/review/holdback"
+import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
+import { readCardArtifact } from "./card-sources"
 import { ReviewGit } from "@/review/git"
+import type { ReviewRoutes } from "./route"
 import type { Brain } from "@vectordevai/core/brain/brain"
 import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
@@ -294,6 +301,201 @@ export const requirements = Effect.fn("ReviewContext.requirements")(function* (i
 function broken(anchor: BrainSchema.Anchor) {
   return anchor.status === "missing" ? 2 : anchor.status === "drifted" ? 1 : 0
 }
+
+export interface SelectedCard {
+  id: string
+  text: string
+  personal: boolean
+}
+const issued = new WeakMap<
+  readonly SelectedCard[],
+  { directory: string; base: string; head: string; pathKey: string; publicOnly: boolean }
+>()
+export function changeKey(files: readonly DiffFile[]) {
+  const hash = createHash("sha256")
+  for (const file of files) hash.update(JSON.stringify([file.path, file.oldPath, file.status, file.patch]))
+  return hash.digest("hex")
+}
+
+export interface CardGrant {
+  readonly items: readonly SelectedCard[]
+  readonly directory: string
+  readonly base: string
+  readonly head: string
+  readonly models: readonly string[]
+  readonly allowsRoute?: (model: string, policy: ReviewRoutes.Policy, route?: ReviewRoutes.Decided) => boolean
+  // Re-check the model and current private document versions immediately before use.
+  readonly eligible?: (ids: readonly string[]) => Effect.Effect<boolean>
+}
+// Only text issued by the source reader can be admitted to the separate model/session policy.
+export function consumeSources(input: CardGrant) {
+  const binding = issued.get(input.items)
+  if (!binding || input.directory !== binding.directory || input.base !== binding.base || input.head !== binding.head)
+    return
+  issued.delete(input.items)
+  return binding
+}
+
+export interface CardsInput {
+  place: Brain.Place
+  directory: string
+  head: string
+  base: string
+  files: DiffFile[]
+  denied: (file: string) => boolean
+  // The caller has established the specific display, model, and privacy policy.
+  personal: boolean
+  shared: boolean
+  trust: "untrusted" | "trusted"
+  deadline: number
+  signal?: AbortSignal
+}
+
+const compact = (text: string) => text.replace(/\s+/g, " ").trim()
+
+// Reads committed scope rules and the eligible base documents before consulting local Brain.
+// A repository card must quote its admitted document. A stale or head-only index entry has no authority.
+export const cards = Effect.fn("ReviewContext.cards")(function* (input: CardsInput) {
+  const empty: SelectedCard[] = []
+  const remaining = input.deadline - performance.now()
+  if (
+    input.place.held ||
+    input.signal?.aborted ||
+    remaining <= 0 ||
+    path.resolve(input.place.root) !== path.resolve(input.directory)
+  )
+    return empty
+  const candidates = input.files
+    .filter(
+      (file) =>
+        !file.binary &&
+        holdbackText(file.patch) === file.patch &&
+        [file.path, ...(file.oldPath ? [file.oldPath] : [])].every(
+          (name) =>
+            ReadOnlyGit.repositoryPath(name) && !heldReason(name) && holdbackText(name) === name && !input.denied(name),
+        ),
+    )
+    .slice(0, 40)
+  if (!candidates.length) return empty
+  const artifact = yield* readCardArtifact({ ...input, files: candidates.map((file) => file.path) }, input.deadline)
+  if (!artifact || input.signal?.aborted) return empty
+  const names = artifact.paths
+  const files = candidates.filter((file) => names.includes(file.path))
+  const knowledge = yield* BrainKnowledge.Service
+  const personal = input.trust === "trusted" && !input.shared && input.personal
+  const search = Effect.gen(function* () {
+    const query = [...changedSymbols(files).map((symbol) => symbol.name), ...names].join(" ").slice(0, 1500)
+    const links = (yield* Effect.forEach(
+      names,
+      (file) => knowledge.links(input.place, file, { personal, documentsOnly: true }),
+      {
+        concurrency: 2,
+      },
+    ))
+      .flat()
+      .filter(
+        (row) =>
+          row.type !== "entry" &&
+          row.document &&
+          row.anchor &&
+          row.anchor.weight >= REQUIREMENT_WEIGHT &&
+          names.includes(row.anchor.path),
+      )
+      .toSorted(
+        (a, b) =>
+          Number(REQUIREMENT_KINDS.includes(b.kind)) - Number(REQUIREMENT_KINDS.includes(a.kind)) ||
+          b.anchor!.weight - a.anchor!.weight ||
+          a.owner.localeCompare(b.owner),
+      )
+      .slice(0, 80)
+    const lexical = yield* knowledge.search(input.place, { query, limit: 3, personal, readOnly: true })
+    const candidates = [
+      ...links.map((row) => ({
+        id: row.owner,
+        document: row.document!,
+        text: row.text,
+        status: row.anchor!.status === "fresh" ? "" : row.anchor!.status,
+        kind: row.kind,
+      })),
+      ...lexical.map((row) => ({ id: row.id, document: row.document, text: row.text, status: "", kind: row.kind })),
+    ]
+    const ids = [...new Set(candidates.map((row) => row.id))]
+    const docs = ids.length ? yield* knowledge.sources(input.place, ids) : undefined
+    const metadata = new Map((docs?.documents ?? []).map((row) => [row.id, row]))
+    const base = new Map(artifact.documents.map((row) => [row.path, row]))
+    const result: SelectedCard[] = []
+    const seen = new Set<string>()
+    const shown = new Set<string>()
+    const add = (row: SelectedCard) => {
+      if (!row.text || seen.has(row.id) || holdbackText(row.text) !== row.text) return
+      const text = Array.from(row.text).slice(0, 160).join("")
+      if (
+        !text.trim() ||
+        shown.has(text) ||
+        !contextCardFits(
+          result.map((card) => card.text),
+          text,
+        )
+      )
+        return
+      seen.add(row.id)
+      shown.add(text)
+      result.push({ ...row, text })
+    }
+    const usedDocs = new Set<string>()
+    for (const row of candidates) {
+      const doc = metadata.get(row.document)
+      if (!doc || doc.hold || !["ready", "searchable", "embedding", "partial"].includes(doc.status)) continue
+      const text = compact(row.text)
+      if (!text || holdbackText(text) !== text) continue
+      const sourcePath =
+        doc.sourcePath &&
+        (path.isAbsolute(doc.sourcePath)
+          ? path.relative(input.directory, doc.sourcePath).split(path.sep).join("/")
+          : doc.sourcePath)
+      if (sourcePath && (!ReadOnlyGit.repositoryPath(sourcePath) || heldReason(sourcePath) || input.denied(sourcePath)))
+        continue
+      if (doc.visibility === "private") {
+        if (!personal) continue
+      } else {
+        const source = sourcePath && base.get(sourcePath)
+        if (doc.origin !== "repository" || !source || !compact(source.text).includes(text)) continue
+        if (input.trust === "untrusted" && !REQUIREMENT_KINDS.includes(row.kind)) continue
+        usedDocs.add(source.path)
+      }
+      add({ id: row.id, text: (row.status ? `[${row.status}] ` : "") + text, personal: doc.visibility === "private" })
+    }
+    for (const source of artifact.documents) {
+      if (usedDocs.has(source.path)) continue
+      const excerpt = source.text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line && !line.startsWith("#"))
+      if (excerpt) add({ id: source.path, text: `${source.description}: ${excerpt}`, personal: false })
+    }
+    return input.signal?.aborted || performance.now() >= input.deadline ? [] : result
+  })
+  const result = yield* search.pipe(
+    Effect.timeoutOption(Math.max(0, input.deadline - performance.now())),
+    Effect.map((result) => (result._tag === "Some" ? result.value : empty)),
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterrupts(cause),
+      () => Effect.succeed(empty),
+    ),
+  )
+  if (result.length) {
+    for (const row of result) Object.freeze(row)
+    Object.freeze(result)
+    issued.set(result, {
+      directory: input.directory,
+      base: input.base,
+      head: input.head,
+      pathKey: changeKey(input.files),
+      publicOnly: input.shared && !personal,
+    })
+  }
+  return result
+})
 
 // Everything above for one review. Instructions come from the base only in CI; locally the engine loads the user's
 // instructions as usual.

@@ -21,7 +21,7 @@ import { AzureAuthPlugin } from "./azure"
 import { DigitalOceanAuthPlugin } from "./digitalocean"
 import { XaiAuthPlugin } from "./xai"
 import { SnowflakeCortexAuthPlugin } from "./snowflake-cortex"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
@@ -36,6 +36,7 @@ import { protectPluginOAuth } from "./oauth"
 import { InstallationChannel } from "@vectordevai/core/installation/version"
 
 type State = {
+  external: boolean
   hooks: Hooks[]
 }
 
@@ -55,6 +56,8 @@ export interface Interface {
     output: Output,
   ) => Effect.Effect<Output>
   readonly list: () => Effect.Effect<Hooks[]>
+  /** Built-in request hooks from a completed load; never initializes or invokes an extension. */
+  readonly reviewRequestHooks?: () => Effect.Effect<Pick<Interface, "trigger"> | undefined>
   readonly init: () => Effect.Effect<void>
 }
 
@@ -302,18 +305,17 @@ const layer = Layer.effect(
         })
         yield* Effect.addFinalizer(() => unsubscribe)
 
-        return { hooks }
+        return { hooks, external: plugins.length > 0 }
       }),
     )
 
-    const trigger = Effect.fn("Plugin.trigger")(function* <
+    const triggerHooks = Effect.fn("Plugin.triggerHooks")(function* <
       Name extends TriggerName,
       Input = Parameters<Required<Hooks>[Name]>[0],
       Output = Parameters<Required<Hooks>[Name]>[1],
-    >(name: Name, input: Input, output: Output) {
+    >(hooks: Hooks[], name: Name, input: Input, output: Output) {
       if (!name) return output
-      const s = yield* InstanceState.get(state)
-      for (const hook of s.hooks) {
+      for (const hook of hooks) {
         ProcessIsolation.assertExternalValueAllowed(hook)
         const fn = hook[name] as any
         if (!fn) continue
@@ -326,6 +328,17 @@ const layer = Layer.effect(
       return output
     })
 
+    const trigger: Interface["trigger"] = (name, input, output) =>
+      name
+        ? InstanceState.get(state).pipe(Effect.flatMap(({ hooks }) => triggerHooks(hooks, name, input, output)))
+        : Effect.succeed(output)
+    const reviewRequestHooks = Effect.fn("Plugin.reviewRequestHooks")(function* () {
+      const current = Option.getOrUndefined(yield* InstanceState.getSuccess(state))
+      if (!current || current.external) return
+      const trigger: Interface["trigger"] = (name, input, output) => triggerHooks(current.hooks, name, input, output)
+      return { trigger }
+    })
+
     const list = Effect.fn("Plugin.list")(function* () {
       const s = yield* InstanceState.get(state)
       for (const hook of s.hooks) ProcessIsolation.assertExternalValueAllowed(hook)
@@ -336,7 +349,7 @@ const layer = Layer.effect(
       yield* InstanceState.get(state)
     })
 
-    return Service.of({ trigger, list, init })
+    return Service.of({ trigger, list, init, reviewRequestHooks })
   }),
 )
 

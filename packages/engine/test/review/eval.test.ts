@@ -13,6 +13,7 @@ import { Ripgrep } from "@vectordevai/core/ripgrep"
 import { ProviderV2 } from "@vectordevai/core/provider"
 import { ModelV2 } from "@vectordevai/core/model"
 import { parseUnifiedDiff } from "@vectordevai/core/review/diff"
+import { MAX_FINDING_QUOTES, MAX_QUOTE_CHARS, MAX_TRACE_QUOTES } from "@vectordevai/core/review/schema"
 import { buildFinalizePrompt, buildReviewPrompt } from "@vectordevai/core/review/prompt"
 import { estimateCostUsd, nextStepCostUsd } from "@vectordevai/core/review/plan"
 import { EgressGuard } from "@vectordevai/core/local-mode/guard"
@@ -20,10 +21,16 @@ import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { ModelPlans } from "@vectordevai/core/model-plans"
 import {
   DEFAULT_REVIEW_CONFIG,
+  LENS_LIMITS,
+  REVIEW_LENSES,
   type ModelFinding,
   type ReviewConfig,
   type ReviewOutcome,
+  UNAPPLIED_REVIEW_KEYS,
 } from "@vectordevai/core/review/types"
+import { parseReviewConfig } from "@vectordevai/core/review/config"
+import { noteHeldBack, noteTrivialSkip } from "@vectordevai/core/review/format"
+import { readState } from "@vectordevai/core/review/state"
 import { estimateDispatch } from "@vectordevai/core/review/dispatch"
 import { findingKey, type SliceUtilisation } from "@vectordevai/core/review/eval"
 import { evidenceScope, policyDigest, promptsDigest } from "@vectordevai/core/review/model-evidence"
@@ -118,6 +125,7 @@ const mcp = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
     status: () => Effect.succeed({}),
+    snapshot: () => Effect.succeed({}),
     clients: () => Effect.succeed({}),
     instructions: () => Effect.succeed([]),
     tools: () => Effect.succeed({}),
@@ -1044,36 +1052,82 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-24c: config.ts parses VS-24's keys, and no runner applies them yet, so a base review.json that sets one is
-  // replayed and recorded without it, with the parser's "not applied" warning, and its scope claims no such policy.
   it.instance(
-    "replays a base review.json that sets VS-24's keys without them, keeping the parser's warnings",
+    "the trivial-skip variant proves its committed docs change before posting a policy note without a reviewed head",
     () =>
       Effect.gen(function* () {
-        const settings = JSON.stringify({ trivial: "skip", maxInputTokens: 1_000, minConfidence: 0.75 })
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "README.md": "A small library.\n", ".gitignore": "vector.json\n" },
+          head: { "README.md": "A tiny library.\n" },
+          price: PRICE,
+        })
+        // Keep the fake provider out of the tree using the checked-in rule. A private info/exclude rule
+        // is deliberately insufficient evidence for a skip, even when it only names this test provider.
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const variant = { name: "engine:trivial-skip", keys: { trivial: "skip" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          variant,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.variant).toEqual(variant)
+        if (process.platform !== "linux") {
+          // The private Git reader is Linux-only; another host follows the ordinary review path.
+          expect(artifact.outcome?.trivial).toBeUndefined()
+          expect(artifact.attempts.some((attempt) => attempt.admitted)).toBe(true)
+          return
+        }
+        expect(artifact.outcome?.trivial).toBe(true)
+        expect(yield* llm.hits).toHaveLength(0)
+        expect(artifact.attempts).toEqual([])
+        expect(artifact.passes).toEqual([])
+        expect(artifact.files.reviewed).toEqual([])
+        expect(artifact.context.locations).toEqual([])
+        expect(artifact.posted).toHaveLength(1)
+        const note = artifact.posted[0]
+        expect(note?.write).toBe("createIssueComment")
+        if (note?.write !== "createIssueComment") throw new Error("the replay did not record the policy note")
+        expect(note.body).toContain(noteTrivialSkip())
+        expect(note.body).not.toContain("No issues found")
+        expect(readState(note.body)).toBeUndefined()
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "replays the base's trivial policy and input-token cap on a change that needs a reviewer",
+    () =>
+      Effect.gen(function* () {
+        const settings = JSON.stringify({ trivial: "skip", maxInputTokens: 100_000, minConfidence: 0.75 })
         const { directory, llm, base, head } = yield* checkout({
           base: { "src/list.ts": LIST_BASE, ".vector/review.json": settings },
           head: { "src/list.ts": LIST_HEAD },
           price: PRICE,
         })
+        // The replay CLI resolves its model before admission. Warm that same local catalog for this direct replay.
+        const provider = yield* Provider.Service
+        yield* provider.getModel(MODEL.providerID, MODEL.modelID)
         yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
         const artifact = yield* ReviewEval.replay({
           case: replayCase(directory, base, head),
           model: MODEL,
-          config: { maxCostUsd: 2, verify: "off" },
+          config: { maxCostUsd: 100, verify: "off" },
           posting: ReviewEval.recordingPosting(),
           check: recordingCheck().check,
         })
-        expect(Object.hasOwn(artifact.config.value, "trivial")).toBe(false)
-        expect(Object.hasOwn(artifact.config.value, "maxInputTokens")).toBe(false)
+        expect(artifact.config.value.trivial).toBe("skip")
+        expect(artifact.config.value.maxInputTokens).toBe(100_000)
         expect(artifact.config.value.minConfidence).toBe(0.75)
-        expect(artifact.config.warnings).toEqual([
-          '"trivial": "skip" is not applied yet: every change is still reviewed.',
-          '"maxInputTokens" is not applied yet: no input-token cap is enforced.',
-        ])
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.dispatch?.firstTurnTokens).toBeGreaterThan(0)
+        expect(artifact.shrink).toEqual([])
         expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
-        // It claims no skip policy: until a runner applies `trivial`, no value of it moves the digest.
-        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, trivial: "skip" }))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, trivial: "review" }))
         // The run was a review, not a skip.
         expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
       }),
@@ -1081,10 +1135,95 @@ describe("ReviewEval.replay", () => {
     TIMEOUT,
   )
 
-  // VS-25b: the same for `impact`. A base review.json under "graph" is replayed with related code from git grep, as every
-  // runner still reviews, and its scope claims neither the policy nor the prompts the impact block would add.
   it.instance(
-    "replays a base review.json that sets VS-25b's impact without it, keeping the parser's warning",
+    "records the initial and shrunk estimates and a zero-attempt budget stop without a reviewed head",
+    () =>
+      Effect.gen(function* () {
+        const comment = "// " + "This unchanged paragraph documents the public API. ".repeat(8)
+        const render = (value: number) =>
+          [comment, comment, comment, `export const size = ${value}`, comment, comment, comment, ""].join("\n")
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/size.ts": render(1) },
+          head: { "src/size.ts": render(2) },
+          price: PRICE,
+        })
+        // The replay CLI resolves its model before admission. Warm that same local catalog for this direct replay.
+        const provider = yield* Provider.Service
+        yield* provider.getModel(MODEL.providerID, MODEL.modelID)
+        const checks = recordingCheck()
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxInputTokens: 1, maxCostUsd: 100, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: checks.check,
+        })
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.outcome).toMatchObject({
+          partial: "budget-estimate",
+          unreviewed: ["src/size.ts"],
+          sessions: [],
+          specialists: [],
+        })
+        expect(artifact.dispatch?.firstTurnTokens).toBeGreaterThan(1)
+        expect(artifact.dispatch?.passes.map((pass) => pass.pass)).toEqual(["review"])
+        const before = artifact.dispatch!.passes[0]!
+        expect(before.usd?.low).toBeGreaterThan(0)
+        expect(before.v2.usd?.low).toBeGreaterThan(0)
+        expect(artifact.shrink?.map((entry) => entry.step)).toEqual(["diff"])
+        const after = artifact.shrink![0]!.estimate
+        expect(after.firstTurnTokens).toBeLessThan(artifact.dispatch!.firstTurnTokens)
+        expect(after.firstTurnTokens).toBeGreaterThan(1)
+        expect(artifact.files.reviewed).toEqual([])
+        expect(artifact.context.locations).toEqual([])
+        expect(artifact.passes).toEqual([])
+        expect(artifact.attempts).toEqual([])
+        expect(yield* llm.hits).toHaveLength(0)
+        expect(artifact.posted).toHaveLength(1)
+        const note = artifact.posted[0]
+        if (note?.write !== "createIssueComment") throw new Error("the replay did not record the budget note")
+        expect(note.body).toContain("Not reviewed")
+        expect(note.body).not.toContain("No issues found")
+        expect(readState(note.body)).toBeUndefined()
+        expect(checks.calls).toHaveLength(1)
+        expect(checks.calls[0]?.sessionIDs).toEqual([])
+
+        const strict = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } },
+          config: { maxInputTokens: 1, maxCostUsd: 100 },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(strict.outcome?.partial).toBe("budget-estimate")
+        expect(strict.outcome?.unreviewed).toEqual(["src/size.ts"])
+        expect(strict.outcome?.strict?.complete).toBe(false)
+        for (const cause of ["budget-estimate", "unreviewed", "no-reviewer"])
+          expect(strict.outcome?.strict?.incomplete).toContain(cause)
+        expect(strict.outcome?.strict?.findings).toEqual([])
+        expect(strict.outcome?.strict?.dropped).toEqual([])
+        expect(strict.strictCandidates).toBeUndefined()
+        expect(strict.dispatch?.firstTurnTokens).toBeGreaterThan(1)
+        expect(strict.files.reviewed).toEqual([])
+        expect(strict.context.locations).toEqual([])
+        expect(strict.attempts).toEqual([])
+        expect(strict.outcome?.sessions).toEqual([])
+        expect(yield* llm.hits).toHaveLength(0)
+        expect(strict.posted).toHaveLength(1)
+        const strictNote = strict.posted[0]
+        if (strictNote?.write !== "createIssueComment")
+          throw new Error("the strict replay did not record the budget stop")
+        expect(strictNote.body).toContain("Not reviewed")
+        expect(strictNote.body).not.toContain("No verified production-breaking issues")
+        expect(readState(strictNote.body)).toBeUndefined()
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "records the graph policy from the committed base even when private ignore rules make its context incomplete",
     () =>
       Effect.gen(function* () {
         const { directory, llm, base, head } = yield* checkout({
@@ -1100,87 +1239,330 @@ describe("ReviewEval.replay", () => {
           posting: ReviewEval.recordingPosting(),
           check: recordingCheck().check,
         })
-        expect(Object.hasOwn(artifact.config.value, "impact")).toBe(false)
-        expect(artifact.config.warnings).toEqual([
-          '"impact": "graph" is not applied yet: related code still comes from git grep.',
-        ])
-        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, impact: "graph" }))
-        expect(artifact.scope.prompts).toBe(promptsDigest())
-        expect(artifact.scope.prompts).not.toBe(promptsDigest({ impact: "graph" }))
-        expect(lastUserText((yield* llm.hits).find(REVIEW)!.body)).not.toContain("untrusted_impact")
-        expect(artifact.tier1).toBeUndefined()
-        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+        expect(artifact.config.value.impact).toBe("graph")
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, impact: "grep" }))
+        expect(artifact.scope.prompts).toBe(promptsDigest({ impact: "graph" }))
+        expect(artifact.tier1?.incomplete?.length).toBeGreaterThan(0)
+        expect(artifact.outcome?.unreviewed).toEqual([])
+        expect(artifact.files.reviewed).toEqual(["src/list.ts"])
+        expect(artifact.attempts.some((attempt) => attempt.admitted)).toBe(true)
       }),
     GIT,
     TIMEOUT,
   )
 
-  // VS-27a: the same for `guardrail`. A base review.json under "strict" is replayed with the legacy report schema and
-  // decoding, as every runner still reviews: a finding's strict fields are ignored, and the scope claims neither the
-  // policy nor the strict schemas.
   it.instance(
-    "replays a base review.json that sets VS-27's guardrail without it, keeping the parser's warning",
+    "records the named graph replay's private head-tree context separately from the changed files it reviewed",
+    () =>
+      isolated(
+        Effect.gen(function* () {
+          const use = 'import { last } from "./list"\nexport const result = last([1, 2])\n'
+          const { directory, llm, base, head } = yield* checkout({
+            base: { "src/list.ts": LIST_BASE, "src/use.ts": use, ".gitignore": "vector.json\n" },
+            head: { "src/list.ts": LIST_HEAD },
+            untrusted: true,
+            price: PRICE,
+          })
+          yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+          const variant = { name: "engine:impact-graph", keys: { impact: "graph" as const } }
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+          const artifact = yield* ReviewEval.replay({
+            case: replayCase(directory, base, head, { trust: "untrusted" }),
+            model: MODEL,
+            config: { maxCostUsd: 2, verify: "off" },
+            variant,
+            posting: ReviewEval.recordingPosting(),
+            check: recordingCheck().check,
+          })
+          expect(artifact.variant).toEqual(variant)
+          expect(artifact.files.reviewed).toEqual(["src/list.ts"])
+          expect(artifact.outcome?.unreviewed).toEqual([])
+          const text = lastUserText((yield* llm.hits).find(REVIEW)!.body)
+          if (process.platform !== "linux") return
+          const record = artifact.tier1
+          if (!record) throw new Error("the graph replay did not record its private head-tree analysis")
+          expect(record.plan).toBe("tree-ish")
+          expect(record.stages.packed).toBeGreaterThan(0)
+          expect(record.ms).toBeGreaterThanOrEqual(0)
+          expect(record.grepMs).toBeGreaterThanOrEqual(0)
+          expect(record.parseMs).toBeGreaterThanOrEqual(0)
+          expect(record.tokens).toBeGreaterThan(0)
+          expect(record).not.toHaveProperty("changed")
+          expect(record).not.toHaveProperty("dependents")
+          expect(text).toContain("<untrusted_impact>")
+          expect(text).toContain('path="src/use.ts"')
+          expect(artifact.context.locations).toContain("src/list.ts:1")
+          expect(artifact.context.locations).toContain("src/use.ts:2")
+          expect(new Set(artifact.context.locations).size).toBe(artifact.context.locations!.length)
+          expect(artifact.files.reviewed).not.toContain("src/use.ts")
+        }),
+      ),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "records the strict runner's candidates and unanswered verdicts for offline re-selection",
     () =>
       Effect.gen(function* () {
         const { directory, llm, base, head } = yield* checkout({
-          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ guardrail: "strict" }) },
+          base: { "src/list.ts": LIST_BASE, ".gitignore": "vector.json\n" },
           head: { "src/list.ts": LIST_HEAD },
           price: PRICE,
         })
-        const strict = {
+        // The private Git view accepts the committed ignore policy, not local info/exclude overrides.
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+        const confirmed: ModelFinding = {
           ...listBug,
           failure: {
             class: "crash",
             mechanism: "logic",
-            trigger: "An empty list.",
-            impact: "last() returns undefined.",
+            trigger: "A caller dereferences the final list item.",
+            impact: "The out of bounds lookup returns undefined and the caller throws.",
           },
-          quotes: [{ path: "src/list.ts", line: 3, side: "RIGHT", code: "  return items[items.length]" }],
-          patch: "--- a/src/list.ts\n+++ b/src/list.ts",
+          quotes: [{ path: "src/list.ts", line: 3, side: "RIGHT", code: "  return items[index]" }],
+          suggestion: "  return items[index - 1]",
         }
-        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: [strict] }))
+        const secret = "fixture-secret-never-record"
+        const unanswered = { ...listFalse, body: `Unverified model text ${secret}` }
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const [keepId, absentId] = Review.normalizeFindings([confirmed, unanswered], "review", anchors).map(
+          (item) => item.id,
+        )
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([confirmed, unanswered])))
+        yield* llm.pushMatch(
+          VERIFY,
+          reply().tool("StructuredOutput", {
+            results: [{ id: keepId, verdict: "confirmed", reason: "The added line indexes beyond the array." }],
+          }),
+        )
         const artifact = yield* ReviewEval.replay({
           case: replayCase(directory, base, head),
           model: MODEL,
+          variant: { name: "engine:guardrail-strict", keys: { guardrail: "strict" } },
           config: { maxCostUsd: 2, verify: "off", minConfidence: 0.5 },
           posting: ReviewEval.recordingPosting(),
           check: recordingCheck().check,
+          secrets: [secret],
         })
-        expect(Object.hasOwn(artifact.config.value, "guardrail")).toBe(false)
-        expect(artifact.config.warnings).toEqual([
-          '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.',
-        ])
-        expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, guardrail: "strict" }))
-        expect(artifact.scope.prompts).toBe(promptsDigest())
-        expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict" }))
-        // The request carries the legacy report schema, and the strict fields of the answer are not read.
-        const body = JSON.stringify((yield* llm.hits).find(REVIEW)!.body)
-        expect(body).toContain('"duplicateOf"')
-        for (const field of ['"failure"', '"quotes"', '"patch"']) expect(body).not.toContain(field)
-        const placed = artifact.outcome?.selection.inline ?? []
-        expect(placed.map((finding) => finding.title)).toEqual([listBug.title])
-        for (const field of ["failure", "quotes", "patch", "verifiedBy"])
-          expect(placed.some((finding) => Object.hasOwn(finding, field))).toBe(false)
-        expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+        const saved = path.join(directory, "strict-artifact.json")
+        yield* Effect.promise(() => Bun.write(saved, JSON.stringify(artifact)))
+        expect(artifact.config.value).toMatchObject({
+          guardrail: "strict",
+          verify: "all",
+          verifyPolicy: "shared",
+          minSeverity: "blocking",
+          nits: false,
+        })
+        expect(artifact.scope.prompts).toBe(promptsDigest({ guardrail: "strict" }))
+        const candidates = artifact.strictCandidates
+        expect(candidates?.findings.map((finding) => finding.id).sort()).toEqual([keepId, absentId].sort())
+        expect(candidates?.unanswered).toEqual([absentId])
+        expect(candidates?.findings.find((finding) => finding.id === keepId)?.verified).toBe(true)
+        expect(candidates?.findings.find((finding) => finding.id === absentId)?.body).toContain("[redacted]")
+        expect(JSON.stringify(artifact)).not.toContain(secret)
+        expect(candidates?.findings.find((finding) => finding.id === keepId)).toMatchObject({
+          anchored: true,
+          suggestionAllowed: true,
+        })
+        expect(artifact.outcome?.strict?.complete).toBe(false)
+        expect(artifact.outcome?.strict?.incomplete).toContain("verdict-unreadable")
+        // Execute the offline report in its own package context. Its desktop imports belong to the
+        // report, not to the engine, and its normal CLI must accept the JSON an engine replay wrote.
+        const reportCommand = path.resolve(import.meta.dir, "../../../../script/vectorscope-eval/report.ts")
+        const output = yield* Effect.promise(() =>
+          $`${process.execPath} ${reportCommand} --outputs ${saved} --reselect strict`
+            .cwd(path.dirname(reportCommand))
+            .quiet()
+            .text(),
+        )
+        expect(output).toContain("engine:guardrail-strict+reselect-strict")
+        expect(output).toContain("1 run(s) incomplete")
+        expect(output).toContain("copies carry no spend, tokens or timing")
+        if (process.platform === "linux") {
+          expect(artifact.outcome?.strict?.dropped).toEqual([{ reason: "verdict-unreadable", count: 1 }])
+          expect(artifact.placed.map((finding) => finding.title)).toEqual([confirmed.title])
+          expect(output).toContain("kept 1 of 1 posted finding(s), 1 selected but never posted left out")
+        }
       }),
     GIT,
     TIMEOUT,
   )
 
-  // VS-42a: the same for `scopeGate`. A base review.json that sets it, with or without strict, is replayed and recorded
-  // without it (and without the guardrail), keeping the parser's warnings, and the scope claims neither the policy nor
-  // the gated schemas.
   it.instance(
-    "replays a base review.json that sets VS-42's scopeGate without it, keeping the parser's warnings",
+    "committed base diagnostics reach the ordinary offline replay without a new variant",
     () =>
       Effect.gen(function* () {
-        const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
-        const UNAPPLIED =
-          '"scopeGate": "introduced" is not applied yet: defects that already existed at the base are not dropped.'
+        const marker = "ghp_" + "aB1x".repeat(9)
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": '{"diagnostics":"offline"}' },
+          head: { "src/list.ts": LIST_HEAD + "\n// " + marker + "\n", ".vector/review.json": '{"diagnostics":"off"}' },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const record = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(record.config.value.diagnostics).toBe("offline")
+        expect(record.variant).toBeUndefined()
+        const requests = (yield* llm.hits).map((hit) => hit.text).join("\n")
+        expect(requests).not.toContain(marker)
+        expect(JSON.stringify(record)).not.toContain(marker)
+        if (process.platform === "linux") expect(requests).toContain("untrusted_offline_diagnostics")
+        else expect(record.outcome?.notes).toContain("Offline diagnostics did not run on this platform.")
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "the named strict rule replay retains only citations present in the base instructions",
+    () =>
+      Effect.gen(function* () {
+        const rule = "Preserve the final element."
+        const added = "Reject every list operation."
+        const { directory, llm, base, head } = yield* checkout({
+          base: {
+            "src/list.ts": LIST_BASE,
+            "AGENTS.md": rule,
+            ".gitignore": "vector.json\n",
+            ".vector/review.json": '{"ruleCheck":"strict"}',
+          },
+          head: { "src/list.ts": LIST_HEAD, "AGENTS.md": rule + "\n" + added },
+          price: PRICE,
+        })
+        const claim = (quote: string) => ({
+          ...listBug,
+          title: quote === rule ? "Order rule" : "Head-only rule",
+          category: "maintainability",
+          rule: { source: "repository_instructions", quote },
+        })
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", { ...report(), findings: [claim(rule), claim(added)] }),
+        )
+        const variant = { name: "engine:rule-strict", keys: { ruleCheck: "strict" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant,
+          config: { maxCostUsd: 2, verify: "off", security: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value.ruleCheck).toBe("strict")
+        expect(artifact.outcome?.report.findings.map((finding) => [finding.rule, finding.rulesSource])).toEqual([
+          [rule, "base branch"],
+        ])
+        expect(artifact.outcome?.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+        expect(JSON.stringify(artifact.posted)).not.toContain(added)
+        yield* llm.pushMatch(
+          REVIEW,
+          reply().tool("StructuredOutput", { ...report(), findings: [claim(rule), claim(added)] }),
+        )
+        const fromBase = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(fromBase.config.value.ruleCheck).toBe("strict")
+        expect(fromBase.outcome?.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "records a real S9 omission at its base span only in the local replay artifact",
+    () =>
+      Effect.gen(function* () {
+        const settings = { guardrail: "strict", scopeGate: "introduced" } as const
+        const { directory, llm, base, head } = yield* checkout({
+          base: {
+            "src/list.ts": LIST_BASE,
+            "src/old-helper.ts": "export const oldHelper = () => null\n",
+            ".gitignore": "vector.json\n",
+          },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, ".git/info/exclude"), ""))
+        const candidate: ModelFinding = {
+          ...listBug,
+          title: "Existing defect in list helper",
+          failure: {
+            class: "crash",
+            mechanism: "logic",
+            trigger: "Call the list helper.",
+            impact: "The operation fails before returning.",
+          },
+          quotes: [{ path: "src/old-helper.ts", line: 1, side: "RIGHT", code: "export const oldHelper = () => null" }],
+          suggestion: "  return items.at(-1)",
+          scope: "introduced",
+        }
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const id = Review.normalizeFindings([candidate], "review", anchors)[0]!.id
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([candidate])))
+        yield* llm.pushMatch(
+          VERIFY,
+          reply().tool("StructuredOutput", {
+            results: [{ id, verdict: "confirmed", reason: "The old helper can fail." }],
+          }),
+        )
+        const time = new Date("2026-01-01T00:00:00Z")
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant: { name: "engine:scope-introduced", keys: settings },
+          config: { maxCostUsd: 2 },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+          now: () => time.getTime(),
+        })
+        expect(artifact.variant).toEqual({ name: "engine:scope-introduced", keys: settings })
+        expect(artifact.config.value.scopeGate).toBe("introduced")
+        expect((yield* llm.hits).filter(REVIEW)).toHaveLength(1)
+        if (process.platform === "linux") {
+          expect(artifact.drops).toEqual([
+            {
+              path: "src/old-helper.ts",
+              base: { sha: base, start: 1, end: 1 },
+              class: "bug",
+              fingerprint: id,
+              at: time.toISOString(),
+            },
+          ])
+          expect(artifact.outcome?.strict?.dropped).toEqual([{ reason: "pre-existing", count: 1 }])
+          expect(artifact.placed).toEqual([])
+          expect(JSON.stringify(artifact.posted)).toContain("1 pre-existing")
+        } else {
+          expect(artifact.drops).toBeUndefined()
+        }
+        const publicData = JSON.stringify([artifact.outcome, artifact.placed, artifact.posted])
+        for (const value of [id, candidate.title, '"fingerprint"', '"scopeDrops"'])
+          expect(publicData).not.toContain(value)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "uses the introduced-by-change gate from the base only with strict, and records the effective prompt",
+    () =>
+      Effect.gen(function* () {
         const IGNORED =
           '"scopeGate": "introduced" is ignored without "guardrail": "strict": the introduced-by-change check runs only inside the strict guardrail.'
         for (const [settings, warnings] of [
-          [{ guardrail: "strict", scopeGate: "introduced" }, [STRICT, UNAPPLIED]],
+          [{ guardrail: "strict", scopeGate: "introduced" }, []],
           [{ scopeGate: "introduced" }, [IGNORED]],
         ] as const) {
           const { directory, llm, base, head } = yield* checkout({
@@ -1189,6 +1571,7 @@ describe("ReviewEval.replay", () => {
             price: PRICE,
           })
           yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), findings: [listBug] }))
+          if ("guardrail" in settings) yield* llm.pushMatch(VERIFY, reply().tool("StructuredOutput", { results: [] }))
           const artifact = yield* ReviewEval.replay({
             case: replayCase(directory, base, head),
             model: MODEL,
@@ -1196,100 +1579,250 @@ describe("ReviewEval.replay", () => {
             posting: ReviewEval.recordingPosting(),
             check: recordingCheck().check,
           })
-          for (const key of ["guardrail", "scopeGate"]) expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          const strict = "guardrail" in settings
+          expect(artifact.config.value.guardrail).toBe(strict ? "strict" : undefined)
+          expect(artifact.config.value.scopeGate).toBe("introduced")
           expect(artifact.config.warnings).toEqual([...warnings])
           expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest())
-          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", scopeGate: "introduced" }))
-          expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual([listBug.title])
-          expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+          expect(artifact.scope.prompts).toBe(
+            promptsDigest(strict ? { guardrail: "strict", scopeGate: "introduced" } : {}),
+          )
+          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict" }))
+          expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual(
+            strict ? [] : [listBug.title],
+          )
+          expect(artifact.outcome?.strict !== undefined).toBe(strict)
         }
       }),
     GIT,
     TIMEOUT,
   )
 
-  // VS-44a: the same for `verifyEvidence`. A base review.json that sets it, with or without strict, is replayed and
-  // recorded without it (and without the guardrail), keeping the parser's warnings. The verify pass is asked with the
-  // legacy verify schema and its answer read by the legacy decoder, so a certificate sent anyway changes nothing, and the
-  // scope claims neither the policy nor the certificate schema.
   it.instance(
-    "replays a base review.json that sets VS-44's verifyEvidence without it, verifying as before",
+    "replays engine:verify-cert through the blind verifier and keeps certificate-only base settings inert without strict",
     () =>
       Effect.gen(function* () {
-        const STRICT = '"guardrail": "strict" is not applied yet: findings are still selected and posted as before.'
-        const UNAPPLIED =
-          '"verifyEvidence": "certificate" is not applied yet: verify verdicts are still read without a certificate.'
-        const IGNORED =
-          '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.'
-        for (const [settings, warnings] of [
-          [{ guardrail: "strict", verifyEvidence: "certificate" }, [STRICT, UNAPPLIED]],
-          [{ verifyEvidence: "certificate" }, [IGNORED]],
-        ] as const) {
+        const keys = { guardrail: "strict", verifyEvidence: "certificate" } as const
+        const quote = { path: listBug.path, side: "RIGHT" as const, line: 3, code: "  return items[index]" }
+        const candidate = {
+          ...listBug,
+          failure: {
+            class: "crash" as const,
+            mechanism: "logic" as const,
+            trigger: "Call last with a nonempty array.",
+            impact: "The returned value is undefined.",
+          },
+          quotes: [quote],
+          suggestion: "  return items[index - 1]",
+        }
+        for (const source of ["variant", "base", "without-strict"] as const) {
+          const strict = source !== "without-strict"
+          const settings = source === "variant" ? {} : strict ? keys : { verifyEvidence: "certificate" }
           const { directory, llm, base, head } = yield* checkout({
             base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify(settings) },
             head: { "src/list.ts": LIST_HEAD },
             price: PRICE,
           })
           const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
-          const [bugID] = Review.normalizeFindings([listBug], "review", anchors).map((item) => item.id)
-          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([listBug])))
-          // A certificate that certified() would refuse (an invented trace, an assumed reach) is not read.
+          const id = Review.normalizeFindings([candidate], "review", anchors)[0]!.id
+          yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report([candidate])))
+          // The typed unsure verdict settles the candidate through the real verifier without authorizing a post.
+          // The legacy verifier still reads its ordinary confirmed verdict into the non-strict selection.
           yield* llm.pushMatch(
             VERIFY,
             reply().tool("StructuredOutput", {
-              results: [
-                {
-                  id: bugID,
-                  verdict: "confirmed",
-                  reason: "Reproduced.",
-                  trace: [{ path: "src/list.ts", line: 1, side: "RIGHT", code: "invented()" }],
-                  reach: "assumed",
-                },
-              ],
+              results: [{ id, verdict: strict ? "unsure" : "confirmed", reason: "Checked the caller." }],
             }),
           )
           const artifact = yield* ReviewEval.replay({
             case: replayCase(directory, base, head),
             model: MODEL,
             config: { maxCostUsd: 2, minConfidence: 0.5 },
+            ...(source === "variant" ? { variant: { name: "engine:verify-cert", keys } } : {}),
             posting: ReviewEval.recordingPosting(),
             check: recordingCheck().check,
           })
-          for (const key of ["guardrail", "verifyEvidence"])
-            expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
-          expect(artifact.config.warnings).toEqual([...warnings])
-          expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest())
-          expect(artifact.scope.prompts).not.toBe(promptsDigest({ guardrail: "strict", verifyEvidence: "certificate" }))
-          // The verify request carries the legacy verify schema, with no certificate field and no unsure verdict. The
-          // fake provider is shared across the loop, so this case's request is the last one.
-          const body = JSON.stringify((yield* llm.hits).filter(VERIFY).at(-1)!.body)
-          expect(body).toContain('"confirmed","rejected"')
-          for (const field of ['"trace"', '"guards"', '"noGuards"', '"reach"', '"unsure"'])
-            expect(body).not.toContain(field)
-          const placed = artifact.outcome?.selection.inline ?? []
-          expect(placed.map((finding) => [finding.title, finding.verified])).toEqual([[listBug.title, true]])
-          expect(artifact.outcome && Object.hasOwn(artifact.outcome, "strict")).toBe(false)
+          expect(artifact.config.value.verifyEvidence).toBe("certificate")
+          expect(artifact.scope.prompts).toBe(promptsDigest(strict ? keys : {}))
+          expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+          const verify = (yield* llm.hits).filter(VERIFY).at(-1)!
+          const sent = JSON.stringify(verify.body)
+          if (strict) {
+            expect(artifact.config.warnings).toEqual([])
+            expect(sent).toContain('"confirmed","rejected","unsure"')
+            expect(lastUserText(verify.body)).toContain(candidate.failure.trigger)
+            expect(lastUserText(verify.body)).not.toContain(candidate.body)
+            expect(artifact.outcome?.strict?.dropped).toContainEqual({ reason: "verdict-unsure", count: 1 })
+            expect(artifact.outcome?.selection.inline).toEqual([])
+          } else {
+            expect(artifact.config.warnings).toContain(
+              '"verifyEvidence": "certificate" is ignored without "guardrail": "strict": certificate-backed verification runs only inside the strict guardrail.',
+            )
+            expect(sent).not.toContain('"noGuards"')
+            expect(artifact.outcome?.selection.inline.map((item) => [item.title, item.verified])).toEqual([
+              [candidate.title, true],
+            ])
+          }
         }
       }),
     GIT,
     TIMEOUT,
   )
 
-  // VS-28c: the same for `depth` and `lenses`. A base review.json that sets them is replayed and recorded without them,
-  // keeping the parser's warnings: the review runs its usual passes, with no security pass or lens it would not have run
-  // anyway, and the scope claims neither the policy nor the lens prompts.
   it.instance(
-    "replays a base review.json that sets VS-28's depth and lenses without them, running the usual passes",
+    "replays engine:depth-auto with recorded policy, real specialist requests and unchanged report risk",
     () =>
       Effect.gen(function* () {
-        const DEPTH = '"depth": "auto" is not applied yet: every review still runs its usual passes.'
-        const LENSES = '"lenses": "high" is not applied yet: no lens passes run.'
+        const headText =
+          Array.from({ length: 140 }, (_, index) => `export const item${index} = ${index}`).join("\n") + "\n"
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": headText },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", { ...report(), risk: "low" }))
+        yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", { ...report(), risk: "low" }))
+        const variant = { name: "engine:depth-auto", keys: { depth: "auto" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          variant,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.outcome?.report.risk).toBe("low")
+        expect(artifact.outcome?.selection.risk).toBe("low")
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value.depth).toBe("auto")
+        expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, depth: "fixed" }))
+        expect(artifact.scope.prompts).toBe(promptsDigest())
+        expect(artifact.outcome?.specialists.map((row) => [row.name, row.status])).toEqual([
+          ["review", "ok"],
+          ["security", "ok"],
+        ])
+        const texts = (yield* llm.inputs).map((body) => JSON.stringify(body))
+        expect(texts.some((text) => text.includes("You are Vector's security reviewer"))).toBe(true)
+        expect(texts.some((text) => text.includes("You are Vector's code reviewer"))).toBe(true)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "replays engine:lenses-high with all four real high-band sessions and the base's strict certificate policy",
+    () =>
+      Effect.gen(function* () {
+        const keys = { depth: "auto", lenses: "high" } as const
+        const strict = {
+          guardrail: "strict",
+          ruleCheck: "strict",
+          verifyEvidence: "certificate",
+          scopeGate: "introduced",
+        } as const
+        const price = { input: 0.001, output: 0.001 }
+        const baseRule = "Keep the last element accessible."
+        const headOnlyRule = "Require every list to contain an empty slot."
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify(strict), "AGENTS.md": baseRule },
+          head: {
+            "AGENTS.md": baseRule + "\n" + headOnlyRule,
+            "src/list.ts": LIST_HEAD + Array.from({ length: 640 }, (_, i) => `export const row${i} = ${i}\n`).join(""),
+          },
+          price,
+        })
+        const candidate = {
+          ...listBug,
+          scope: "introduced" as const,
+          failure: {
+            class: "crash" as const,
+            mechanism: "logic" as const,
+            trigger: "Call last with a nonempty array.",
+            impact: "The returned value is undefined.",
+          },
+          quotes: [{ path: listBug.path, side: "RIGHT" as const, line: 3, code: "  return items[index]" }],
+          suggestion: "  return items[index - 1]",
+        }
+        const headOnly = {
+          ...candidate,
+          title: "Head-only rule",
+          category: "maintainability",
+          rule: { source: "repository_instructions", quote: headOnlyRule },
+        }
+        const anchors = yield* ReviewSource.prDiff({ directory, mergeBase: base, head })
+        const id = Review.normalizeFindings([candidate], "review", anchors)[0]!.id
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        yield* llm.pushMatch(SECURITY, reply().tool("StructuredOutput", report()))
+        for (const lens of REVIEW_LENSES)
+          yield* llm.pushMatch(
+            answering(`You are Vector's ${lens} reviewer`),
+            reply().tool("StructuredOutput", {
+              ...report(),
+              findings: lens === "data-integrity" ? [candidate, headOnly] : [],
+            }),
+          )
+        yield* llm.pushMatch(
+          VERIFY,
+          reply().tool("StructuredOutput", { results: [{ id, verdict: "unsure", reason: "No confirmed trace." }] }),
+        )
+        // The replay CLI resolves the model from the local provider catalog before estimating the first request.
+        const provider = yield* Provider.Service
+        yield* provider.getModel(MODEL.providerID, MODEL.modelID)
+        const variant = { name: "engine:lenses-high", keys }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: { ...MODEL, price },
+          variant,
+          config: { maxCostUsd: 2, maxInputTokens: 10_000_000, maxComments: 1, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        const verifierBudget = artifact.dispatch?.passes.find((pass) => pass.pass === "verify")?.extraOutputTokens
+        // Four ordinary candidates plus each high-band lens's bounded findings get certificate output capacity.
+        const candidates = 4 + REVIEW_LENSES.length * LENS_LIMITS.findings
+        expect(verifierBudget).toBe(
+          Math.ceil((candidates * (MAX_TRACE_QUOTES + MAX_FINDING_QUOTES) * MAX_QUOTE_CHARS) / 3.5),
+        )
+        expect(artifact.shrink).toEqual([])
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value).toMatchObject({ ...strict, ...keys })
+        expect(artifact.scope.prompts).toBe(promptsDigest({ ...strict, ...keys }))
+        expect(artifact.scope.policy).toBe(policyDigest(artifact.config.value))
+        expect(artifact.scope.policy).not.toBe(policyDigest({ ...artifact.config.value, lenses: "off" }))
+        expect(
+          artifact.outcome?.specialists.filter((row) => row.name === "lens").map((row) => [row.lens, row.status]),
+        ).toEqual(REVIEW_LENSES.map((lens) => [lens, "ok"]))
+        expect(
+          artifact.passes
+            .filter((row) => row.pass === "lens")
+            .map((row) => row.lens)
+            .sort(),
+        ).toEqual([...REVIEW_LENSES].sort())
+        const hits = yield* llm.hits
+        for (const lens of REVIEW_LENSES)
+          expect(hits.filter(answering(`You are Vector's ${lens} reviewer`))).toHaveLength(1)
+        const verify = hits.filter(VERIFY)
+        expect(verify).toHaveLength(1)
+        expect(lastUserText(verify[0]!.body)).toContain(candidate.failure.trigger)
+        expect(lastUserText(verify[0]!.body)).not.toContain(candidate.body)
+        expect(artifact.outcome?.strict?.dropped).toContainEqual({ reason: "verdict-unsure", count: 1 })
+        expect(artifact.outcome?.selection.dropped).toContainEqual({ reason: "rule-unverified", count: 1 })
+        expect(artifact.outcome?.report.findings.some((row) => row.title === headOnly.title)).toBe(false)
+        expect(artifact.outcome?.selection.inline).toEqual([])
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "replays base lens settings with accurate policy and prompt scope when the low band schedules no lens",
+    () =>
+      Effect.gen(function* () {
         const IGNORED =
           '"lenses": "high" is ignored without "depth": "auto": lens passes run only on the high band of an automatic depth.'
         for (const [settings, warnings] of [
-          [{ depth: "auto", lenses: "high" }, [DEPTH, LENSES]],
+          [{ depth: "auto", lenses: "high" }, []],
           [{ lenses: "high" }, [IGNORED]],
         ] as const) {
           const { directory, llm, base, head } = yield* checkout({
@@ -1305,17 +1838,209 @@ describe("ReviewEval.replay", () => {
             posting: ReviewEval.recordingPosting(),
             check: recordingCheck().check,
           })
-          for (const key of ["depth", "lenses"]) expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+          expect(artifact.config.value.depth).toBe("depth" in settings ? "auto" : undefined)
+          expect(artifact.config.value.lenses).toBe("high")
           expect(artifact.config.warnings).toEqual([...warnings])
           expect(artifact.scope.policy).toBe(policyDigest({ ...artifact.config.value, ...settings }))
-          expect(artifact.scope.prompts).toBe(promptsDigest())
-          expect(artifact.scope.prompts).not.toBe(promptsDigest({ depth: "auto", lenses: "high" }))
+          expect(artifact.scope.prompts).toBe(promptsDigest(settings))
           expect(artifact.outcome?.specialists.map((entry) => [entry.name, entry.status])).toEqual([["review", "ok"]])
           for (const body of yield* llm.inputs)
             for (const lens of ["concurrency", "resource", "access", "data-integrity", "security"])
               expect(JSON.stringify(body)).not.toContain(`You are Vector's ${lens} reviewer`)
           expect((artifact.outcome?.selection.inline ?? []).map((finding) => finding.title)).toEqual([listBug.title])
         }
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-23b (SF-11): the replay reads the base's review.json as the CLI does (mergeReviewConfig on "local"), so a case's
+  // review.json may raise privacy, and Review.run's admission holds it to the route rules. The fake provider is on this
+  // computer, the one route "zdr" allows without an attestation, and the eval attests nothing (owner Q7).
+  it.instance(
+    'replays a base review.json under privacy "zdr" on the server on this computer, with the zdr route in its scope',
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ privacy: "zdr" }) },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.config.value.privacy).toBe("zdr")
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+        expect(artifact.attempts.some((attempt) => attempt.stop === "privacy")).toBe(false)
+        expect(artifact.outcome?.partial).toBeUndefined()
+        // VS-23c (SF-12b): admission, the transport and the session runtime enforce the route rules, so the scope
+        // claims the zdr route.
+        expect(artifact.scope.route).toBe("zdr")
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-23d (SF-15): a replay reads no operator's user config. The CLI raises privacy and holdback from the user
+  // config's review block and attests routes from it, but a replay under a variant's name must run that variant's keys
+  // alone, so the same case replays the same pipeline on every operator's machine.
+  it.instance(
+    "replays a case as the frozen pipeline when the operator's user config raises privacy and holdback",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const settings = yield* Config.Service
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        }).pipe(
+          Effect.provideService(Config.Service, {
+            ...settings,
+            getGlobal: () =>
+              settings.getGlobal().pipe(
+                Effect.map((global) => ({
+                  ...global,
+                  review: { privacy: "zdr", holdback: "secrets", zdrAttested: ["acme"] },
+                })),
+              ),
+          }),
+        )
+        for (const key of ["privacy", "holdback", "zdrAttested"])
+          expect(Object.hasOwn(artifact.config.value, key)).toBe(false)
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.scope.route).toBeUndefined()
+        expect(artifact.scope.prompts).toBe(promptsDigest())
+        expect(artifact.outcome?.skipped.some((file) => file.reason === "held-back")).toBe(false)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-23c (SF-12b): the engine:privacy-zdr variant raises privacy over the base's review.json, as the registry hands
+  // it out. The eval attests nothing (owner Q7), so only the server on this computer is admitted, and the scope claims
+  // the zdr route that admission, the transport and the session runtime enforce.
+  it.instance(
+    "replays the engine:privacy-zdr variant on the server on this computer, with the zdr route in its scope",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const variant = { name: "engine:privacy-zdr", keys: { privacy: "zdr" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          variant,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.config.value.privacy).toBe("zdr")
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.scope.route).toBe("zdr")
+        expect(artifact.attempts.filter((attempt) => attempt.admitted).length).toBeGreaterThan(0)
+        expect(artifact.attempts.some((attempt) => attempt.stop === "privacy")).toBe(false)
+        expect(artifact.outcome?.partial).toBeUndefined()
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // VS-23b (I-1): ordinary keys have the same semantics on both surfaces. SF-16's opt-in applies only locally.
+  it.instance(
+    "replays ordinary GitHub parser settings and warnings while applying the local trivial-skip policy",
+    () =>
+      Effect.gen(function* () {
+        // Ordinary keys, including the opt-in trivial policy and one unknown key, read under the variant's verify policy.
+        const settings = JSON.stringify({
+          verify: "blocking",
+          maxSteps: 3,
+          minConfidence: 0.75,
+          trivial: "skip",
+          nonsense: 1,
+        })
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": settings },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2 },
+          variant: SHARED,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        const parsed = parseReviewConfig({
+          json: settings,
+          env: { REVIEW_VERIFY_POLICY: SHARED.keys.verifyPolicy },
+          trigger: artifact.trigger,
+        })
+        const applied: ReviewConfig = { ...parsed.config }
+        UNAPPLIED_REVIEW_KEYS.forEach((key) => delete applied[key])
+        const unknown = '.vector/review.json: unknown key "nonsense" is ignored.'
+        expect(parsed.warnings).toEqual([
+          unknown,
+          'GitHub reviews do not support the "trivial": "skip" policy yet. This change will be reviewed.',
+        ])
+        expect(Object.hasOwn(parsed.config, "trivial")).toBe(false)
+        expect(artifact.config.warnings).toEqual([unknown])
+        // All other settings match the GitHub parser, subject to the replay's cap, limits and variant.
+        expect(artifact.config.value).toEqual({
+          ...applied,
+          trivial: "skip",
+          ...SHARED.keys,
+          maxCostUsd: 2,
+          maxSteps: DEFAULT_REVIEW_CONFIG.maxSteps,
+          timeoutMinutes: DEFAULT_REVIEW_CONFIG.timeoutMinutes,
+        })
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "a base review.json's zdrAttested attests nothing: it is read only from the global config",
+    () =>
+      Effect.gen(function* () {
+        const { directory, llm, base, head } = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, ".vector/review.json": JSON.stringify({ zdrAttested: ["openrouter"] }) },
+          head: { "src/list.ts": LIST_HEAD },
+          price: PRICE,
+        })
+        yield* llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(directory, base, head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off" },
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(Object.hasOwn(artifact.config.value, "zdrAttested")).toBe(false)
+        expect(Object.hasOwn(artifact.config.value, "privacy")).toBe(false)
+        expect(artifact.scope.route).toBeUndefined()
+        expect(artifact.config.warnings).toEqual([
+          '.vector/review.json: "zdrAttested" is ignored: "zdrAttested" is read only from the global config.',
+        ])
       }),
     GIT,
     TIMEOUT,
@@ -1402,10 +2127,10 @@ describe("ReviewEval.replay", () => {
           head: { "src/list.ts": LIST_HEAD },
         })
         // Typed as an untyped caller's settings would be: ReplayInput's own config type leaves a variant's keys out.
-        const refused = (input: Pick<ReplayInput, "variant" | "triage"> & { config?: Partial<ReviewConfig> }) =>
+        const refused = (input: Pick<ReplayInput, "variant" | "triage"> & { config?: Partial<ReviewConfig>; model?: ReplayInput["model"] }) =>
           ReviewEval.replay({
             case: replayCase(directory, base, head),
-            model: MODEL,
+            model: input.model ?? MODEL,
             config: { maxCostUsd: 2, ...input.config },
             ...(input.variant ? { variant: input.variant } : {}),
             ...(input.triage ? { triage: input.triage } : {}),
@@ -1416,6 +2141,11 @@ describe("ReviewEval.replay", () => {
             Effect.map((error) => error.message),
           )
 
+        for (const key of ["inversion", "alternateModel"])
+          expect(yield* refused({ config: { [key]: "local" } })).toContain("cannot establish local assistant authorship")
+        const fromLocal = { ...MODEL, inversion: { note: "local", privacy: "zdr" as const } }
+        expect(yield* refused({ model: fromLocal })).toContain("cannot establish local assistant authorship")
+        expect(yield* refused({ triage: fromLocal })).toContain("cannot establish local assistant authorship")
         // @ts-expect-error A variant's key is never the eval's own setting, so a typed caller cannot put it in config.
         const typed: ReplayInput["config"] = { verifyPolicy: "shared" }
         expect(typed).toBeDefined()
@@ -1429,51 +2159,82 @@ describe("ReviewEval.replay", () => {
         expect(yield* refused({ config: { privacy: "zdr", zdrAttested: ["openrouter"] } })).toContain(
           "config sets privacy, zdrAttested, a route setting a replay cannot apply",
         )
+        expect(yield* refused({ config: { diagnostics: "offline" } })).toContain("only from the committed base")
         expect(yield* refused({ config: { privacy: "standard" } })).toContain("config sets privacy, a route setting")
-        // Nor VS-24's keys (VS-24c), which no runner applies before VS-24 wiring.
-        // @ts-expect-error VS-24's keys are parsed but applied by no runner, so a typed caller cannot put one in config.
+        // @ts-expect-error A trivial policy belongs to a named variant or the committed base, not the eval's overrides.
         const unwired: ReplayInput["config"] = { trivial: "skip" }
         expect(unwired).toBeDefined()
         expect(yield* refused({ config: { trivial: "skip", maxInputTokens: 5 } })).toContain(
-          "config sets trivial, maxInputTokens, which no runner applies yet (VS-24 wiring)",
+          "config sets trivial, a pipeline variant's setting",
         )
-        expect(yield* refused({ config: { trivial: "review" } })).toContain("config sets trivial, which no runner")
-        // Nor VS-25b's impact, named by its own wiring package, and grouped by package when both are set.
+        expect(yield* refused({ config: { trivial: "review" } })).toContain(
+          "config sets trivial, a pipeline variant's setting",
+        )
+        // An impact override must go through its named variant so the artifact identifies the graph pipeline.
         expect(yield* refused({ config: { impact: "graph" } })).toContain(
-          "config sets impact, which no runner applies yet (VS-25b wiring), so the artifact would record a setting the run did not have.",
+          "config sets impact, a pipeline variant's setting",
         )
-        expect(yield* refused({ config: { trivial: "skip", impact: "grep" } })).toContain(
-          "config sets trivial, impact, which no runner applies yet (VS-24 wiring for trivial; VS-25b wiring for impact)",
+        expect(yield* refused({ config: { maxInputTokens: 5, impact: "grep" } })).toContain(
+          "config sets impact, a pipeline variant's setting",
         )
-        // Nor VS-27's guardrail, which VS-27c applies.
+        // Strict selection belongs to a named replay or the committed base.
         expect(yield* refused({ config: { guardrail: "strict" } })).toContain(
-          "config sets guardrail, which no runner applies yet (VS-27c), so the artifact would record a setting the run did not have.",
+          "config sets guardrail, a pipeline variant's setting",
         )
-        // Nor VS-42's scopeGate, which VS-42 wiring applies, alone or with the guardrail.
+        // The introduced-by-change gate also belongs to its named variant or the base.
         expect(yield* refused({ config: { scopeGate: "introduced" } })).toContain(
-          "config sets scopeGate, which no runner applies yet (VS-42 wiring), so the artifact would record a setting the run did not have.",
+          "config sets scopeGate, a pipeline variant's setting",
         )
         expect(yield* refused({ config: { guardrail: "strict", scopeGate: "off" } })).toContain(
-          "config sets guardrail, scopeGate, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate)",
+          "config sets guardrail, scopeGate, a pipeline variant's setting",
         )
-        // Nor VS-44's verifyEvidence, which VS-44 wiring applies, alone or beside the guardrail and VS-42's key.
         expect(yield* refused({ config: { verifyEvidence: "certificate" } })).toContain(
-          "config sets verifyEvidence, which no runner applies yet (VS-44 wiring), so the artifact would record a setting the run did not have.",
+          "config sets verifyEvidence, a pipeline variant's setting",
         )
-        expect(
-          yield* refused({ config: { guardrail: "strict", scopeGate: "introduced", verifyEvidence: "off" } }),
-        ).toContain(
-          "config sets guardrail, scopeGate, verifyEvidence, which no runner applies yet (VS-27c for guardrail; VS-42 wiring for scopeGate; VS-44 wiring for verifyEvidence)",
+        for (const variant of [
+          { name: "engine:verify-cert", keys: { verifyEvidence: "certificate" } },
+          { name: "engine:wrong", keys: { guardrail: "strict", verifyEvidence: "certificate" } },
+          { name: "engine:verify-cert", keys: { guardrail: "strict", verifyEvidence: "off" } },
+          {
+            name: "engine:verify-cert",
+            keys: { guardrail: "strict", verifyEvidence: "certificate", scopeGate: "introduced" },
+          },
+        ] as const)
+          expect(yield* refused({ variant })).toContain("The engine:verify-cert variant sets only")
+        for (const variant of [
+          { name: "engine:not-depth", keys: { depth: "auto" } },
+          { name: "engine:depth-auto", keys: { depth: "fixed" } },
+          { name: "engine:depth-auto", keys: { depth: "auto", guardrail: "strict" } },
+          { name: "engine:depth-auto", keys: { depth: "auto" }, models: "triage-pair" },
+        ] as const)
+          expect(yield * refused({ variant })).toContain("The engine:depth-auto variant sets only")
+        const lenses = { depth: "auto", lenses: "high" } as const
+        for (const variant of [
+          { name: "engine:depth-auto", keys: lenses },
+          // A replay applies only own settings to its configuration.
+          {
+            name: "engine:lenses-high",
+            keys: Object.assign(Object.create({ depth: "auto" }), { lenses: "high", verifyPolicy: "shared" }),
+          },
+          { name: "engine:counterfeit", keys: lenses },
+          { name: "engine:lenses-high", keys: { depth: "auto" } },
+          { name: "engine:lenses-high", keys: { lenses: "high" } },
+          { name: "engine:lenses-high", keys: { depth: "fixed", lenses: "high" } },
+          { name: "engine:lenses-high", keys: { ...lenses, guardrail: "strict" } },
+          { name: "engine:lenses-high", keys: lenses, models: "triage-pair" },
+        ] as const)
+          expect(yield * refused({ variant })).toContain("The engine:lenses-high variant sets only")
+        expect(yield * refused({ config: { depth: "auto" } })).toContain(
+          "config sets depth, a pipeline variant's setting",
         )
-        // Nor VS-28's depth and lenses, which VS-28 wiring applies, alone or together.
-        expect(yield* refused({ config: { depth: "auto" } })).toContain(
-          "config sets depth, which no runner applies yet (VS-28 wiring), so the artifact would record a setting the run did not have.",
+        expect(yield * refused({ config: { lenses: "off" } })).toContain(
+          "config sets lenses, a pipeline variant's setting",
         )
-        expect(yield* refused({ config: { depth: "fixed", lenses: "high" } })).toContain(
-          "config sets depth, lenses, which no runner applies yet (VS-28 wiring)",
+        expect(yield * refused({ config: { depth: "fixed", lenses: "high" } })).toContain(
+          "config sets depth, lenses, a pipeline variant's setting",
         )
-        expect(yield* refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
-          "config sets guardrail, lenses, which no runner applies yet (VS-27c for guardrail; VS-28 wiring for lenses)",
+        expect(yield * refused({ config: { guardrail: "strict", lenses: "off" } })).toContain(
+          "config sets lenses, guardrail, a pipeline variant's setting",
         )
         // Nor VS-30's runtime (VS-30c), which is trusted-only and which the VS-30 executor applies: it gets the message
         // that names what applies it, not the route-setting one, and a route setting beside it keeps its own message.
@@ -1484,16 +2245,69 @@ describe("ReviewEval.replay", () => {
           "config sets runtime, which no runner applies yet (the VS-30 executor), so the artifact would record a setting the run did not have.",
         )
         expect(yield* refused({ config: { runtime: "off", depth: "auto" } })).toContain(
-          "config sets depth, runtime, which no runner applies yet (VS-28 wiring for depth; the VS-30 executor for runtime)",
+          "config sets depth, a pipeline variant's setting",
         )
         expect(yield* refused({ config: { zdrAttested: ["openrouter"], runtime: "ask" } })).toContain(
           "config sets zdrAttested, a route setting a replay cannot apply",
         )
-        // A pending variant's key is refused as a key this replay does not apply.
-        expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: { trivial: "skip" } } })).toContain(
-          "engine:trivial-skip sets trivial, which this replay does not apply",
+        // Nor VS-34's holdback, which a replay takes only from the case's own review.json or its variant: it gets its
+        // own message, alone or beside an unapplied key, and a route setting beside it keeps the route message. Since
+        // SF-14 the engine:holdback-secrets variant may raise it (the projection below), and never lower it.
+        // @ts-expect-error VS-34's holdback is a sourced key, so a typed caller cannot set it.
+        const holdback: ReplayInput["config"] = { holdback: "secrets" }
+        expect(holdback).toBeDefined()
+        const HOLD =
+          "config sets holdback, which a replay takes only from the case's own review.json or the engine:holdback-secrets variant."
+        expect(yield* refused({ config: { holdback: "secrets" } })).toContain(HOLD)
+        expect(yield* refused({ config: { holdback: "off", depth: "auto" } })).toContain("config sets depth, a pipeline variant's setting")
+        expect(yield* refused({ config: { holdback: "secrets", zdrAttested: ["openrouter"] } })).toContain(
+          "config sets zdrAttested, a route setting a replay cannot apply",
         )
-        // A pending name with nothing to set would be the frozen pipeline.
+        expect(yield* refused({ variant: { name: "engine:holdback-secrets", keys: { holdback: "off" } } })).toContain(
+          'engine:holdback-secrets sets holdback "off": a variant may raise holdback to "secrets", never lower it.',
+        )
+        for (const variant of [
+          { name: "engine:impact-graph", keys: { impact: "grep" as const } },
+          { name: "engine:shared-verify", keys: { impact: "graph" as const } },
+          { name: "engine:impact-graph", keys: { verifyPolicy: "shared" as const } },
+        ])
+          expect(yield* refused({ variant })).toContain('engine:impact-graph variant sets only impact: "graph"')
+        for (const variant of [
+          { name: "engine:scope-introduced", keys: { guardrail: "strict" as const } },
+          { name: "engine:scope-introduced", keys: { scopeGate: "introduced" as const } },
+          {
+            name: "engine:scope-introduced",
+            keys: { guardrail: "strict" as const, scopeGate: "introduced" as const },
+            models: "triage-pair" as const,
+          },
+          { name: "engine:guardrail-strict", keys: { guardrail: "strict" as const, scopeGate: "introduced" as const } },
+          { name: "engine:scope-introduced", keys: { guardrail: "strict" as const, scopeGate: "off" as const } },
+          {
+            name: "engine:scope-introduced",
+            keys: { guardrail: "strict" as const, scopeGate: "introduced" as const, verifyPolicy: "shared" as const },
+          },
+        ])
+          expect(yield* refused({ variant })).toContain(
+            'engine:scope-introduced variant sets only guardrail: "strict" and scopeGate: "introduced"',
+          )
+        for (const variant of [
+          { name: "engine:guardrail-strict", keys: { guardrail: "off" as const } },
+          { name: "engine:shared-verify", keys: { guardrail: "strict" as const } },
+          { name: "engine:guardrail-strict", keys: { verifyPolicy: "shared" as const } },
+          { name: "engine:guardrail-strict", keys: { guardrail: "strict" as const, verifyPolicy: "shared" as const } },
+        ])
+          expect(yield* refused({ variant })).toContain('engine:guardrail-strict variant sets only guardrail: "strict"')
+        // A variant raises privacy and never lowers it (VS-23c): its keys go over the base's raise-only privacy.
+        expect(yield* refused({ variant: { name: "engine:privacy-zdr", keys: { privacy: "standard" } } })).toContain(
+          'engine:privacy-zdr sets privacy "standard": a variant may raise privacy to "zdr", never lower it.',
+        )
+        for (const variant of [
+          { name: "engine:trivial-skip", keys: { trivial: "review" as const } },
+          { name: "engine:shared-verify", keys: { trivial: "skip" as const } },
+          { name: "engine:trivial-skip", keys: { verifyPolicy: "shared" as const } },
+        ])
+          expect(yield* refused({ variant })).toContain('engine:trivial-skip variant sets only trivial: "skip"')
+        // An empty variant would replay the frozen pipeline.
         expect(yield* refused({ variant: { name: "engine:trivial-skip", keys: {} } })).toContain(
           "sets no key and no model requirement, so it would run the frozen pipeline under its name",
         )
@@ -1557,7 +2371,7 @@ describe("ReviewEval.replay", () => {
         expect(pass?.ms).toBeGreaterThanOrEqual(150)
         // The outcome's pass of the same name, matched by name and not by position, counted the same cache reads.
         expect(artifact.outcome?.passes?.find((entry) => entry.name === pass?.pass)?.cacheRead).toBe(400)
-        // Typed for VS-25b and VS-24, and absent until they fill them.
+        // This replay opts into neither graph context nor the pre-dispatch budget gate.
         expect(artifact.tier1).toBeUndefined()
         expect(artifact.dispatch).toBeUndefined()
         expect(artifact.shrink).toBeUndefined()
@@ -1673,7 +2487,11 @@ describe("ReviewEval.replay", () => {
     () =>
       Effect.gen(function* () {
         const { directory, llm, base, head } = yield* checkout({
-          base: { "src/list.ts": LIST_BASE, "bun.lock": "{}\n" },
+          base: {
+            "src/list.ts": LIST_BASE,
+            "bun.lock": "{}\n",
+            ".vector/review.json": JSON.stringify({ impact: "graph" }),
+          },
           head: { "bun.lock": '{ "lockfileVersion": 1 }\n' },
         })
         const posting = ReviewEval.recordingPosting()
@@ -1686,6 +2504,8 @@ describe("ReviewEval.replay", () => {
           check: recordingCheck().check,
         })
 
+        expect(artifact.config.value.impact).toBe("graph")
+        expect(artifact.tier1).toBeUndefined()
         expect(artifact.outcome).toBeUndefined()
         expect(artifact.files).toEqual({ reviewed: [], skipped: [{ path: "bun.lock", reason: "lockfile" }] })
         expect(artifact.attempts).toEqual([])
@@ -2772,6 +3592,190 @@ describe("cost fidelity (VS-21e)", () => {
         expect(artifact.passes.length).toBeGreaterThan(0)
         for (const pass of artifact.passes) expect(pass).not.toHaveProperty("reasoning")
         expect(artifact.outcome?.cost?.reasoning).toBe(0)
+      }),
+    GIT,
+    TIMEOUT,
+  )
+})
+
+// VS-34 (SF-13b): a case whose base review.json raises holdback runs, and is recorded, under it. Tokens are planted in
+// the pull request's title and body, a commit subject (which history quotes), an unchanged-path related hit and a
+// changed file, beside two credential files; none reaches a wire body, the held files are recorded as skipped, and
+// the related-code locations list only what the prompt quoted. A first review has no human comments and the eval
+// gathers no requirements, so those blocks are run.test.ts's.
+describe("VS-34 holdback in the replay and projection (SF-13b)", () => {
+  const T = {
+    related: "ghp_" + "e1V2".repeat(9),
+    history: "glpat-" + "e1H2s3T4o5R6y7Z8w9X0",
+    title: "sk-" + "e1T2".repeat(8),
+    body: "AKIA" + "E7Q2W4E6R8T0Y1U3",
+    envrc: "npm_" + "e7N8".repeat(9),
+  }
+  const tally = "export function tallyItems(items: number[]) {\n  return items.length\n}\n"
+  const held = Effect.gen(function* () {
+    const checked = yield* checkout({
+      base: {
+        ".vector/review.json": JSON.stringify({ holdback: "secrets" }),
+        "src/list.ts": LIST_BASE,
+        "deploy/.netrc": "machine registry.example.test login old-ci\n",
+      },
+      head: {
+        "src/list.ts": LIST_BASE + tally,
+        "src/use.ts": `import { tallyItems } from "./list"\nexport const count = tallyItems([1, 2]) // ${T.related}\n`,
+        "deploy/.netrc": "machine registry.example.test login ci\n",
+        "config/prod/.envrc": `export TOKEN=${T.envrc} # tallyItems\n`,
+      },
+      price: PRICE,
+    })
+    // A second commit whose subject history quotes.
+    const head = yield* commit(checked.directory, `Tune tallyItems with ${T.history}`, {
+      "src/list.ts": LIST_BASE + tally + "// tuned\n",
+    })
+    const item = replayCase(checked.directory, checked.base, head, {
+      pr: { number: 7, title: `Fix ${T.title}`, body: `Uses ${T.body}`, author: "alice" },
+    })
+    return { ...checked, head, item }
+  })
+  const HELD = ["deploy/.netrc", "config/prod/.envrc"]
+  const leaks = (text: string) => [...Object.values(T), "login ci", ...HELD].filter((value) => text.includes(value))
+
+  it.instance(
+    "projects every pass without a planted token or a held file, and records the held files as skipped",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* held
+        const anchors = yield* ReviewSource.prDiff({
+          directory: checked.directory,
+          mergeBase: checked.base,
+          head: checked.head,
+        })
+        yield* checked.llm.respond(projectionReplies({ files: anchors }))
+        const record = yield* ReviewEval.project({
+          case: checked.item,
+          model: MODEL,
+          config: { maxCostUsd: DEFAULT_REVIEW_CONFIG.maxCostUsd },
+          server: checked.llm.url,
+          received: received(checked.llm),
+          egress: guard.attempts,
+        })
+        const bodies = record.passes.flatMap((pass) => pass.requests.map((request) => request.body))
+        expect(record.passes.map((pass) => pass.pass)).toContain("review")
+        expect(bodies.length).toBeGreaterThan(0)
+        expect(bodies.flatMap(leaks)).toEqual([])
+        expect(bodies.some((body) => body.includes("[redacted]"))).toBe(true)
+        expect(record.files.reviewed.toSorted()).toEqual(["src/list.ts", "src/use.ts"])
+        expect(
+          record.files.skipped
+            .filter((file) => file.reason === "held-back")
+            .map((file) => file.path)
+            .toSorted(),
+        ).toEqual(HELD.toSorted())
+        const config: ReviewConfig = { ...DEFAULT_REVIEW_CONFIG, holdback: "secrets" }
+        expect(record.scope.prompts).toBe(promptsDigest({ holdback: "secrets" }))
+        expect(record.scope.policy).toBe(policyDigest(config))
+        expect(record.scope.policy).not.toBe(policyDigest(DEFAULT_REVIEW_CONFIG))
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  it.instance(
+    "replays under the base's holdback, posts the held files as skipped, and counts them out of a partial banner",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* held
+        const file = path.join(checked.directory, "src/list.ts")
+        // Two reads hit the step cap, and the finalizer reports: a partial review that saw every file it was sent.
+        yield* checked.llm.pushMatch(REVIEW, reply().tool("read", { filePath: file }))
+        yield* checked.llm.pushMatch(REVIEW, reply().tool("read", { filePath: file }))
+        yield* checked.llm.pushMatch(FINALIZE, reply().tool("StructuredOutput", report()))
+        const posting = ReviewEval.recordingPosting()
+        const artifact = yield* ReviewEval.replay({
+          case: checked.item,
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off", maxSteps: 2 },
+          posting,
+          check: recordingCheck().check,
+        })
+        expect(artifact.config.value.holdback).toBe("secrets")
+        // The key covers the reviewer's tools since SF-14, so the replay records no warning for it.
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.outcome?.partial).toBe("steps")
+        expect(artifact.outcome?.unreviewed).toEqual([])
+        expect(artifact.outcome?.held?.map((entry) => entry.path).toSorted()).toEqual(HELD.toSorted())
+        expect(artifact.files.reviewed.toSorted()).toEqual(["src/list.ts", "src/use.ts"])
+        // The prompt quoted the import and the call site in src/use.ts, the call redacted, and not the held .envrc's hit,
+        // which the gathered context still holds.
+        expect(artifact.context.locations).toEqual(["src/use.ts:1", "src/use.ts:2"])
+        expect(artifact.context.related).toBe(1)
+        const hits = (yield* checked.llm.hits).map((hit) => hit.text)
+        expect(hits.flatMap(leaks)).toEqual([])
+        const summary = artifact.posted.flatMap((write) => (write.write === "createIssueComment" ? [write.body] : []))
+        expect(summary).toHaveLength(1)
+        for (const path of HELD) expect(summary[0]).toContain(`\`${path}\` held back`)
+        // In the diff's order; a trusted case's held note says only what left the prompt (SF-14).
+        expect(summary[0]).toContain(noteHeldBack(["config/prod/.envrc", "deploy/.netrc"], { promptOnly: true })!)
+        // Four files changed, two were held back, none is unreviewed: the banner counts two of four reviewed.
+        expect(summary[0]).toContain("Stopped at the 2-step limit after 2 of 4 files")
+      }),
+    GIT,
+    TIMEOUT,
+  )
+
+  // SF-14: the engine:holdback-secrets variant raises the key over a base review.json that does not set it, as the
+  // registry hands it out, and the reviewer's canned read and grep calls on the held files and on a file that is sent
+  // answer without a planted value: no later request body carries one, and the scope counts the tool half.
+  it.instance(
+    "engine:holdback-secrets holds the files back from the reviewer's read and grep calls too (SF-14)",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* checkout({
+          base: { "src/list.ts": LIST_BASE, "deploy/.netrc": "machine registry.example.test login old-ci\n" },
+          head: {
+            "src/list.ts": LIST_BASE + tally,
+            "src/use.ts": `import { tallyItems } from "./list"\nexport const count = tallyItems([1, 2]) // ${T.related}\n`,
+            "deploy/.netrc": "machine registry.example.test login ci\n",
+            "config/prod/.envrc": `export TOKEN=${T.envrc} # tallyItems\n`,
+          },
+          price: PRICE,
+        })
+        const at = (file: string) => path.join(checked.directory, file)
+        for (const [tool, args] of [
+          ["read", { filePath: at("config/prod/.envrc") }],
+          ["read", { filePath: at("deploy/.netrc") }],
+          ["grep", { pattern: "TOKEN|login|tallyItems" }],
+          ["grep", { pattern: T.related.slice(0, 8) }],
+          ["read", { filePath: at("src/use.ts") }],
+        ] as const)
+          yield* checked.llm.pushMatch(REVIEW, reply().tool(tool, args))
+        yield* checked.llm.pushMatch(REVIEW, reply().tool("StructuredOutput", report()))
+        const variant = { name: "engine:holdback-secrets", keys: { holdback: "secrets" as const } }
+        const artifact = yield* ReviewEval.replay({
+          case: replayCase(checked.directory, checked.base, checked.head),
+          model: MODEL,
+          config: { maxCostUsd: 2, verify: "off", security: "off", maxSteps: 8 },
+          variant,
+          posting: ReviewEval.recordingPosting(),
+          check: recordingCheck().check,
+        })
+        expect(artifact.variant).toEqual(variant)
+        expect(artifact.config.value.holdback).toBe("secrets")
+        expect(artifact.config.warnings).toEqual([])
+        expect(artifact.scope.prompts).toBe(promptsDigest({ holdback: "secrets" }))
+        expect(artifact.outcome?.specialists).toEqual([{ name: "review", status: "ok", steps: 6 }])
+        expect(artifact.outcome?.held?.map((entry) => entry.path)).toEqual(["config/prod/.envrc", "deploy/.netrc"])
+        const bodies = (yield* modelRequests(checked.llm)).map((body) => JSON.stringify(body))
+        expect(bodies).toHaveLength(6)
+        // The model's own calls name the held paths; no value of theirs, or of the sent file, comes back.
+        expect(
+          bodies.flatMap((body) =>
+            [T.envrc, T.related, "login ci", "login old-ci"].filter((value) => body.includes(value)),
+          ),
+        ).toEqual([])
+        const last = bodies.at(-1)!
+        expect(last).toContain("No files found")
+        expect(last).toContain("export const count = tallyItems([1, 2]) // [redacted]")
+        expect(last).toContain('import { tallyItems } from \\"./list\\"')
       }),
     GIT,
     TIMEOUT,
