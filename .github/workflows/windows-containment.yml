@@ -4,11 +4,14 @@ on:
   pull_request:
     paths:
       - .github/workflows/windows-containment.yml
+      - .github/workflows/windows-holder-bundle.yml
       - .github/actions/install-ripgrep-windows/**
+      - packages/engine/native/windows-holder/**
       - packages/engine/src/tool/shell/windows-*.ts
       - packages/engine/test/tool/shell-windows-process.test.ts
       - packages/engine/test/tool/windows-holder-diagnostic.test.ts
       - packages/engine/script/diagnose-windows-holder.ts
+      - packages/engine/script/*windows-holder*
   workflow_dispatch:
 
 permissions:
@@ -22,6 +25,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  windows-holder-build:
+    uses: ./.github/workflows/windows-holder-bundle.yml
+    with:
+      source_revision: ${{ github.sha }}
+      targets: x64,arm64
+
   cold-start:
     runs-on: windows-latest
     timeout-minutes: 10
@@ -40,10 +49,24 @@ jobs:
         run: bun script/diagnose-windows-holder.ts
 
   native:
-    runs-on: windows-latest
+    name: ${{ matrix.arch == 'x64' && 'native' || 'native (ARM64)' }}
+    needs: windows-holder-build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
     timeout-minutes: 20
     env:
       VECTOR_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
+      VECTOR_WINDOWS_HOLDER_ARCH: ${{ matrix.arch }}
+      VECTOR_WINDOWS_HOLDER_BUILD_RUN: ${{ needs.windows-holder-build.outputs.run }}
+      VECTOR_WINDOWS_HOLDER_REVISION: ${{ needs.windows-holder-build.outputs.revision }}
+      VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256: ${{ needs.windows-holder-build.outputs.manifest-digest }}
     defaults:
       run:
         shell: bash
@@ -54,8 +77,16 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
+          architecture: ${{ matrix.arch }}
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+      - name: Download the exact holder built for this run
+        if: needs.windows-holder-build.outputs.artifact-id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.windows-holder-build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/vector-windows-holder-bundle
+          merge-multiple: true
       # Match the main engine jobs: the strict test network guard cannot download ripgrep on demand.
       - name: Install native ripgrep
         timeout-minutes: 10
@@ -63,12 +94,19 @@ jobs:
       - name: Run real Windows process ownership and termination cases
         timeout-minutes: 10
         working-directory: packages/engine
-        run: GITHUB_ACTIONS=false bun test test/tool/shell-windows-process.test.ts --timeout 60000
+        run: GITHUB_ACTIONS=false bun test --preload=./script/windows-holder-ci.ts test/tool/shell-windows-process.test.ts --timeout 60000
       - name: Run Windows durable background command integration
         timeout-minutes: 5
         working-directory: packages/engine
-        run: GITHUB_ACTIONS=false bun test test/task/shells.test.ts --timeout 60000
+        run: GITHUB_ACTIONS=false bun test --preload=./script/windows-holder-ci.ts test/task/shells.test.ts --timeout 60000
       - name: Run Windows task management command integration
         timeout-minutes: 5
         working-directory: packages/engine
-        run: GITHUB_ACTIONS=false bun test test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
+        run: GITHUB_ACTIONS=false bun test --preload=./script/windows-holder-ci.ts test/tool/task-manage.test.ts --timeout 60000 -t 'background commands|running commands'
+      - name: Install the pinned Electron runtime for the packaged holder check
+        timeout-minutes: 5
+        run: node node_modules/electron/install.js
+      - name: Verify the holder in a packaged Electron utility
+        timeout-minutes: 4
+        working-directory: packages/desktop
+        run: bun --no-env-file scripts/verify-windows-holder-electron.ts

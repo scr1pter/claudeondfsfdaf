@@ -19,5 +19,7 @@
   // The Worker's own kill flag: key "kill" set to "1" turns the relay off (read on every connection and alarm).
   // Replace the id with the REMOTE_FLAGS namespace the owner creates (owner step 11); this placeholder matches no
   // namespace, so a deploy that still carries it fails instead of writing anywhere.
-  "kv_namespaces": [{ "binding": "REMOTE_FLAGS", "id": "00000000000000000000000000000000" }]
+  "kv_namespaces": [{ "binding": "REMOTE_FLAGS", "id": "00000000000000000000000000000000" }],
+  // Keep platform request logs and traces off on every deploy. Enabling them requires an explicit owner config change.
+  "observability": { "enabled": false }
 }

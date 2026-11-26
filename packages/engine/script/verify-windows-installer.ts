@@ -92,7 +92,7 @@ function processCleanup(stop: () => void, completion: Promise<unknown>) {
   }
 }
 const ps = (command: string) => run([powershell, "-NoProfile", "-NonInteractive", "-Command", command])
-async function pack(version: string) {
+async function pack(version: string, companion?: { name: string; bytes: Uint8Array }) {
   const source = path.join(root, "Fixture.cs")
   await writeFile(
     source,
@@ -102,9 +102,14 @@ async function pack(version: string) {
   assert.equal(built.code, 0, built.stderr + built.stdout)
   for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"])
     await writeFile(path.join(files, name), name)
+  const entries = ["vector.exe", "LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"]
+  if (companion) {
+    await writeFile(path.join(files, companion.name), companion.bytes)
+    entries.push(companion.name)
+  }
   const zip = path.join(root, "archive.zip")
   const zipped = await ps(
-    `Compress-Archive -LiteralPath ${["vector.exe", "LICENSE", "THIRD_PARTY_NOTICES.md", "DEPENDENCY_NOTICES.md"].map((name) => quote(path.join(files, name))).join(",")} -DestinationPath ${quote(zip)} -Force`,
+    `Compress-Archive -LiteralPath ${entries.map((name) => quote(path.join(files, name))).join(",")} -DestinationPath ${quote(zip)} -Force`,
   )
   assert.equal(zipped.code, 0, zipped.stderr)
   state.archive = await Bun.file(zip).bytes()
@@ -289,7 +294,9 @@ try {
   const executable = path.join(installDir, "vector.exe")
   const first = await Bun.file(executable).bytes()
   const receipt = path.join(installDir, ".vector-vector.exe/receipt.tsv")
-  assert.equal((await Bun.file(receipt).text()).split("\t")[4], "beta")
+  const firstReceipt = await Bun.file(receipt).text()
+  assert.equal(firstReceipt.split("\t")[1], "1")
+  assert.equal(firstReceipt.split("\t")[4], "beta")
   evidence.nodeFreeInstall = true
   evidence.betaChannel = true
   await checkpoint("checksum rejection")
@@ -303,8 +310,36 @@ try {
   assert.deepEqual(await Bun.file(executable).bytes(), first)
   state.redirect = false
   evidence.checksumAndRedirectPreserveOld = true
+  const arch = process.arch
+  assert(arch === "x64" || arch === "arm64")
+  // The v1 synthetic executable provides known, checked bytes. The companion itself is never run here.
+  const digest = createHash("sha256").update(first).digest("hex")
+  const companionName = `vector-holder-${arch}-${digest}.exe`
+  const installedCompanion = path.join(installDir, companionName)
+  await checkpoint("companion checksum rejection with a valid ZIP checksum")
+  const corruptedCompanion = Buffer.from(first)
+  corruptedCompanion[0] = corruptedCompanion[0]! ^ 0xff
+  await pack("1.99.43", { name: companionName, bytes: corruptedCompanion })
+  const corruptHolder = await install(["-Version", state.version])
+  assert.notEqual(corruptHolder.code, 0)
+  assert.match(corruptHolder.stderr, /Windows holder checksum or size did not match/)
+  assert.equal(await Bun.file(installedCompanion).exists(), false)
+  assert.deepEqual(await Bun.file(executable).bytes(), first)
+  assert.equal(await Bun.file(receipt).text(), firstReceipt)
+  evidence.companionChecksumRejection = true
   await checkpoint("update fixture archive")
-  await pack("1.99.43")
+  await pack("1.99.43", { name: companionName, bytes: first })
+  await checkpoint("companion destination collision refusal")
+  const unrelated = "unrelated file at the fixture companion path"
+  await writeFile(installedCompanion, unrelated, { flag: "wx" })
+  const collision = await install(["-Version", state.version])
+  assert.notEqual(collision.code, 0)
+  assert.match(collision.stderr, /Windows holder checksum or size did not match/)
+  assert.equal(await Bun.file(installedCompanion).text(), unrelated)
+  assert.deepEqual(await Bun.file(executable).bytes(), first)
+  assert.equal(await Bun.file(receipt).text(), firstReceipt)
+  await rm(installedCompanion)
+  evidence.companionCollisionPreservesOld = true
   await checkpoint("unacknowledged update preparation")
   const abandoned = Bun.spawn([executable, "--hold"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
   await using abandonedCleanup = processCleanup(() => abandoned.kill(), abandoned.exited)
@@ -334,6 +369,8 @@ try {
   }
   assert.notEqual((await unacknowledged).code, 0)
   assert.deepEqual(await Bun.file(executable).bytes(), first)
+  assert.equal(await Bun.file(receipt).text(), firstReceipt)
+  assert.equal(await Bun.file(installedCompanion).exists(), false)
   evidence.unacknowledgedExitPreservesOld = true
   await checkpoint("running executable update preparation")
   const holder = Bun.spawn([executable, "--hold"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
@@ -365,6 +402,7 @@ try {
       first,
       "A running executable must remain unchanged until it exits",
     )
+    assert.equal(await Bun.file(installedCompanion).exists(), false)
   } finally {
     await holderCleanup[Symbol.asyncDispose]()
   }
@@ -372,9 +410,22 @@ try {
   const replaced = await pending
   assert.equal(replaced.code, 0, replaced.stderr)
   await waitStatus(status, "complete", pending)
-  assert.equal((await Bun.file(receipt).text()).split("\t")[2], "1.99.43")
   evidence.runningExecutableReplacement = true
   const current = await Bun.file(executable).bytes()
+  assert.deepEqual(await Bun.file(installedCompanion).bytes(), first)
+  const expectedReceipt = [
+    "vector-standalone",
+    "2",
+    state.version,
+    arch === "arm64" ? "windows-arm64" : "windows-x64-baseline",
+    "beta",
+    "vector.exe",
+    createHash("sha256").update(current).digest("hex"),
+    createHash("sha256").update(state.archive).digest("hex"),
+    companionName,
+  ].join("\t")
+  assert.equal(await Bun.file(receipt).text(), expectedReceipt + "\n")
+  evidence.companionUpgradeAndReceipt = true
   await checkpoint("stalled body five-minute deadline")
   state.stall = true
   const started = Date.now()
@@ -445,6 +496,8 @@ try {
   assert.equal(await Bun.file(executable).exists(), false)
   assert.equal(await Bun.file(receipt).exists(), false)
   assert.equal(await Bun.file(path.join(metadata, "keep-user-file")).text(), "preserve")
+  assert.deepEqual(await Bun.file(installedCompanion).bytes(), first)
+  evidence.companionPreservedOnUninstall = true
   evidence.runningExecutableUninstall = true
   await checkpoint("acceptance checks complete")
 } finally {

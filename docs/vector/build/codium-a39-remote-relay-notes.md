@@ -2,6 +2,36 @@
 
 A39 builds on A37 (the internal HMAC). It adds `packages/relay`, a Cloudflare Worker with one Durable Object per account. No Cloudflare account, API or deployment was touched. The tests drive the Worker and the object with an in-memory runtime whose SQL runs on a real SQLite engine. The CI lane runs the same code on Cloudflare's local runtime. Readings of the contract are in `codium-deviations.md` under "A39 Remote relay Worker (3 Nov 2026)".
 
+## Bounded internal request bodies (22 Nov 2026)
+
+This local `relay-body-limit` candidate addresses only the whole-body read in §9 `R46-relay-patterns`, carried forward
+by `codium-p7-repairs.md` under R46b “For the lead.” Read on main `c515de62465db817ff309f4237023f9704fe7983`: the
+relay still called `request.arrayBuffer()` before its existing 16 KiB size check. The unordered `flags` writes and
+missing observability setting also remain on that main; this change does not close those two follow-ups.
+
+The relay-local Web API byte reader now keeps one fixed buffer of the existing cap plus one byte. It copies only
+the fitting prefix of each incoming chunk, stops when that buffer fills and initiates cancellation without awaiting
+the cancellation promise. An oversized chunk is not accumulated, and a stalled cancellation does not delay the
+existing 413 `INTERNAL_TOO_LARGE` response. Read failures return 400 `INTERNAL_BAD_REQUEST`, matching the Ops Worker
+R46-16 precedent. The reader releases its lock on every exit.
+
+Method, action, configured-secret and declared-length checks keep their existing order. Exactly 16 KiB is still
+accepted when validly signed. The original raw bytes still go to the same HMAC and JSON parser; signature format,
+nonce handling, object routing, caps, WebSocket traffic policy and all activation/settings values are unchanged.
+No relay/customer/provider request or deployment was made.
+
+Verification used only the existing fake runtime and SQLite fixtures, with Bun serialized through the canonical
+wrapper, one test file at a time from package directories with `--no-env-file --timeout 30000`:
+
+- Red on unchanged source: a 1 MiB stream with no length consumed 1,024 chunks and was never cancelled; the regression
+  expected 17 pulls and one cancellation.
+- Green `packages/relay/test/internal.test.ts`: 30 pass, 276 assertions. New cases cover absent/understated length,
+  a single oversized chunk whose cancellation never settles until after the response, signed exact-limit UTF-8,
+  failed reads, early guards that never pull the body, and an oversized request leaving its nonce available.
+- `packages/relay/test/source.test.ts`: 7 pass, 87 assertions, including Web API-only code and no logging.
+- `test/remote-relay-contract.test.ts`: 9 pass, 28 assertions, including the API/relay signature contract.
+- Relay `bun --no-env-file typecheck`: pass. No dependency or lockfile changes.
+
 ## What changed
 
 | Area          | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
