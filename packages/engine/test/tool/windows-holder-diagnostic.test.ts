@@ -5,17 +5,51 @@ import { WindowsHolder } from "../../src/tool/shell/windows-holder"
 
 const workflow = Bun.YAML.parse(
   readFileSync(new URL("../../../../.github/workflows/windows-containment.yml", import.meta.url), "utf8"),
-) as { jobs: Record<string, { "runs-on": string; steps: { run?: string }[] }> }
+) as {
+  jobs: Record<
+    string,
+    {
+      "runs-on"?: string
+      needs?: string
+      env?: Record<string, string>
+      with?: Record<string, unknown>
+      steps?: { run?: string; with?: Record<string, unknown> }[]
+      strategy?: { "fail-fast"?: boolean; matrix?: { include?: { arch: string; runner: string }[] } }
+    }
+  >
+}
 
-test("the first containment probe has its own Windows host and never warms the native integration runner", () => {
-  const jobs = Object.values(workflow.jobs)
-  const diagnostic = jobs.find((job) => job.steps.some((step) => step.run?.includes("diagnose-windows-holder")))
-  const integration = jobs.find((job) => job.steps.some((step) => step.run?.includes("shell-windows-process.test")))
-  expect(diagnostic).toBeDefined()
-  expect(integration).toBeDefined()
-  expect(diagnostic).not.toBe(integration)
-  expect(diagnostic!["runs-on"]).toBe("windows-latest")
-  expect(integration!["runs-on"]).toBe("windows-latest")
+test("the first containment probe stays independent of both native integration runners", () => {
+  const { "cold-start": cold, native } = workflow.jobs
+  expect(cold["runs-on"]).toBe("windows-latest")
+  expect(cold.needs).toBeUndefined()
+  expect(cold.steps?.some((step) => step.run?.includes("diagnose-windows-holder"))).toBe(true)
+  expect(native.needs).toBe("windows-holder-build")
+})
+
+test("both native architectures use the same verified holder build", () => {
+  const { "windows-holder-build": producer, native } = workflow.jobs
+  expect(producer.with?.targets).toBe("x64,arm64")
+  expect(native["runs-on"]).toBe("${{ matrix.runner }}")
+  expect(native.strategy).toEqual({
+    "fail-fast": false,
+    matrix: {
+      include: [
+        { arch: "x64", runner: "windows-latest" },
+        { arch: "arm64", runner: "windows-11-arm" },
+      ],
+    },
+  })
+  expect(native.env).toMatchObject({
+    VECTOR_WINDOWS_HOLDER_ARCH: "${{ matrix.arch }}",
+    VECTOR_WINDOWS_HOLDER_MANIFEST_SHA256: "${{ needs.windows-holder-build.outputs.manifest-digest }}",
+  })
+  expect(
+    native.steps?.some((step) => step.with?.["artifact-ids"] === "${{ needs.windows-holder-build.outputs.artifact-id }}"),
+  ).toBe(true)
+  expect(native.steps?.find((step) => step.run?.includes("shell-windows-process.test"))?.run).toContain(
+    "--preload=./script/windows-holder-ci.ts",
+  )
 })
 
 test("the cold probe adds only fixed phase writes to the production holder and fits the command line", () => {

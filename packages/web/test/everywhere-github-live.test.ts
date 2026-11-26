@@ -1,15 +1,15 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
 import { branchFor } from "../../core/src/everywhere/publish"
 import { createHandoffBinding, createHandoffVerifier } from "../../../api/_lib/everywhere/adapters/cloud-agents"
 import { ENV_NAMES, readConfig } from "../../../api/_lib/everywhere/config"
-import { createJobEvents } from "../../../api/_lib/everywhere/events"
+import { createJobEvents, postPending } from "../../../api/_lib/everywhere/events"
 import {
   createGithubAdapter,
   createGithubHandoff,
   type GithubHandoffBinding,
 } from "../../../api/_lib/everywhere/github/adapter"
 import type { GithubStatusPort } from "../../../api/_lib/everywhere/github/status"
-import { claimJob, readJob, reportJob, settleJob } from "../../../api/_lib/everywhere/jobs"
+import { claimJob, openSummary, readJob, reportJob, settleJob } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
 import { offerPublicKey, offerVerifyKey, verifyOffer } from "../../../api/_lib/everywhere/offer"
 import type { Ports } from "../../../api/_lib/everywhere/ports"
@@ -469,7 +469,7 @@ describe("the binder's computer over the fake relay (EV-09)", () => {
   })
 })
 
-/** R-C5's App status port, capturing what would be posted; without an App there is none (status.ts posts nothing). */
+/** R-C5's App status port, capturing what would be posted. */
 function capturingStatus() {
   const posted: string[] = []
   const port: GithubStatusPort = {
@@ -529,6 +529,61 @@ describe("the result a computer with no GitHub login or pull request settles", (
     }
     expect(text).not.toContain(branch)
     expect(text).not.toContain(summary)
+  })
+
+  test("an owned terminal job keeps its summary and outbox entry until the status port delivers", async () => {
+    const w = world()
+    const claimed = claimingComputer(w)
+    const answer = await w.call(await token({ repository_visibility: "private" }))
+    expect(answer.body).toMatchObject({ handled: true })
+    const jid = answer.body.jid as string
+    const summary = "Reviewed the retry count in the login handler."
+    const settled = await settleJob(w.f.context(), {
+      account: w.f.account,
+      device: w.f.computer,
+      settle: { jid, lease: claimed[0]!.lease, outcome: "no-changes", summary },
+    })
+    if (!settled.ok) throw new Error("The fixture did not settle")
+    const score = () => w.f.store(["ZSCORE", everywhereKeys.jobsPosts(), jid])
+    const retained = async () => {
+      const job = await readJob(w.f.store, jid)
+      expect(job).toBeDefined()
+      return openSummary(w.f.context(), job!)
+    }
+    const missing = { github: createGithubAdapter({ context: w.f.context }) }
+    expect(await score()).not.toBeNull()
+    expect(await retained()).toBe(summary)
+    const failure = await createJobEvents(w.f.context, missing).settled!(settled.job).catch((error: unknown) => error)
+    expect([await score(), await retained()]).toEqual([String(w.f.fake.clock.now + 60_000), summary])
+    expect(failure).toMatchObject({
+      statusCode: 503,
+      code: "GITHUB_STATUS_UNAVAILABLE",
+      message: "GitHub status delivery is unavailable.",
+    })
+    w.f.fake.clock.advance(60_000)
+    const log = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      expect(await postPending(w.f.context, missing)).toBe(0)
+      expect(log.mock.calls).toEqual([
+        ["Vector everywhere: a queued reply failed", { jid, code: "post-failed" }],
+      ])
+    } finally {
+      log.mockRestore()
+    }
+    expect(await score()).toBe(String(w.f.fake.clock.now + 60_000))
+    expect(await retained()).toBe(summary)
+
+    w.f.fake.clock.advance(60_000)
+    const status = capturingStatus()
+    const available = { github: createGithubAdapter({ context: w.f.context, status: status.port }) }
+    expect(await postPending(w.f.context, available)).toBe(1)
+    expect(status.posted).toHaveLength(1)
+    expect(status.posted[0]).toContain(summary)
+    expect(status.posted[0]).toContain(`<!-- vector:job ${jid} -->`)
+    expect(await score()).toBeNull()
+    expect(await retained()).toBeUndefined()
+    expect(await postPending(w.f.context, available)).toBe(0)
+    expect(status.posted).toHaveLength(1)
   })
 })
 
