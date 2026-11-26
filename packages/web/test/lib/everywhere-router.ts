@@ -46,7 +46,7 @@ export function routerFixture(options: { readonly store?: Store } = {}) {
     presence: async () => ({ online: true, computers: 1 }),
     offer: async () => { calls.push({ kind: "offer" }); return "sent" },
     binding: async () => undefined, perk: async () => true, switch: async () => "on",
-    repository: async (fullName) => ({ id: 101, fullName, shared: false }),
+    repository: async ({ fullName }) => ({ id: 101, fullName, shared: false }),
   }
   const routing: Routing = {
     context, adapter, ports, now: () => fake.clock.now,

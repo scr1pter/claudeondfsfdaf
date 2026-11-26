@@ -3,6 +3,7 @@ import { claimJob, declineJob, readJob, recordSeen } from "../../../api/_lib/eve
 import { safePorts } from "../../../api/_lib/everywhere/ports"
 import { routeJob } from "../../../api/_lib/everywhere/router"
 import { TIMING } from "../../../packages/schema/src/everywhere"
+import { queueDeadline } from "../../../packages/schema/src/everywhere-policy"
 import { installFetchGuard } from "./lib/everywhere-fetch-guard"
 import { routerFixture } from "./lib/everywhere-router"
 
@@ -27,6 +28,43 @@ describe("Everywhere real routing transitions", () => {
     expect(f.fake.clock.now - start).toBe(TIMING.offerWindowMs)
     expect((await readJob(f.store, job.jid))?.state).toBe("waiting")
     expect(f.calls.filter((call) => call.kind === "offer")).toHaveLength(1)
+  })
+
+  test("a configured relay outage immediately queues a job for a recently seen computer", async () => {
+    const f = routerFixture()
+    await recordSeen(f.context(), f.account, f.computer)
+    const job = await f.create()
+    f.ports.presence = async () => ({ online: false, computers: 0, reason: "unreachable" })
+    const start = f.fake.clock.now
+    const until = queueDeadline("slack", start)
+    expect(await routeJob(f.routing, job, await f.facts())).toEqual({ action: "queue", until })
+    expect((await readJob(f.store, job.jid))?.state).toBe("waiting")
+    expect((await readJob(f.store, job.jid))?.queueUntil).toBe(until)
+    expect(f.fake.clock.now).toBe(start)
+    expect(f.calls).toEqual([{ kind: "progress", value: "waiting" }])
+  })
+
+  test("relay failure never supplies missing Remote configuration, plan or recent presence", async () => {
+    const f = routerFixture()
+    f.ports.presence = async () => ({ online: false, computers: 0, reason: "unreachable" })
+    const job = await f.create()
+    expect(await routeJob(f.routing, job, await f.facts())).toMatchObject({
+      action: "refuse", why: { computer: "not-seen" },
+    })
+
+    await recordSeen(f.context(), f.account, f.computer)
+    const otherJob = await f.create()
+    f.ports.perk = async (_, perk) => perk === "everywhere"
+    expect(await routeJob(f.routing, otherJob, await f.facts())).toMatchObject({
+      action: "refuse", why: { computer: "no-remote" },
+    })
+
+    f.ports.perk = async () => true
+    f.ports.presence = async () => ({ online: false, computers: 0, reason: "not-configured" })
+    expect((await f.facts()).laptop.configured).toBe(false)
+    f.ports.presence = async () => { throw new Error("Could not establish Remote configuration") }
+    expect((await f.facts()).laptop.configured).toBe(false)
+    expect(f.calls.some((call) => call.kind === "offer")).toBe(false)
   })
 
   test("a claim wins and is never dispatched or queued", async () => {

@@ -87,6 +87,7 @@ function expression(
       },
       format: (template: string, ...args: unknown[]) =>
         template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)])),
+      fromJSON: (value: string) => JSON.parse(value),
     },
     { timeout: 100 },
   ) as unknown
@@ -137,7 +138,15 @@ const booleanSelectors = [
   "production_benchmark",
   "offline_footprint",
 ] as const
-const ordinaryJobs = ["computer-helper", "unit", "desktop-engine-node", "engine-linux", "engine-windows", "e2e"]
+const ordinaryJobs = [
+  "computer-helper",
+  "unit",
+  "desktop-engine-node",
+  "engine-linux",
+  "windows-holder-build",
+  "engine-windows",
+  "e2e",
+]
 const targetJobs = {
   all: "computer-helper",
   linux: "computer-helper",
@@ -382,15 +391,20 @@ test("Stop repetitions are opt-in, bounded, and cannot hide or cancel ordinary W
   expect(inputDefaults(helper).stop_repeat).toBe(1)
   const helperDispatch = record(record(record(helper.document.on).workflow_dispatch).inputs)
   expect(helperDispatch.stop_repeat).toMatchObject({ type: "number", default: 1 })
+  const helperCall = record(record(record(helper.document.on).workflow_call).inputs)
+  expect(helperCall.stop_repeat).toMatchObject({ type: "number", default: 1 })
   const focused = { computer_helper: true, computer_helper_target: "windows" }
-  for (const stop_repeat of [1, 2, 50]) expect(validateDispatch({ ...focused, stop_repeat }).status).toBe(0)
-  for (const stop_repeat of [0, -1, 1.5, 51, "2x"])
+  for (const stop_repeat of [1, 2, 50, "1", "2", "50"])
+    expect(validateDispatch({ ...focused, stop_repeat }).status).toBe(0)
+  for (const stop_repeat of [0, -1, 1.5, 51, "0", "-1", "1.5", "51", "2x"])
     expect(validateDispatch({ ...focused, stop_repeat }).stdout).toContain("integer")
   for (const inputs of [{}, { ...focused, computer_helper_target: "all" }, { hands_ui: true }])
     expect(validateDispatch({ ...inputs, stop_repeat: 50 }).stdout).toContain("Windows computer-helper")
 
   const call = record(record(record(main.document.jobs)["computer-helper"]).with)
-  expect(mainExpression(String(call.stop_repeat), { ...focused, stop_repeat: 50 })).toBe(50)
+  expect(mainExpression(String(call.stop_repeat), focused)).toBe(1)
+  for (const stop_repeat of ["50", "2", "1", 1, 2, 50])
+    expect(mainExpression(String(call.stop_repeat), { ...focused, stop_repeat })).toBe(Number(stop_repeat))
   for (const event of ["push", "pull_request"])
     expect(mainExpression(String(call.stop_repeat), { ...focused, stop_repeat: 50 }, event)).toBe(1)
   const current = steps(job("windows-build"))
