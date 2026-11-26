@@ -14,6 +14,7 @@ import {
   estimateStep,
   handleModelPlanEstimate,
 } from "../../../api/_lib/model-plan-estimate"
+import { COMPARE_AND_SET_WITH_EXPIRY } from "../../../api/_lib/persistent-store"
 import {
   codiumFakes,
   codiumTestEnvironment,
@@ -69,6 +70,11 @@ async function plus(fixtureName = "active-paid", prepare: (fixture: StripeFixtur
   const now = fixture.now * 1000
   setSystemTime(new Date(now))
   const fakes = codiumFakes({ now })
+  fakes.store.scripts.set(COMPARE_AND_SET_WITH_EXPIRY, ([key], [expected, value, ttl]) => {
+    if ((fakes.store.get(key!) ?? "") !== expected) return 0
+    fakes.store.command(["SET", key, value, "PX", ttl])
+    return 1
+  })
   fakes.stripe.load(fixture.objects)
   const id = fixture.accountId
   fakes.store.set(codiumKey("account", id), JSON.stringify(fixture.account))
@@ -237,8 +243,8 @@ describe("the route", () => {
     })
     expect((await estimate(question, token)).body).toEqual({ share: "over 40%", todayShare: "more than your month" })
     expect(estimateKeys(fakes)).toEqual([key!])
-    // A parallel first answer worked out before the refund lands between this request's read and its write: it is
-    // not served to a caller that read the smaller pool, and the next request replaces it.
+    // A first answer prepared before the refund can win NX, but the request that saw the smaller pool replaces it
+    // before replying.
     fakes.store.remove(key!)
     current.fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const answer = await fakes.fetcher(input, init)
@@ -249,9 +255,11 @@ describe("the route", () => {
     }) as typeof fetch
     expect((await estimate(question, token)).body).toEqual({ share: "over 40%", todayShare: "more than your month" })
     current.fetcher = fakes.fetcher
-    expect(fakes.store.get(key!)).toBe(larger)
+    const kept = fakes.store.get(key!)
+    expect(kept).toBeDefined()
+    expect(kept).not.toBe(larger)
     expect((await estimate(question, token)).body).toEqual({ share: "over 40%", todayShare: "more than your month" })
-    expect(fakes.store.get(key!)).not.toBe(larger)
+    expect(fakes.store.get(key!)).toBe(kept)
     // A carry that rises again afterwards still tells the step nothing: the kept answer only overstates now.
     const revoked = (await readModelPlanAccount(id, fakes.fetcher))!
     fakes.store.set(
@@ -265,6 +273,101 @@ describe("the route", () => {
     expect(fakes.store.get(key!)).toBeDefined()
     fakes.clock.now = periodEnd + DAY
     expect(fakes.store.get(key!)).toBeUndefined()
+  })
+
+  test("a delayed cache write cannot replace a more conservative answer after overlapping pool drops", async () => {
+    const { fakes, token, id } = await plus()
+    const question = { model: DEEPSEEK, inputTokens: 50_000, outputTokens: 2_000, requests: 100 }
+    const account = (await readModelPlanAccount(id, fakes.fetcher))!
+    const accountKey = account.key!
+    const setCarry = (micro: number) => {
+      fakes.store.set(
+        codiumKey("account", id),
+        JSON.stringify({
+          ...account,
+          key: {
+            ...accountKey,
+            carry: {
+              micro,
+              fromSubscription: "sub_before",
+              fromStart: accountKey.start - 600,
+              fromCharge: "ch_before",
+            },
+          },
+        }),
+      )
+    }
+    setCarry(40_000_000)
+    expect((await estimate(question, token)).body.share).toBe("5–10%")
+    const [key] = estimateKeys(fakes)
+
+    setCarry(8_000_000)
+    const writing = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let delayed = false
+    current.fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const command = typeof init?.body === "string" ? JSON.parse(init.body) : undefined
+      const writesEstimate =
+        Array.isArray(command) &&
+        ((command[0] === "SET" && command[1] === key) || (command[0] === "EVAL" && command[3] === key))
+      if (!delayed && writesEstimate) {
+        delayed = true
+        writing.resolve()
+        await release.promise
+      }
+      return fakes.fetcher(input, init)
+    }) as typeof fetch
+
+    const slower = estimate(question, token)
+    const strict = { status: 200, body: { share: "over 40%", todayShare: "more than your month" } }
+    let kept: string | undefined
+    try {
+      await Promise.race([
+        writing.promise,
+        slower.then(() => {
+          throw new Error("The first estimate did not reach its cache write.")
+        }),
+      ])
+      setCarry(0)
+      expect(await estimate(question, token)).toEqual(strict)
+      kept = fakes.store.get(key!)
+      expect(kept).toBeDefined()
+    } finally {
+      release.resolve()
+      current.fetcher = fakes.fetcher
+      await slower
+    }
+
+    setCarry(8_000_000)
+    expect(await estimate(question, token)).toEqual(strict)
+    expect(fakes.store.get(key!)).toBe(kept)
+    expect(await slower).toEqual(strict)
+    expect(estimateKeys(fakes)).toEqual([key!])
+    expect(fakes.stripe.calls).toEqual([])
+    expect(fakes.openRouter.calls).toEqual([])
+  })
+
+  test("persistent contention retries the cache write once before refusing an unkept answer", async () => {
+    const { fakes, token } = await plus()
+    let attempts = 0
+    current.fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const command = typeof init?.body === "string" ? JSON.parse(init.body) : undefined
+      if (Array.isArray(command) && command[0] === "SET" && String(command[1]).includes(":estimate:")) {
+        attempts++
+        return Response.json({ result: null })
+      }
+      return fakes.fetcher(input, init)
+    }) as typeof fetch
+    try {
+      expect(await estimate({ model: DEEPSEEK, inputTokens: 50_000, outputTokens: 2_000 }, token)).toMatchObject({
+        status: 503,
+        body: { error: { code: "MODEL_PLAN_RENEWING" } },
+      })
+      expect(attempts).toBe(2)
+      expect(estimateKeys(fakes)).toEqual([])
+    } finally {
+      current.fetcher = fakes.fetcher
+    }
   })
 
   test("the pool ramp's end starts fresh answers: a step asked during a Max ramp moves to the full month", async () => {
