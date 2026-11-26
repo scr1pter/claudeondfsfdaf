@@ -540,6 +540,69 @@ const ShipTicketCommand = cmd({
 
 // ── The command ────────────────────────────────────────────────────────────────────────────────────────────────────
 
+async function readLocalShipJson(directory: string): Promise<ShipDesk.ShipJson> {
+  const root = await fs.realpath(directory)
+  const name = path.join(root, ".vector", "ship.json")
+  const unsafe = () => new ShipError("Use a regular .vector/ship.json file in the current directory.")
+  const before = await fs.lstat(name).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") throw new ShipError("The current directory has no .vector/ship.json.")
+    throw error
+  })
+  if (!before.isFile() || before.nlink !== 1 || (await fs.realpath(name)) !== name) throw unsafe()
+
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fsConstants
+  const handle = await fs.open(name, O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0))
+  try {
+    const opened = await handle.stat()
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      (await fs.realpath(name)) !== name
+    )
+      throw unsafe()
+    if (opened.size > ShipDesk.LIMITS.shipJsonBytes)
+      throw new ShipError(`The local .vector/ship.json exceeds ${ShipDesk.LIMITS.shipJsonBytes / 1024} KiB.`)
+
+    // Read one extra byte to detect growth after the size check without allocating from an unbounded file.
+    const buffer = Buffer.alloc(opened.size + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    if (bytesRead !== opened.size) throw new ShipError("The local .vector/ship.json changed while it was read.")
+    let text: string
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer.subarray(0, bytesRead))
+    } catch {
+      throw new ShipError("The local .vector/ship.json is not valid UTF-8.")
+    }
+    const config = ShipDesk.parseShipJson(text)
+    if (!config) throw new ShipError("The local .vector/ship.json is not valid.")
+    return config
+  } finally {
+    await handle.close()
+  }
+}
+
+const ShipValidateCommand = cmd({
+  command: "validate",
+  describe: "check the current directory's .vector/ship.json and summarize its capture plan locally",
+  async handler() {
+    try {
+      const config = await readLocalShipJson(process.cwd())
+      const steps = [config.install && "install", config.build && "build", "start"].filter(Boolean)
+      const routes = config.routes.length
+      const images = Math.min(routes * 2, ShipDesk.LIMITS.files)
+      UI.println("Local Ship Desk configuration is valid.")
+      UI.println(`Configured app port ${config.port}. Steps include ${steps.join(", ")}.`)
+      UI.println(`${routes} configured route${routes === 1 ? "" : "s"}, up to ${images} images across both versions.`)
+      UI.println("Hosted capture uses the pull request's base commit and requires a card and capture ticket.")
+    } catch (error) {
+      UI.error(error instanceof ShipError ? error.message : "The local .vector/ship.json could not be read.")
+      process.exitCode = 1
+    }
+  },
+})
+
 const ShipCaptureCommand = cmd({
   command: "capture",
   describe: "take Ship Desk's before and after screenshots of a pull request (a GitHub Actions job)",
@@ -614,6 +677,7 @@ const ShipCaptureCommand = cmd({
 export const ShipCommand = cmd({
   command: "ship",
   describe: false,
-  builder: (yargs: Argv) => yargs.command(ShipCaptureCommand).command(ShipTicketCommand).demandCommand(),
+  builder: (yargs: Argv) =>
+    yargs.command(ShipCaptureCommand).command(ShipTicketCommand).command(ShipValidateCommand).demandCommand(),
   async handler() {},
 })

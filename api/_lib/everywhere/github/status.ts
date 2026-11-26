@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { renderMilestone } from "../../../../packages/schema/src/everywhere-policy.js"
 import { TERMINAL_STATES, type Milestone } from "../../../../packages/schema/src/everywhere.js"
+import { ApiError } from "../../http.js"
 import { openReply, readJob, updateJobReply, type JobsContext } from "../jobs.js"
 import { everywhereKeys } from "../keys.js"
 import type { JobView } from "../platform.js"
@@ -15,7 +16,8 @@ export type GithubStatusPort = {
 
 export function githubStatus(input: { readonly context: () => JobsContext; readonly port?: GithubStatusPort }) {
   async function post(view: JobView, text: string, terminal: boolean) {
-    if (!input.port) return
+    const port = input.port
+    if (!port && !terminal) return
     const ctx = input.context()
     const lock = everywhereKeys.jobStatusLock(view.jid)
     const token = randomUUID()
@@ -32,6 +34,8 @@ export function githubStatus(input: { readonly context: () => JobsContext; reado
       // Github's existing route job supplies the received reaction. Never post a refused handoff.
       if (!job?.github || job.platform !== "github" || job.startedAt === undefined) return
       if (terminal !== TERMINAL_STATES.has(job.state)) return
+      // The outbox clears the summary only on successful delivery.
+      if (!port) throw new ApiError(503, "GITHUB_STATUS_UNAVAILABLE", "GitHub status delivery is unavailable.")
       // VE-10: progress edits the status comment at most every 30 s. A terminal post ignores this.
       const edited = everywhereKeys.jobStatusEdited(job.jid)
       if (!terminal && await getValue(ctx.store, edited) !== undefined) return
@@ -39,10 +43,10 @@ export function githubStatus(input: { readonly context: () => JobsContext; reado
       const body = `${text}\n\n${marker}`
       const reply = openReply(ctx, job)
       const existing = typeof reply?.statusCommentId === "number" && Number.isSafeInteger(reply.statusCommentId) && reply.statusCommentId > 0
-        ? { id: reply.statusCommentId } : await input.port.findOwnComment(job.repository.id, job.github.number, marker)
+        ? { id: reply.statusCommentId } : await port.findOwnComment(job.repository.id, job.github.number, marker)
       if (existing && (!Number.isSafeInteger(existing.id) || existing.id < 1)) throw new Error("Invalid Github status reference")
-      if (existing) await input.port.editComment(job.repository.id, existing.id, body)
-      const comment = existing ?? await input.port.comment(job.repository.id, job.github.number, body)
+      if (existing) await port.editComment(job.repository.id, existing.id, body)
+      const comment = existing ?? await port.comment(job.repository.id, job.github.number, body)
       const retained = () => new Error("Github status reference was not retained")
       if (!Number.isSafeInteger(comment.id) || comment.id < 1) throw retained()
       // Set once Github holds the post and before the reference write, so a lost reference write cannot buy a
