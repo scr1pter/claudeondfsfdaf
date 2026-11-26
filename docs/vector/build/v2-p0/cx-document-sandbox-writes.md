@@ -1,6 +1,6 @@
 # cx-document-sandbox-writes: takeover of PR #161 (unattended host HOME and sandbox comments)
 
-PR #161 (branch `document-sandbox-writes`) was a Codex draft, idle since 2026-11-24 13:13 UTC, with every hosted job cancelled before it started. This run took it over on 2026-11-26 to finish it before the Saturday 2026-11-28 deadline. No flag changes, no public claims. `VECTOR_EVERYWHERE_ENABLED` stays off, so unattended sessions stay dormant.
+PR #161 (branch `document-sandbox-writes`) was a Codex draft, idle since 2026-11-24 13:13 UTC, with every hosted job cancelled before it started. This run took it over on 2026-11-26 to finish it. No flag changes, no public claims. `VECTOR_EVERYWHERE_ENABLED` stays off, so unattended sessions stay dormant.
 
 Files of the PR's own commits: `packages/engine/src/tool/shell/sandbox.ts` and `packages/engine/test/everywhere/offline-shell.test.ts`.
 
@@ -45,3 +45,27 @@ The plain `Sandbox.offline` (Web access None) and the shell tool's own sandbox a
 - A toolchain installed under the home folder (`~/.cargo/bin`, `~/.bun/bin`, a version manager's shims) is now left out of an unattended command's PATH, and its files are hidden, so a check that needs it fails instead of running. This is the intended trade: the home folder holds the owner's other projects and credentials.
 - A `*_HOME` or `*_ROOT` variable that points into the home folder is still passed through, but the folder it names is masked.
 - Codex's container saw two sandbox cases fail on the exact #128 parent, because it denies the bubblewrap UID map and restricts writes under `/var/tmp`. The hosted runner has neither restriction.
+- Git breaks inside every unattended job: the job's linked checkout keeps its gitdir and shared Git metadata inside the masked home folder, so `git status` fails with "not a git repository". Not fixed yet; see the review follow-up below for the fix, the test it needs and the lead ruling that keeps #161 a draft until then.
+
+## 2026-11-26 (UTC), review follow-up: linked-worktree Git regression, commit hygiene, PR text
+
+**Regression found in review (not fixed yet).** Every real unattended job runs in a linked checkout that `Worktree.createUnattended` makes with `git worktree add` under the data folder (`<data>/everywhere-worktree/<project>/<jid>`; the data folder defaults to `~/.local/share/...` on Linux). The checkout's `.git` is a file pointing at `<project>/.git/worktrees/<jid>`, and that gitdir and the shared objects, refs and config usually sit inside the home folder. Before `ef83e961d` they stayed readable through `--ro-bind / /`. Now the home tmpfs hides them, and `mayBind` also drops the `linkedWorktreeMetadata` read-only binds (objects, refs, logs/refs) because they are inside the masked home. The result: every Git command inside an unattended sandbox fails with "not a git repository", although an owner's unattended rules can allow `bash git status` (the ruleset `test/everywhere/unattended-session.test.ts` configures does). The committed tests only use a plain `.git` folder under `/tmp`, so CI cannot catch it. Confirmed by reading the code (`sandbox.ts` `wrap()` and `linkedWorktreeMetadata`, `worktree/index.ts` `createUnattended`, `core/src/global.ts`); it needs Linux bubblewrap to reproduce, which this Mac does not have.
+
+**The fix, once the files are free.** After the home mask, bind read-only the job checkout's own per-worktree gitdir and only the shared metadata Git needs to read (`objects`, `refs`, `packed-refs`, `logs/refs`, and the shared `config` and `HEAD`), and nothing else from the home folder. Add a Linux bubblewrap case that runs `git status` (or `git log -1`) in a linked worktree whose shared Git folder sits inside the masked home. It must fail before the fix and pass after it, with one mutation (drop the gitdir bind) going red.
+
+**Lead rulings.**
+
+- `sandbox.ts` and `offline-shell.test.ts` are touched by open PRs #128, #162, #163, #167 and #170 (checked live on 2026-11-26 04:10 UTC), and this run's rules forbid editing a file another open PR touches. So the fix is not made in this push; it is recorded here instead.
+- #161 stays a draft. It is not marked ready until the linked-worktree fix lands in it (after #128 and the PRs carrying its commits merge and free the two files) or the owner accepts the regression. While `VECTOR_EVERYWHERE_ENABLED` is off no user can hit it, but landing the home mask without the fix would break Git for every unattended job the day the flag turns on.
+
+**Commit hygiene.** The earlier local merge of `origin/main` used Git's default message without the required `Co-Authored-By` trailer. It was never pushed. Without amending, rebasing or resetting, the branch was rebuilt from the pushed head `9a93d725a`: `origin/main` was merged again with `--no-commit` and committed under the Vector identity with the trailer, and the docs commit was cherry-picked under the same identity. The pushed history only gains commits on top of `9a93d725a`.
+
+**Deadline wording.** The takeover entry above and the PR body no longer name a Saturday deadline. The owner set 2027-01-01 as the deadline for the redesign and for the other open work.
+
+**PR text.** The PR title and body now say what the branch carries: the #149 home-isolation fix plus the comments that describe it, not "limited to comments". The body states that #161 depends on #128 (or any PR landing `234ced66a` to `8d81da3b6`) and must not merge before it.
+
+**Merge gates (unchanged, for whoever merges).**
+
+- The "Vector everywhere tests" job (`.github/workflows/vector-everywhere.yml`, ubuntu-24.04 with bubblewrap) must run and pass on the pushed head. No hosted Linux run has yet exercised the home mask, the sibling-hiding case or the session tests with the filtered PATH.
+- Merge only after #128, or after a PR that lands its six commits. `8d81da3b6` is an ancestor of #128's head, and a trial `git merge-tree` against it is clean.
+- The linked-worktree fix above, or the owner's acceptance of the regression.
