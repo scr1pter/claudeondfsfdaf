@@ -412,24 +412,29 @@ describe("the binding and visibility ports", () => {
   })
 
   test.each([
-    ["private", false],
-    ["internal", true],
+    ["private", "private"],
+    ["internal", "internal"],
+    [undefined, "internal"],
   ] as const)(
-    "B3: through the real helper, GitHub's private:true with visibility %s reads internal, so there is no route",
-    async (visibility) => {
+    "B3: through the real helper, GitHub's private:true with visibility %s reads %s",
+    async (visibility, expected) => {
       await using fixture = await githubAppFixture()
-      Object.assign(fixture.state.repository, { private: true, visibility })
+      fixture.state.repository.private = true
+      fixture.state.repository.visibility = visibility
       const account = randomUUID()
       const w = world({
         app: fixture.app,
         fields: () => bindingFields({ repositoryId: fixture.repositoryId, account }),
       })
-      // attachmentRepository answers only `publicRepository` today, so private and internal look the same (EV-29 (c)).
-      expect(await w.ports.visibility!(Number(fixture.repositoryId))).toBe("internal")
-      expect(
-        await w.ports.prepareCloud!({ ...w.input, sponsor: account, repositoryId: Number(fixture.repositoryId) }),
-      ).toBeUndefined()
-      expect(w.prep.state.triggers).toEqual([])
+      expect(await w.ports.visibility!(Number(fixture.repositoryId))).toBe(expected)
+      const prepared = await w.ports.prepareCloud!({
+        ...w.input,
+        sponsor: account,
+        repositoryId: Number(fixture.repositoryId),
+      })
+      if (expected === "private") expect(prepared).toBeDefined()
+      else expect(prepared).toBeUndefined()
+      expect(w.prep.state.triggers).toHaveLength(expected === "private" ? 1 : 0)
       expect(fixture.tokens.size).toBe(0)
       expect(guard.violations).toEqual([])
     },

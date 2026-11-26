@@ -18,6 +18,7 @@ import {
   incidentTitle,
   intervalLine,
   manualReason,
+  monitorStatusLine,
   opsErrorText,
   opsSections,
   releaseLine,
@@ -558,15 +559,7 @@ function Checks(props: { call: Call; act: Act; busy: boolean; showMonitors: bool
                     <For each={current().monitors}>
                       {(monitor) => (
                         <li>
-                          {monitor.url}{" "}
-                          <span class="phone-meta">
-                            ·{" "}
-                            {monitor.checked
-                              ? "checked"
-                              : monitor.domainVerified
-                                ? "past your plan's URLs"
-                                : "domain not verified"}
-                          </span>
+                          {monitor.url} <span class="phone-meta">· {monitorStatusLine(monitor)}</span>
                         </li>
                       )}
                     </For>
