@@ -698,13 +698,14 @@ describe("the handoff binding port", () => {
     async (visibility) => {
       const account = randomUUID()
       const binding = createHandoffBinding({
-        store: bindingStore(() => bindingFields({ repositoryId: "123", account, with: { visibility } })).store,
+        store: bindingStore(() => bindingFields({ repositoryId: "123", account, with: { visibility, generation: "9" } })).store,
       })
       expect(await binding(123)).toEqual({
         account,
         githubId: 790,
         ownerId: 456,
         installationId: 600,
+        generation: 9,
         laptopFirst: false,
         codiumMode: true,
         workflowVersion: "3",

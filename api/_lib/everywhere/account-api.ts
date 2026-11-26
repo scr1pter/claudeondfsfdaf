@@ -45,7 +45,7 @@ import {
   type RepoMapping,
 } from "./identity.js"
 import type { Ports } from "./ports.js"
-import { jobEraser, openSummary, readJobHistory, type JobRecord, type JobRoute } from "./jobs.js"
+import { jobEraser, openReply, openSummary, readJobHistory, type JobRecord, type JobRoute } from "./jobs.js"
 import { KEEP_MS } from "./keys.js"
 import { platformExchanges } from "./oauth-exchanges.js"
 import { revokeSlack } from "./slack/install.js"
@@ -56,7 +56,7 @@ import { everywhereStore, type Store } from "./store.js"
  * The signed-in account's Vector everywhere routes on vectordev.ai (contract 3.8, 3.12): link codes, links,
  * installations, repository mappings, the OAuth finish, and two reads: the account's jobs of the last 30 days and its
  * audit log of the last 90 (E16), each capped at 100 and scoped to the account (E18). Job links come from a result or
- * from a GitHub handoff with a matching current repository binding. The one free text either read answers is a job's
+ * from a GitHub handoff with the same active repository binding generation. The one free text either read answers is a job's
  * `summary`: the sealed settle summary of a job in a private place (a Slack DM) that the signed-in account asked for and
  * whose post has not gone out, cleaned by sanitizeReply as posts are (`privateSummary`); a shared place's is never
  * answered. Whether it stays is the lead's 3.12/3.7 ruling (EV-23). Every route authenticates the browser session through
@@ -454,7 +454,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
           accountJob(
             job,
             privateSummary(session, job, snapshots.get(job.installation)),
-            boundGithubThread(session.account, job, bindings.get(String(job.repository.id))),
+            boundGithubThread(session, job, bindings.get(String(job.repository.id))),
           ),
         )
         // As GET repos: an account closed during the reads gets nothing.
@@ -526,17 +526,24 @@ function ownedGithubReference(account: string, job: JobRecord) {
 }
 
 /** A stored handoff still owned by the same binding may expose its canonical issue or pull request page. */
-function boundGithubThread(account: string, job: JobRecord, binding: RepoBinding | undefined) {
-  const reference = ownedGithubReference(account, job)
+function boundGithubThread(session: Session, job: JobRecord, binding: RepoBinding | undefined) {
+  const reference = ownedGithubReference(session.account, job)
   if (
     !reference ||
     !binding ||
-    binding.account !== account ||
+    binding.account !== session.account ||
     binding.suspended !== undefined ||
-    binding.boundAt > job.receivedAt ||
     binding.repository.toLowerCase() !== job.repository.fullName.toLowerCase() ||
     binding.binder.githubId !== job.requester.userId ||
     job.installation !== `github:${binding.installationId}`
+  )
+    return undefined
+  const generation = openReply(session.ctx, job)?.githubBindingGeneration
+  if (
+    typeof generation !== "number" ||
+    !Number.isSafeInteger(generation) ||
+    generation < 1 ||
+    generation !== binding.generation
   )
     return undefined
   return githubThreadUrl(job.repository.fullName, reference.kind, reference.number)

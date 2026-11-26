@@ -2579,6 +2579,7 @@ describe("the jobs", () => {
   })
 
   test("GitHub history links require the requester's current repository binding", async () => {
+    const generation = 9
     const input: NewJob = {
       platform: "github",
       installation: "github:600",
@@ -2589,7 +2590,7 @@ describe("the jobs", () => {
       shared: false,
       task: "",
       context: [],
-      reply: { ref: "sealed-reference-only", statusCommentId: 623_452 },
+      reply: { ref: "sealed-reference-only", statusCommentId: 623_452, githubBindingGeneration: generation },
     }
     const addJob = async (extra: Partial<NewJob>) => {
       const created = await createJob(jobsCtx(), { ...input, ...extra })
@@ -2604,6 +2605,11 @@ describe("the jobs", () => {
     })
     const legacy = await addJob({ github: { kind: "issue", number: 74 } })
     expect((await refuseJob(jobsCtx(), legacy.jid, "not-mapped")).ok).toBe(true)
+    const unproven = await addJob({
+      github: { kind: "issue", number: 77, actorId: 790, event: "issue_comment", commentId: 418 },
+      reply: { ref: "legacy-reference-only" },
+    })
+    expect((await refuseJob(jobsCtx(), unproven.jid, "not-mapped")).ok).toBe(true)
     const sponsored = await addJob({
       requester: { userId: "790", account: bob.id },
       github: { kind: "issue", number: 76, actorId: 790, event: "issue_comment", commentId: 417 },
@@ -2618,7 +2624,7 @@ describe("the jobs", () => {
     const original = bindingFields({
       account: alice.id,
       repositoryId: "4242",
-      with: { repository: "acme/app", boundAt: String(fake.clock.now - 1) },
+      with: { repository: "acme/app", generation: String(generation), boundAt: String(fake.clock.now) },
     })
     let binding: Record<string, string> | "down" | undefined = original
     const reads: string[][] = []
@@ -2640,12 +2646,13 @@ describe("the jobs", () => {
     expect(answer.status).toBe(200)
     expect(reads).toHaveLength(2)
     const rows = new Map(answer.body.jobs.map((row: { jid: string; threadUrl?: string }) => [row.jid, row]))
-    expect([...rows.keys()].sort()).toEqual([issue.jid, pull.jid, legacy.jid, sponsored.jid].sort())
+    expect([...rows.keys()].sort()).toEqual([issue.jid, pull.jid, legacy.jid, unproven.jid, sponsored.jid].sort())
     expect(rows.get(issue.jid)).toMatchObject({ threadUrl: "https://github.com/acme/app/issues/72" })
     expect(rows.get(pull.jid)).toMatchObject({ threadUrl: "https://github.com/acme/app/pull/73" })
     expect(rows.get(legacy.jid)).not.toHaveProperty("threadUrl")
+    expect(rows.get(unproven.jid)).not.toHaveProperty("threadUrl")
     expect(rows.get(sponsored.jid)).not.toHaveProperty("threadUrl")
-    expect(answer.text).not.toMatch(/replyEnc|statusCommentId|commentId|requester|actorId|sealed-reference-only/)
+    expect(answer.text).not.toMatch(/replyEnc|statusCommentId|commentId|requester|actorId|githubBindingGeneration|sealed-reference-only|legacy-reference-only/)
 
     const b = browser(loopback, { activity: true })
     await b.model.setSession(as(alice))
@@ -2663,12 +2670,13 @@ describe("the jobs", () => {
       { ...original, repository: "acme/renamed" },
       { ...original, installationId: "601" },
       { ...original, binderGithubId: "791" },
-      { ...original, boundAt: String(fake.clock.now + 1) },
+      { ...original, generation: String(generation + 1) },
+      { ...original, generation: String(generation + 1), boundAt: String(fake.clock.now + 1) },
     ]) {
       binding = unavailable
       const withoutLink = await history()
       expect(withoutLink.status).toBe(200)
-      expect(withoutLink.body.jobs).toHaveLength(4)
+      expect(withoutLink.body.jobs).toHaveLength(5)
       expect(withoutLink.text).not.toContain("threadUrl")
     }
 
@@ -2678,7 +2686,7 @@ describe("the jobs", () => {
     mountAccount(createAccountApi(deps({ fetcher })))
     const disabled = await history()
     expect(disabled.status).toBe(200)
-    expect(disabled.body.jobs).toHaveLength(4)
+    expect(disabled.body.jobs).toHaveLength(5)
     expect(disabled.text).not.toContain("threadUrl")
     expect(reads).toHaveLength(readCount)
   })
