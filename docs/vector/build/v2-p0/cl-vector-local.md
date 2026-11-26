@@ -2,7 +2,7 @@
 
 Branch `cl-vector-local`, cut from origin/main `dbeb06661` (feat(everywhere): verify repositories through sponsor bindings, #117). It closes the Vector Local loose ends for Vector v2: the meaning of an allow entry with no hosts (VL-1), the company's `local.recommend` table (VL-2), which Vector a Vector Local switch is for (VL-3), the Windows identity failure (VL-4, record only), stale comments (VL-5) and the guard's Octokit note (VL-6). No flag changes, no generated file changes (no Effect Schema annotation, HTTP schema or route is touched, so `packages/web/public/config.json`, the SDK and `packages/client` stay as they are), and no public docs page is edited.
 
-Open-PR check (live, 2026-11-25, 42 open PRs, `gh pr diff <n> --name-only` for each): no file this branch edits is held by an open PR. `packages/engine/src/tool/shell/sandbox.ts` (#128, #161, #162, #163, #167, #170) and the `vector github` command files (#98, #106, #160) are read only.
+Open-PR check (live, 2026-11-25, 42 open PRs, `gh pr diff <n> --name-only` for each): no file this branch edits is held by an open PR. `packages/engine/src/tool/shell/sandbox.ts` (#128, #161, #162, #163, #167, #170) and the `vector github` command files (#98, #106, #160) are read only. Re-checked when the drafting ended: 38 open (#100, #158, #160 and #165 had merged into main, none touching a file here), still none holding a file this branch edits, and main still has 8 GitHub client sites, each with its fetch.
 
 Test runs: the drafting step may not run a test runner or a typechecker, so every "fails without it" and mutation line below is the check to run, with the expected result. The verifier runs each and records what it saw.
 
