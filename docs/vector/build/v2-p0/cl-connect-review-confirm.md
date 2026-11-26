@@ -68,22 +68,14 @@ are untouched.
   (still no POST, warning still shown), retries, confirms, and sees the same body sent once. The changed lines carry
   a dated comment; this is a ruling change, not a loosening. The case "a consumed review key is cleared …" retries a
   fresh marker twice and still needs each retry to POST, so it pins that a fresh retry does not ask.
-- Mutations: (1) `retryStale()` always returns false: the three stale controller cases and the four stale reservation
-  cases go red. (2) The controller's `retry && !confirmed && stale()` branch removed: the three stale controller cases
-  and the throwing-hook case go red.
-- Runs (owed to the Bun-turn holder), one file at a time, from `packages/app`:
-  - red-before: restore `src/features/connect/directory-review-controller.ts` from origin/main, run
-    `bun test --timeout 30000 ./src/features/connect/directory-review-controller.test.ts`, expect the three stale
-    cases and the throwing-hook case red (a POST is sent at once, then `cancelRetry` is not a function); green: the
-    same on the branch; mutation (2), expect the same cases red; sha256 of `directory-review-controller.ts` after
-    restore: owed.
-  - red-before: restore `src/features/connect/directory-review-reservation.ts` from origin/main, run
-    `bun test --timeout 30000 ./src/features/connect/directory-review-reservation.test.ts`, expect every "retryStale
-    is …" case red (`retryStale` is not a function); green: the same on the branch; mutation (1), expect the four
-    stale cases red, and the stale controller cases red in `directory-review-controller.test.ts`; sha256 of
-    `directory-review-reservation.ts` after restore: owed.
-  - e2e (CI, test.yml's app e2e job and `connect-app-validation.yml`): with `directory-review.tsx` and
-    `directory-review-controller.ts` from origin/main, the changed case fails waiting for "Retry anyway".
+- Mutations: (1) `retryStale()` always returns false: four controller cases go red (the three stale ones and the
+  retirement case), and so do five reservation cases (the four stale ones and the clock case). (2) The controller's
+  `retry && !confirmed && stale()` branch removed: five controller cases go red (the three stale ones, the
+  retirement case and the throwing-hook case).
+- Runs: recorded 2026-11-25 in "2026-11-25: verified" below.
+- e2e (CI only): test.yml's `e2e` job runs `directory-review.spec.ts` on the PR, and `connect-app-validation.yml`
+  runs it again on main after merge. With `directory-review.tsx` and `directory-review-controller.ts` from
+  origin/main, the changed case fails while it waits for "Retry anyway".
 
 **Risks.** Stale retries take one more click. A fresh retry and every engine answer (`pending`, `consumed`, a lost
 response) behave as before. The question lives only in the controller's state: a reload asks again, which is the safe
@@ -163,12 +155,7 @@ and the resumable and ask-to-continue branches are unchanged.
   task's session" (reads `background-tasks-pane.tsx` and checks it renders `taskMessageNote(editable())` and no longer
   contains "Open its session"; the app has no rendering test for the pane).
 - Mutation: put the old sentence back in `TASK_FINISHED_COPY`. The first case goes red.
-- Runs (owed to the Bun-turn holder): red-before: restore `src/features/background-tasks/background-tasks-pane.tsx`
-  from origin/main, run `bun test --timeout 30000 ./src/features/background-tasks/task-continue-copy.test.ts` from
-  `packages/app`, expect "the pane shows this note and no longer sends people to the task's session" red; green: the
-  same on the branch; mutation: the old sentence in `TASK_FINISHED_COPY`, expect "a finished task that takes no more
-  messages points to the conversation, never to its session" red; sha256 of `background-tasks-pane.tsx` after
-  restore: owed.
+- Runs: recorded 2026-11-25 in "2026-11-25: verified" below.
 
 **Held.** The fallback also shows for a task that is still live but whose engine says it takes no messages
 (`controls.message` false, not continuable because it is live). Both the old and the new copy then say "finished".
@@ -196,11 +183,47 @@ That predates this item and is left for the pane's owner.
   request, on #92's marker and warning, while a fresh request retries at once. CN-12, fix the empty state; the badge
   count and child-session runs are accepted omissions, to revisit with Connect's Q1.
 - Owner items: none. Nothing here is public, released, registered, bought or configured in production.
-- Owed: the red-before, green and mutation runs above; the app typechecks in `packages/app` (`bun typecheck` for
-  `src`, and `bun run typecheck:e2e` for the two e2e specs through `e2e/tsconfig.json`; this branch could not run
-  either); `test/no-personal-paths.test.ts` for this entry; the e2e
-  cases in CI (test.yml's app e2e job; `connect-app-validation.yml` runs `directory-review.spec.ts` on main); push and
-  PR.
+- Owed at assembly: the unit runs, the typechecks and `test/no-personal-paths.test.ts`, all now recorded in
+  "2026-11-25: verified" below. Still owed: the e2e cases in CI (test.yml's `e2e` job;
+  `connect-app-validation.yml` runs `directory-review.spec.ts` on main after merge), then push and PR.
+
+## 2026-11-25: verified
+
+- Merged origin/main `b57b8d53a` (#160, #117, #169) into the branch with a merge commit. None of those changes touch
+  this branch's files. Open PRs were checked live after the merge (39, #68 included). None of them touches a file on
+  this branch, and none covers CN-10's confirm, CN-12's empty state or the finished-task copy. Nothing was removed.
+- Bun runs were done one file at a time from `packages/app` with `bun test --timeout 30000 <file>`. Each red-before
+  ran with only the fix's source file restored from origin/main. Each mutation edited one line. After every run,
+  `git checkout HEAD -- <file>` restored the file and `git status` was clean.
+- `src/features/connect/directory-review-controller.test.ts`: green 33/33. Red-before (restored
+  `directory-review-controller.ts`): 5 failed and 28 passed. The three stale cases fail at
+  `expect(posts).toEqual([])` because main sends the saved request at once. "retirement drops …" and "a stale check
+  that throws …" fail because `confirmRetry` is never set. Mutation (2), the confirm branch disabled: the same 5 fail.
+  Mutation (1), `retryStale()` always false: 4 fail (the three stale cases and the retirement case).
+- `src/features/connect/directory-review-reservation.test.ts`: green 23/23. Red-before (restored
+  `directory-review-reservation.ts`): all 7 new cases fail with "retryStale is not a function" and 16 pass. Mutation
+  (1): 5 fail (the four stale rows and the clock case). Extra boundary mutation, `>=` to `>` on the 24-hour check:
+  "exactly 24 hours old", the clock case and #92's "savedAt is local metadata …" go red.
+- `src/features/background-tasks/task-continue-copy.test.ts`: green 3/3. Red-before (restored
+  `background-tasks-pane.tsx`): "the pane shows this note and no longer sends people to the task's session" fails and
+  2 pass. Mutation, the old sentence put back in `TASK_FINISHED_COPY`: "a finished task that takes no more messages
+  points to the conversation, never to its session" goes red.
+- CN-12 has no unit run: its proof is the e2e case in `background-tasks-details.spec.ts`, which runs in test.yml's
+  `e2e` job (Playwright with a dev server, CI only). Without the fix, the pane's fallback renders whenever there are
+  no subagents, commands, interrupted tasks or Hands card. That is exactly the case's first half, so "No background
+  tasks" shows beside the run and `not.toContainText` fails. Red-before and the `&& connectRows() === 0` mutation are
+  owed to that CI job.
+- Adjacent existing file: `src/features/connect/task-rows.test.ts` green 15/15. No unit or browser test renders
+  `background-tasks-pane.tsx`, `task-rows-section.tsx` or `directory-review.tsx`.
+- Typecheck in `packages/app`: `bun typecheck` (tsgo -b, which includes the `src` tests) clean, and
+  `bun run typecheck:e2e` (both changed specs are in `e2e/tsconfig.json`) clean.
+- `test/no-personal-paths.test.ts` (run from `test/`): green.
+- After restore, each source file's sha256 equals its HEAD blob (first 16 hex shown):
+  `directory-review-controller.ts` fd66e0004ad06ab2, `directory-review-reservation.ts` 80d053d21d6e03f2,
+  `background-tasks-pane.tsx` 4b83231a3d9fcac8, `task-continue-copy.ts` c4a42b3117f9da80.
+- Process note for the lead: during assembly, `4f88ce103` was re-made with `git reset --soft HEAD~1` on a local
+  commit that was never pushed, to drop git's "# Conflicts" comment lines after the trailer. No change was lost. It
+  is recorded here because it rewrote a local commit the way an amend would.
 
 ## Lane pointers to fold back
 
