@@ -21,9 +21,14 @@ type Key = {
 /**
  * The conversation's own connected runs in the Background tasks pane. Rows come only from a successful owner read
  * for the current client, root, stream and authority epoch, and a later read that fails without a refusal keeps them;
- * anything else shows nothing. A click can only cancel.
+ * anything else shows nothing. A click can only cancel. `onRows` hears how many rows are shown whenever that changes
+ * (0 while hidden, refused or off, and when the section unmounts), so the pane's empty state can step aside (CN-12).
  */
-export function ConnectTaskRows(props: { rootID: string | undefined; connections: boolean }) {
+export function ConnectTaskRows(props: {
+  rootID: string | undefined
+  connections: boolean
+  onRows?: (count: number) => void
+}) {
   const sdk = useSDK()
   const serverSDK = useServerSDK()
   const serverSync = useServerSync()
@@ -99,6 +104,8 @@ export function ConnectTaskRows(props: { rootID: string | undefined; connections
     const loaded = data.latest
     return loaded && loaded.key === source() ? loaded.rows : []
   })
+  createEffect(() => props.onRows?.(rows().length))
+  onCleanup(() => props.onRows?.(0))
   // A notice lasts only while its run is listed; "could not cancel" also ends with the run.
   const noticeText = createMemo(() => {
     const current = notice()

@@ -149,6 +149,8 @@ function Pane(props: { tasks: BackgroundTasks }) {
   const language = useLanguage()
   const [finishedOpen, setFinishedOpen] = createSignal(false)
   const [announcement, setAnnouncement] = createSignal("")
+  // How many connected runs the section below the task list shows (CN-12).
+  const [connectRows, setConnectRows] = createSignal(0)
   const [cardOpen, setCardOpen] = createStore<Record<string, boolean>>({})
   const [phaseOpen, setPhaseOpen] = createStore<Record<string, boolean>>({})
   let aside: HTMLElement | undefined
@@ -491,7 +493,8 @@ function Pane(props: { tasks: BackgroundTasks }) {
       <Show
         when={total() > 0 || tasks.shells().length > 0 || tasks.interrupted().length > 0}
         fallback={
-          <Show when={!computerCard()}>
+          // Connected runs listed below are background tasks too, so the empty state waits for none (CN-12).
+          <Show when={!computerCard() && connectRows() === 0}>
             <div class="vector-bg-tasks-empty">
               <p class="vector-bg-tasks-empty-title">No background tasks</p>
               <p class="vector-bg-tasks-empty-body">Subagents and subagent specialists show up here while they work.</p>
@@ -574,7 +577,11 @@ function Pane(props: { tasks: BackgroundTasks }) {
           </Show>
         </div>
       </Show>
-      <ConnectTaskRows rootID={tasks.rootID()} connections={tasks.capabilities().connections} />
+      <ConnectTaskRows
+        rootID={tasks.rootID()}
+        connections={tasks.capabilities().connections}
+        onRows={(count) => setConnectRows(count)}
+      />
 
       <div class="vector-bg-tasks-sr" aria-live="polite">
         {announcement()}

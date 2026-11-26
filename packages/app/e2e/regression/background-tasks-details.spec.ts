@@ -1,8 +1,10 @@
-import { expect, test } from "@playwright/test"
+import { expect, test, type Route } from "@playwright/test"
+import { reviewRun } from "../../src/features/connect/test-fixture"
 import {
   card,
   child,
   composer,
+  directory,
   openFinished,
   openTasks,
   CREATED,
@@ -196,4 +198,66 @@ test("the limits line shows the engine's limits, and nothing without them", asyn
   })
   await expect(panel.locator('[data-component="task-limits"]')).toHaveCount(0)
   await expect(card(panel, "Port the lexer")).toBeVisible()
+})
+
+// CN-12: a connected run is a background task, so the pane's empty state never shows beside one, and comes back once
+// none is listed. The helpers mirror connected-tools.spec.ts's, which another change holds.
+function reply(route: Route, body: unknown, status = 200) {
+  const headers = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": route.request().headers()["access-control-request-headers"] ?? "*",
+  }
+  if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers })
+  return route.fulfill({ status, contentType: "application/json", headers, body: JSON.stringify(body) })
+}
+
+const vectorscopeMember = {
+  id: "vectorscope",
+  kind: "agent",
+  title: "VectorScope",
+  summary: "Review selected changes.",
+  owner: "vectorscope",
+  place: "local",
+  sendsTo: "this-computer",
+  state: "ready",
+  reach: "connect",
+  actions: [{ id: "review", title: "Review", effects: ["read"], background: true, result: "review" }],
+}
+
+/** A review of the root conversation still going. */
+function rootRun(id: string) {
+  const fixture = reviewRun()
+  return {
+    ...fixture,
+    id,
+    request: { ...fixture.request, id, directory, requester: { kind: "user", sessionID: rootID } },
+    status: "running",
+    result: undefined,
+    progress: { message: "Reviewing src/example.ts", at: 5 },
+    time: { created: 4, started: 5 },
+  }
+}
+
+test("the Tasks pane hides its empty state while a connected run is listed, and shows it again when none is", async ({
+  page,
+}) => {
+  const app = await setup(page, { capabilities: { connections: true } })
+  let runs: unknown[] = [rootRun("cr_only")]
+  await page.route(/\/experimental\/connect(?:\/.*)?(?:\?|$)/, (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/experimental/connect") return reply(route, [vectorscopeMember])
+    return reply(route, url.pathname === "/experimental/connect/runs" ? runs : [])
+  })
+  await app.open()
+  const panel = await openTasks(page)
+  const section = panel.locator('[data-component="connect-task-rows"]')
+  await expect(section.getByRole("listitem")).toHaveCount(1)
+  await expect(section).toContainText("VectorScope · Review")
+  await expect(panel.locator("article.vector-bg-tasks-card")).toHaveCount(0)
+  await expect(panel).not.toContainText("No background tasks")
+  runs = []
+  await app.send("connect.run.updated", { sessionID: rootID, run: rootRun("cr_only") })
+  await expect(section).toHaveCount(0)
+  await expect(panel.getByText("No background tasks", { exact: true })).toBeVisible()
 })
