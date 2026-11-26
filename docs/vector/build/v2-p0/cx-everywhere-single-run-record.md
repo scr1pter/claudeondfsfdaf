@@ -1,6 +1,6 @@
 # everywhere-single-run-record takeover: the cron reads one exact run record (#114)
 
-Branch `everywhere-single-run-record` (PR #114), finished from the local branch `cx-everywhere-single-run-record`. The draft had been idle for more than a day, so this v2 run took it over to merge before the Saturday deadline. No feature flag changes: the cron's run read still does nothing while the cloud-agents service is off (C2, C5), and Vector everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`. No public claims.
+Branch `everywhere-single-run-record` (PR #114), finished from the local branch `cx-everywhere-single-run-record`. The draft had been idle for more than a day, so this v2 run took it over to land in main before the v2 redesign starts. No feature flag changes: the cron's run read still does nothing while the cloud-agents service is off (C2, C5), and Vector everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`. No public claims.
 
 ## 2026-11-26, overdue Actions runs settled from the sponsor's newest 200 runs
 
