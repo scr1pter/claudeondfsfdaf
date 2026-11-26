@@ -28,7 +28,7 @@ export type Wrapped = {
   sandboxed: boolean
   mechanism: Mechanism
   reason?: string
-  /** Compiled policy supplied on the unattended bubblewrap's private descriptor. */
+  /** Compiled policy supplied on the unattended bubblewrap's standard input. */
   seccomp?: Uint8Array
 }
 

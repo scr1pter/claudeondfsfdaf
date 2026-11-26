@@ -194,7 +194,6 @@ export const selfTest = Effect.fn("UnattendedShell.selfTest")(function* (
     .exitCode(
       ChildProcess.make(binary, selfTestArgs(shell), {
         env: { PATH: "/usr/bin:/bin" },
-        stdin: "ignore",
         stdout: "ignore",
         stderr: "ignore",
         ...UnattendedSeccomp.options(filter),

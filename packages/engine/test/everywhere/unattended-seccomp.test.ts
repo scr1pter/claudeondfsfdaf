@@ -64,19 +64,36 @@ test("x86 compatibility syscall numbers and unsupported filter configurations fa
   expect(UnattendedSeccomp.filter("arm64", "BE")).toBeUndefined()
 })
 
+// Starts the descriptor check as bubblewrap leaves it: standard input closed once the policy has been read from it.
+function consumed(command: readonly string[]) {
+  return ["/bin/sh", "-c", 'exec 0<&- && exec "$@"', "consumed", ...command]
+}
+
 test.skipIf(process.platform !== "linux")(
   "the descriptor check starts a harmless command with only standard IO",
   () => {
-    const [shell, ...args] = UnattendedSeccomp.command("/bin/sh", [
-      "/bin/sh",
-      "-c",
-      'printf "%s" "$1"',
-      "fixture",
-      "hello there",
-    ])
+    const [shell, ...args] = consumed(
+      UnattendedSeccomp.command("/bin/sh", [
+        "/bin/sh",
+        "-c",
+        '[ -c /proc/self/fd/0 ] && printf "%s" "$1"',
+        "fixture",
+        "hello there",
+      ]),
+    )
     const result = spawnSync(shell!, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 2_000, encoding: "utf8" })
     expect(result.status).toBe(0)
     expect(result.stdout).toBe("hello there")
+  },
+)
+
+test.skipIf(process.platform !== "linux")(
+  "the descriptor check refuses a standard input bubblewrap did not consume",
+  () => {
+    const [shell, ...args] = UnattendedSeccomp.command("/bin/sh", ["/bin/sh", "-c", "printf unexpected"])
+    const result = spawnSync(shell!, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 2_000, encoding: "utf8" })
+    expect(result.status).toBe(125)
+    expect(result.stdout).toBe("")
   },
 )
 
@@ -89,7 +106,7 @@ test.skipIf(process.platform !== "linux")(
     const fd = openSync(file, "r")
     try {
       rmSync(file)
-      const [shell, ...args] = UnattendedSeccomp.command("/bin/sh", ["/bin/sh", "-c", "printf unexpected"])
+      const [shell, ...args] = consumed(UnattendedSeccomp.command("/bin/sh", ["/bin/sh", "-c", "printf unexpected"]))
       const result = spawnSync(shell!, args, {
         stdio: ["ignore", "pipe", "pipe", fd],
         timeout: 2_000,

@@ -1,18 +1,22 @@
 import { endianness } from "node:os"
 import { Stream } from "effect"
 
-const FD = 3
-export const args = ["--seccomp", String(FD)] as const
+// Bubblewrap reads the policy from its standard input and closes it. An extra stdio pipe (fd 3 and up) is not used:
+// Bun closes such a pipe once more when it collects the child, after the number may belong to another descriptor.
+export const args = ["--seccomp", "0"] as const
 
-/** A private input for bubblewrap. The command still gets ignored stdin and captured output. */
+/** Bubblewrap's standard input. The command inside gets /dev/null as standard input, and its output is captured. */
 export function options(filter: Uint8Array) {
-  return { additionalFds: { [`fd${FD}`]: { type: "input", stream: Stream.make(filter) } } } as const
+  return { stdin: Stream.make(filter) } as const
 }
 
 // Check the descriptors from inside the sandbox before starting the caller's program. The trusted shell uses only
 // builtins here. An open extra descriptor, a missing proc mount, or an unconsumed seccomp descriptor refuses the run.
+// Standard input is reopened on /dev/null only after the check that bubblewrap consumed the policy there.
 const checkDescriptors = `
 [ -d /proc/self/fd ] && [ -r /proc/self/fd ] && [ -x /proc/self/fd ] || exit 125
+[ ! -e /proc/self/fd/0 ] && [ ! -L /proc/self/fd/0 ] || exit 125
+exec 0</dev/null || exit 125
 for descriptor in /proc/self/fd/*; do
   case "$descriptor" in
     "/proc/self/fd/*") exit 125 ;;

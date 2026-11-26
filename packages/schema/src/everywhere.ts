@@ -162,6 +162,7 @@ export type RefusalCode = (typeof REFUSAL_CODES)[number]
 /** Lowercase Crockford base32: in ASCII order, so ids sort as their times do, and safe in branch names. */
 const ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
 const BASE32 = "[0-9a-hjkmnp-tv-z]"
+const JOB_TIME_CHARS = 10
 
 export const JOB_ID_PREFIX = "vej_"
 /** `vej_`, then 10 characters of the creation time in milliseconds, then 12 random characters (60 bits). */
@@ -224,7 +225,7 @@ export function createJobId(now: number = Date.now()) {
   if (!Number.isSafeInteger(now) || now < 0 || now >= 2 ** 50) throw new RangeError("A job id needs a time in ms.")
   let time = ""
   let rest = now
-  for (let index = 0; index < 10; index++) {
+  for (let index = 0; index < JOB_TIME_CHARS; index++) {
     time = ALPHABET.charAt(rest % 32) + time
     rest = Math.floor(rest / 32)
   }
@@ -242,6 +243,15 @@ export function isPlatform(value: unknown): value is PlatformId {
 
 export function isJobId(value: unknown): value is string {
   return typeof value === "string" && JOB_ID_PATTERN.test(value)
+}
+
+/** The creation time encoded by createJobId, in milliseconds. */
+export function jobIdTime(jid: string) {
+  if (!isJobId(jid)) return undefined
+  let time = 0
+  for (const digit of jid.slice(JOB_ID_PREFIX.length, JOB_ID_PREFIX.length + JOB_TIME_CHARS))
+    time = time * 32 + ALPHABET.indexOf(digit)
+  return time
 }
 
 /**
@@ -364,6 +374,9 @@ export const BODY_LIMITS: Readonly<Record<PlatformId, number>> = {
 }
 
 const MINUTE = 60_000
+
+/** The server's retention for a job record, used to bound local publication recovery. */
+export const JOB_RECORD_RETENTION_MS = 30 * 24 * 60 * MINUTE
 
 /** Job timings in milliseconds (3.3, 3.4, 3.5, 4.4). */
 export const TIMING = {
