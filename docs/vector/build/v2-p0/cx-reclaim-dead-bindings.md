@@ -1,6 +1,6 @@
 # cx-reclaim-dead-bindings: reclaim open directory-review bindings whose job lease is provably dead (#163)
 
-Branch `reclaim-dead-bindings` (PR #163). Codex opened it as a draft and left it idle for more than a day, so this v2 run took it over on 2026-11-26 to finish it before the Saturday deadline. The work branch is `cx-reclaim-dead-bindings`. Directory reviews run only behind `VECTOR_EXPERIMENTAL_CONNECT`, which stays off. No flags change and nothing is claimed publicly.
+Branch `reclaim-dead-bindings` (PR #163). Codex opened it as a draft and left it idle for more than a day, so this v2 run took it over on 2026-11-26 to finish it so it lands in main before the redesign starts. The work branch is `cx-reclaim-dead-bindings`. Directory reviews run only behind `VECTOR_EXPERIMENTAL_CONNECT`, which stays off. No flags change and nothing is claimed publicly.
 
 ## 2026-11-26, open directory-review bindings were never pruned
 
@@ -28,6 +28,7 @@ Branch `reclaim-dead-bindings` (PR #163). Codex opened it as a draft and left it
 - `origin/main` merged cleanly. `origin/polish-connected-reviews` (the #162 head `f897d970`) also merged cleanly. It carries the clean-Git native owner smoke fixture that the `desktop engine bundle (node)` job needs. That job had failed on this PR's previous head because the old fixture expected a consent prompt from a non-Git folder.
 - Every other job in the PR's previous CI run was cancelled, not failed.
 - This PR stacks on #128 (through `8d81da3b`) and #162. It merges after both: then merge `origin/main` again, and the remaining diff is the eight reclaim files plus this note.
+- 2026-11-26: `origin/main` (`b57b8d53`, through #160) merged cleanly again before the push. None of its ten commits touch this PR's files.
 
 **Local verification (one file at a time).**
 - core `background-job-store.test.ts`: 19 pass.
