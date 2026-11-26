@@ -15,7 +15,7 @@ import {
   type ModelPlanCatalogOptions,
 } from "./model-plan-catalog-policy.js"
 import { requireModelPlans } from "./model-plan-config.js"
-import { persistentStore } from "./persistent-store.js"
+import { COMPARE_AND_SET_WITH_EXPIRY, persistentStore } from "./persistent-store.js"
 import { ApiError, handleApiError, json, readJson, requireMethod, type ApiRequest, type ApiResponse } from "./http.js"
 import { Hosted } from "../../packages/schema/src/hosted.js"
 import type { EntitlementSnapshot } from "../../packages/schema/src/codium-entitlements.js"
@@ -123,7 +123,7 @@ export async function handleModelPlanEstimate(
 }
 
 /**
- * Answers cost step `step` for the snapshot's period: the kept answer when there is one from this pool step or above,
+ * Answers cost step `step` for the snapshot's period: the kept answer when its pool step is at or below this one,
  * otherwise a new one, kept until a day after the period ends. The answer depends only on the cost step and the pool,
  * so every kind of estimate shares one answer per step.
  */
@@ -134,7 +134,6 @@ async function answerStep(
   step: number,
   fetcher: typeof fetch,
 ) {
-  const now = Date.now()
   const pool = await snapshotPool(account, snapshot, fetcher)
   // Only until reconcile has made (or finished replacing) the period's key: read again shortly.
   if (!pool) throw modelSpendStale()
@@ -148,32 +147,27 @@ async function answerStep(
     step,
   )
   const poolStep = floorStep(Math.max(1, pool.totalMicro))
-  const raw = await persistentStore(["GET", key], fetcher)
-  const saved = savedAnswer(raw, poolStep)
-  if (saved) {
-    json(response, 200, saved)
-    return
-  }
   const answer = estimateAnswer(step, pool.totalMicro, dailyShare)
-  // The answer for this step stays until a day after the period ends. A first answer is set only while none is kept,
-  // so of two parallel first answers both callers get the one stored (unless it is from a higher pool step than
-  // theirs); an answer kept from a higher pool step than this one is replaced.
-  const stored = await persistentStore(
-    [
-      "SET",
-      key,
-      JSON.stringify({ answer, poolStep }),
-      ...(typeof raw === "string" ? [] : ["NX"]),
-      "PX",
-      Math.max(1, snapshot.periodEnd + 86_400_000 - now),
-    ],
-    fetcher,
-  )
-  json(
-    response,
-    200,
-    stored === "OK" ? answer : (savedAnswer(await persistentStore(["GET", key], fetcher), poolStep) ?? answer),
-  )
+  const record = JSON.stringify({ answer, poolStep })
+  // Keep the smaller pool step even if a request that observed a larger one finishes later. After a contested
+  // write, read the winner and try once more only if it would understate this request's share.
+  for (let writes = 0; ; writes++) {
+    const raw = await persistentStore(["GET", key], fetcher)
+    const saved = savedAnswer(raw, poolStep)
+    if (saved) {
+      json(response, 200, saved)
+      return
+    }
+    if (writes === 2) throw modelSpendStale()
+    const ttl = Math.max(1, snapshot.periodEnd + 86_400_000 - Date.now())
+    const stored = typeof raw === "string"
+      ? Number(await persistentStore(["EVAL", COMPARE_AND_SET_WITH_EXPIRY, 1, key, raw, record, ttl], fetcher)) === 1
+      : await persistentStore(["SET", key, record, "NX", "PX", ttl], fetcher) === "OK"
+    if (stored) {
+      json(response, 200, answer)
+      return
+    }
+  }
 }
 
 /**
