@@ -199,7 +199,7 @@ const layer = Layer.effect(
           ]) {
             const next = catalog.find((item) => item.name === target.agent)
             if (!next) continue
-            const role = /^codium:(floor|default|ceiling)$/.exec(target.model ?? "")?.[1]
+            const role = Playbooks.modelRole(target.model)
             const trustedPlaybook = named?.source === "user" && Playbooks.validName(named.name)
             if ((target.model ?? "").startsWith("codium:") &&
               (!role || !trustedPlaybook || !provider.playbookModel || guest || Config.local().enabled)) {
@@ -207,7 +207,7 @@ const layer = Layer.effect(
               continue
             }
             const resolved = role && provider.playbookModel ? yield* provider.playbookModel(
-              role as "floor" | "default" | "ceiling", Token.estimate(target.verifier ? stage.verify!.prompt : stage.prompt),
+              role, Token.estimate(target.verifier ? stage.verify!.prompt : stage.prompt),
             ) : undefined
             const chosenModel = resolved ? `${resolved.providerID}/${resolved.modelID}` : target.model
             if (resolved) {
