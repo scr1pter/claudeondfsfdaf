@@ -56,6 +56,7 @@ import { limitsLine, type TaskTranslate } from "./task-limits"
 import { CodiumUsage } from "@vectordevai/core/codium-usage"
 import { useLanguage } from "@/context/language"
 import { ConnectTaskRows } from "@/features/connect/task-rows-section"
+import { taskMessageNote } from "./task-continue-copy"
 
 const MAX_ROWS = 12
 /** How long a first click on Merge or Discard stays armed, as the workspace controls' confirmTwice. */
@@ -1161,11 +1162,7 @@ function AgentDetails(props: { agent: TaskAgent; tasks: BackgroundTasks }) {
             when={!editable() && continuable()}
             fallback={
               <>
-                <p>
-                  {editable()
-                    ? "Delivered at the next safe step. Your conversation stays open."
-                    : "This task has finished. Open its session to continue; your draft is kept."}
-                </p>
+                <p>{taskMessageNote(editable())}</p>
                 <button type="submit" disabled={!editable() || state.sending || !props.tasks.draft(props.agent).trim()}>
                   {state.sending ? "Sending…" : "Send message"}
                 </button>
