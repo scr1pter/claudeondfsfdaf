@@ -505,6 +505,11 @@ describe("Background commands", () => {
       expect(page.tasks.error()).toBe("Task updates unavailable. Showing the last known state.")
 
       fake.state.invalidBoard = false
+      delete fake.state.shells
+      await refresh()
+      expect(page.tasks.shells()).toEqual([])
+      expect(page.tasks.error()).toBe("Background command status is unavailable.")
+
       fake.state.shells = []
       await refresh()
       expect(page.tasks.shells()).toEqual([])
@@ -534,6 +539,7 @@ describe("Background commands", () => {
     await pause(200)
     expect(fake.boards.every((shells) => shells === "")).toBe(true)
     expect(page.tasks.shells()).toEqual([])
+    expect(page.tasks.error()).toBeUndefined()
 
     setCapabilities({ ...NO_CAPABILITIES, backgroundSubagents: true, backgroundShells: true })
     await until(() => page.tasks.shells().length === 1)

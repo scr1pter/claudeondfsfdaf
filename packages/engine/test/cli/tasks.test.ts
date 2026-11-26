@@ -175,7 +175,7 @@ function info(input: Partial<Task.Info> & { id: string }): Task.Info {
 
 function server(
   requests: Request[],
-  input: { capabilities?: () => Response; tasks?: Task.Info[]; shells?: Task.Shell[] } = {},
+  input: { capabilities?: () => Response; tasks?: Task.Info[]; shells?: Task.Shell[]; truncated?: boolean } = {},
 ) {
   return createVectorClient({
     baseUrl: "http://fixture.invalid",
@@ -210,7 +210,7 @@ function server(
       if (path.endsWith("/tasks"))
         return Response.json({
           tasks: input.tasks ?? [],
-          truncated: false,
+          truncated: input.truncated ?? false,
           ...(input.shells ? { shells: input.shells } : {}),
         })
       return Response.json({}, { status: 404 })
@@ -226,6 +226,25 @@ function operations(requests: Request[]) {
       return [request.method, url.pathname, url.search.replace(/[?&]directory=[^&]*/, "")]
     })
 }
+
+test("tasks list --shells distinguishes an unavailable command list from an empty list", async () => {
+  const options = { action: "list", session: "parent", shells: true }
+  const requests: Request[] = []
+  const unavailable = await executeTaskCommand(server(requests), options)
+
+  expect(operations(requests)).toEqual([
+    ["GET", "/experimental/session/parent/tasks", "?descendants=false&shells=true"],
+  ])
+  expect(tasksForOutput(unavailable)).toEqual({ tasks: [], truncated: false })
+  expect(await formatTaskResult(options, unavailable)).toBe(
+    "No subagent tasks.\nCould not list background commands. Try again.",
+  )
+
+  const empty = await executeTaskCommand(server([], { shells: [] }), options)
+  expect(tasksForOutput(empty)).toEqual({ tasks: [], truncated: false, shells: [] })
+  expect(await formatTaskResult(options, empty)).toBe("No subagent tasks.\nNo background commands.")
+  expect(await formatTaskResult({ action: "list" }, unavailable)).toBe("No subagent tasks.")
+})
 
 const yes = { confirm: async () => true }
 
@@ -415,6 +434,28 @@ test("stop --background stops only running background subagents, and refuses an 
   await expect(
     executeTaskCommand(server([]), { action: "stop", session: "parent", background: true, all: true }),
   ).rejects.toThrow("Choose --background, --all or specific task IDs")
+})
+
+test("stop --background reports a partial list and stops only listed background subagents", async () => {
+  const options = { action: "stop", session: "parent", background: true }
+  const warning = "The server returned an incomplete task list. More background subagents may still be running."
+  const requests: Request[] = []
+  const empty = await executeTaskCommand(server(requests, { tasks: [], truncated: true }), options)
+  expect(await formatTaskResult(options, empty)).toBe(`No listed background subagents were stopped.\n${warning}`)
+  expect(tasksForOutput(empty)).toEqual({ tasks: [], truncated: true })
+  expect(operations(requests)).toEqual([["GET", "/experimental/session/parent/tasks", "?active=true"]])
+
+  const mixed: Request[] = []
+  const tasks = [
+    info({ id: "ses_bg", background: true }),
+    info({ id: "ses_fg", background: false }),
+    info({ id: "desk", source: "team" }),
+  ]
+  const stopped = await executeTaskCommand(server(mixed, { tasks, truncated: true }), options)
+  expect(await mixed[1].json()).toEqual({ taskIDs: ["ses_bg"] })
+  expect(await formatTaskResult(options, stopped)).toStartWith("Stopped 1 background subagent.")
+  expect(await formatTaskResult(options, stopped)).toEndWith(warning)
+  expect(tasksForOutput(stopped)).toMatchObject({ truncated: true })
 })
 
 test("merge and discard refuse under the agent marker before any request, and need a confirmation", async () => {
