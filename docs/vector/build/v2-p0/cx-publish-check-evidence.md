@@ -1,6 +1,6 @@
 # Published check evidence stays readable (PR #106 takeover)
 
-Branch `cx-publish-check-evidence`, finishing Codex's draft PR #106 (`publish-check-evidence`). The draft had been idle for more than a day, so this v2 run took it over on 2026-11-26 to finish it before the Saturday deadline. No feature flag changes, no public claims.
+Branch `cx-publish-check-evidence`, finishing Codex's draft PR #106 (`publish-check-evidence`). The draft had been idle for more than a day, so this v2 run took it over on 2026-11-26 to finish it. No feature flag changes, no public claims.
 
 ## 2026-11-26, v3 check evidence rendered as literal tags and broken fences
 
