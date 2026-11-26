@@ -423,8 +423,11 @@ export function createBackgroundTasks(input: BackgroundTasksInput): BackgroundTa
       return
     }
     if (!observed) {
-      if (board.tasks.length) setBoard("error", "Task updates unavailable. Showing the last known state.")
-      if (!board.tasks.length && local?.truncated)
+      if (board.tasks.length || board.shells.length) {
+        setBoard("error", "Task updates unavailable. Showing the last known state.")
+        return
+      }
+      if (local?.truncated)
         setBoard("error", "Showing the most recent tasks. Open a child session for more.")
       return
     }
