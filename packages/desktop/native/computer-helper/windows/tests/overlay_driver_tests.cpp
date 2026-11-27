@@ -419,6 +419,32 @@ size_t run_overlay_driver_tests() {
     require(skipped.skipped && !skipped.uia && !skipped.wire().HasKey(L"uia"), "overlay-driver.skip-never-carries-uia-detail");
   });
   test([] {
+    WindowsUiaDiagnostic first;
+    first.phase.store(WindowsUiaPhase::root_dispatch_returned);
+    first.note_timeout(WindowsUiaExpiry::caller_wait, WindowsUiaCallerWait::ready);
+    first.phase.store(WindowsUiaPhase::runtime_id);
+    first.note_timeout(WindowsUiaExpiry::worker_current);
+    const auto stage = overlay_driver_uia_stage(first.failure_phase(false));
+    require(stage.has_value(), "overlay-driver.initial-root-stage-is-closed");
+    OverlayDriverUiaFailure paired{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false,
+      WindowsUiaExpiry::caller_wait, {}, OverlayDriverUiaRootAttempt::replacement,
+      WindowsUiaRootWait{WindowsUiaRootProgress::dispatch_started, WindowsUiaCallerWait::pending},
+      OverlayDriverUiaInitialRoot{*stage, first.failure_expiry(false), first.failure_root_wait()}};
+    const auto report = [&](const auto& detail) {
+      return OverlayDriverResult{false, false, L"native_failure", L"uia-root-element", L"core_failure:no_ui_tree", detail};
+    };
+    const auto result = report(paired);
+    const auto detail = result.wire().GetNamedObject(L"uia");
+    const auto original = detail.GetNamedObject(L"initialRoot");
+    require(wire_keys(original) == std::set<std::wstring>{L"stage", L"expiry", L"rootProgress", L"callerWait"} &&
+      named(original, L"stage") == L"uia-root-element" && named(original, L"expiry") == L"caller-wait" &&
+      named(original, L"rootProgress") == L"dispatch-returned" && named(original, L"callerWait") == L"ready" &&
+      named(detail, L"callerWait") == L"pending" && result.exit_code() == 1,
+      "overlay-driver.replacement-retains-initial-immutable-timeout");
+    paired.root_attempt = OverlayDriverUiaRootAttempt::initial;
+    require(!report(paired).wire().HasKey(L"uia"), "overlay-driver.initial-root-pair-requires-a-replacement");
+  });
+  test([] {
     require(!overlay_driver_uia_stage(WindowsUiaPhase::none) && !overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(windows_uia_phases.size())), "overlay-driver.uia-unknown-phases-have-no-stage");
     for (size_t index = 1; index < windows_uia_phases.size(); ++index) {
       const auto stage = overlay_driver_uia_stage(static_cast<WindowsUiaPhase>(index));

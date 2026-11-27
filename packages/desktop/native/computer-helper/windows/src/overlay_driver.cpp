@@ -232,6 +232,12 @@ StopElement observe_stop(const WindowsUiaBackend& uia, const WindowsWindow& wind
           if (initial_diagnostic) {
             failure->root_attempt = diagnostic == initial_diagnostic ? OverlayDriverUiaRootAttempt::initial : OverlayDriverUiaRootAttempt::replacement;
             if (!available) failure->root_wait = diagnostic->failure_root_wait();
+            // A failed replacement is adopted only after its ticket was admitted. The first timeout snapshot is immutable.
+            if (failure->root_attempt == OverlayDriverUiaRootAttempt::replacement) {
+              if (const auto initial_stage = overlay_driver_uia_stage(initial_diagnostic->failure_phase(false)))
+                failure->initial_root = OverlayDriverUiaInitialRoot{*initial_stage, initial_diagnostic->failure_expiry(false),
+                  initial_diagnostic->failure_root_wait()};
+            }
           }
         }
       }
@@ -458,6 +464,14 @@ int launch_electron(const OverlayDriverOptions& options, const std::shared_ptr<L
   for (;;) { const auto status = WaitForSingleObject(child.get(), 25); if (status == WAIT_OBJECT_0) break; require(status == WAIT_TIMEOUT && life->current() && GetTickCount64() - started < 120'000, L"deadline_exceeded"); }
   DWORD status = 1; require(GetExitCodeProcess(child.get(), &status) != FALSE, L"bootstrap_failed"); return status <= static_cast<DWORD>((std::numeric_limits<int>::max)()) ? static_cast<int>(status) : 1;
 }
+bool insert_root_wait(JsonObject& result, const WindowsUiaRootWait& wait) {
+  static constexpr std::array<std::wstring_view, 3> progress_names{L"before-dispatch", L"dispatch-started", L"dispatch-returned"};
+  const auto progress = static_cast<size_t>(wait.progress);
+  if (progress >= progress_names.size() || (wait.caller != WindowsUiaCallerWait::pending && wait.caller != WindowsUiaCallerWait::ready)) return false;
+  result.Insert(L"rootProgress", JsonValue::CreateStringValue(winrt::hstring(progress_names[progress])));
+  result.Insert(L"callerWait", JsonValue::CreateStringValue(wait.caller == WindowsUiaCallerWait::ready ? L"ready" : L"pending"));
+  return true;
+}
 // Every fact must be in range and coherent, or the whole object is dropped: wire() never fabricates one.
 // A healthy actor never expired a ticket, so it cannot carry an expiry side.
 std::optional<JsonObject> uia_failure_wire(const OverlayDriverUiaFailure& value, std::wstring_view stage) {
@@ -475,14 +489,22 @@ std::optional<JsonObject> uia_failure_wire(const OverlayDriverUiaFailure& value,
     if (value.lookup != OverlayDriverLookup::first || value.call != OverlayDriverUiaCall::root || attempt >= overlay_driver_uia_root_attempts.size()) return {};
     result.Insert(L"rootAttempt", JsonValue::CreateStringValue(winrt::hstring(overlay_driver_uia_root_attempts[attempt])));
   }
-  if (value.root_wait) {
-    static constexpr std::array<std::wstring_view, 3> progress_names{L"before-dispatch", L"dispatch-started", L"dispatch-returned"};
-    const auto progress = static_cast<size_t>(value.root_wait->progress);
-    const auto caller = value.root_wait->caller;
-    if (stage != L"uia-root-element" || !value.root_attempt || value.available || value.expiry != WindowsUiaExpiry::caller_wait ||
-        progress >= progress_names.size() || (caller != WindowsUiaCallerWait::pending && caller != WindowsUiaCallerWait::ready)) return {};
-    result.Insert(L"rootProgress", JsonValue::CreateStringValue(winrt::hstring(progress_names[progress])));
-    result.Insert(L"callerWait", JsonValue::CreateStringValue(caller == WindowsUiaCallerWait::ready ? L"ready" : L"pending"));
+  if (value.root_wait && (stage != L"uia-root-element" || !value.root_attempt || value.available ||
+      value.expiry != WindowsUiaExpiry::caller_wait || !insert_root_wait(result, *value.root_wait))) return {};
+  if (value.initial_root) {
+    if (value.root_attempt != OverlayDriverUiaRootAttempt::replacement) return {};
+    const auto& initial = *value.initial_root;
+    const auto initial_stage = overlay_driver_stage_name(initial.stage);
+    const bool caller_expired = initial.expiry == WindowsUiaExpiry::caller_wait &&
+      (initial_stage == L"uia-root-element" || initial_stage == L"uia-root-wrap" ||
+       initial_stage == L"uia-runtime-id" || initial_stage == L"uia-prepare-connection");
+    const bool worker_expired = initial.expiry == WindowsUiaExpiry::worker_current && initial_stage == L"uia-runtime-id";
+    if (!caller_expired && !worker_expired) return {};
+    JsonObject initial_root;
+    initial_root.Insert(L"stage", JsonValue::CreateStringValue(winrt::hstring(initial_stage)));
+    initial_root.Insert(L"expiry", JsonValue::CreateStringValue(winrt::hstring(windows_uia_expiries[static_cast<size_t>(initial.expiry)])));
+    if (initial.root_wait && (initial_stage != L"uia-root-element" || !insert_root_wait(initial_root, *initial.root_wait))) return {};
+    result.Insert(L"initialRoot", initial_root);
   }
   return result;
 }

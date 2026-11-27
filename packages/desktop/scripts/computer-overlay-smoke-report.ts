@@ -636,15 +636,28 @@ export const COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES = ["none", "worker-current", "wo
 export const COMPUTER_SMOKE_DRIVER_UIA_HRESULTS = ["unobserved", ...COMPUTER_SMOKE_DRIVER_HRESULT_CLASSES] as const
 export type ComputerSmokeDriverStage = (typeof COMPUTER_SMOKE_DRIVER_STAGES)[number]
 export type ComputerSmokeDriverCause = (typeof COMPUTER_SMOKE_DRIVER_CAUSES)[number]
-export type ComputerSmokeDriverUiaFailure = {
+type ComputerSmokeRootWait = {
+  rootProgress: "before-dispatch" | "dispatch-started" | "dispatch-returned"
+  callerWait: "pending" | "ready"
+}
+const COMPUTER_SMOKE_INITIAL_ROOT_STAGES = [
+  "uia-root-element",
+  "uia-root-wrap",
+  "uia-runtime-id",
+  "uia-prepare-connection",
+] as const
+type ComputerSmokeInitialRoot = Partial<ComputerSmokeRootWait> & {
+  stage: (typeof COMPUTER_SMOKE_INITIAL_ROOT_STAGES)[number]
+  expiry: "caller-wait" | "worker-current"
+}
+export type ComputerSmokeDriverUiaFailure = Partial<ComputerSmokeRootWait> & {
   lookup: (typeof COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS)[number]
   call: (typeof COMPUTER_SMOKE_DRIVER_UIA_CALLS)[number]
   actor: (typeof COMPUTER_SMOKE_DRIVER_UIA_ACTORS)[number]
   expiry: (typeof COMPUTER_SMOKE_DRIVER_UIA_EXPIRIES)[number]
   hresult: (typeof COMPUTER_SMOKE_DRIVER_UIA_HRESULTS)[number]
   rootAttempt?: "initial" | "replacement"
-  rootProgress?: "before-dispatch" | "dispatch-started" | "dispatch-returned"
-  callerWait?: "pending" | "ready"
+  initialRoot?: ComputerSmokeInitialRoot
 }
 export type ComputerSmokeDriverFailure = {
   stage: ComputerSmokeDriverStage
@@ -680,11 +693,51 @@ export function computerSmokeDriverFailure(value: Record<string, unknown>): Comp
   }
 }
 
+function computerSmokeRootWait(value: Record<string, unknown>, allowed: boolean): ComputerSmokeRootWait | undefined {
+  const { rootProgress, callerWait } = value
+  if (rootProgress === undefined && callerWait === undefined) return undefined
+  if (
+    !allowed ||
+    (rootProgress !== "before-dispatch" &&
+      rootProgress !== "dispatch-started" &&
+      rootProgress !== "dispatch-returned") ||
+    (callerWait !== "pending" && callerWait !== "ready")
+  )
+    throw new Error("The native driver UIA failure facts are invalid.")
+  return { rootProgress, callerWait }
+}
+
+function computerSmokeInitialRoot(value: unknown): ComputerSmokeInitialRoot {
+  if (!record(value) || !exact(value, ["stage", "expiry", "rootProgress", "callerWait"]))
+    throw new Error("The native driver initial root facts are invalid.")
+  const { stage, expiry } = value
+  if (
+    !(COMPUTER_SMOKE_INITIAL_ROOT_STAGES as readonly unknown[]).includes(stage) ||
+    (expiry !== "caller-wait" && (expiry !== "worker-current" || stage !== "uia-runtime-id"))
+  )
+    throw new Error("The native driver initial root facts are invalid.")
+  return {
+    stage: stage as ComputerSmokeInitialRoot["stage"],
+    expiry,
+    ...computerSmokeRootWait(value, stage === "uia-root-element"),
+  }
+}
+
 // An attempt label is optional on the first root only. A healthy actor cannot name an expiry side.
 function computerSmokeDriverUiaFailure(value: unknown, stage: string): ComputerSmokeDriverUiaFailure {
   if (
     !record(value) ||
-    !exact(value, ["lookup", "call", "actor", "expiry", "hresult", "rootAttempt", "rootProgress", "callerWait"]) ||
+    !exact(value, [
+      "lookup",
+      "call",
+      "actor",
+      "expiry",
+      "hresult",
+      "rootAttempt",
+      "rootProgress",
+      "callerWait",
+      "initialRoot",
+    ]) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_LOOKUPS as readonly unknown[]).includes(value.lookup) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_CALLS as readonly unknown[]).includes(value.call) ||
     !(COMPUTER_SMOKE_DRIVER_UIA_ACTORS as readonly unknown[]).includes(value.actor) ||
@@ -695,15 +748,7 @@ function computerSmokeDriverUiaFailure(value: unknown, stage: string): ComputerS
       (value.lookup !== "first" ||
         value.call !== "root" ||
         (value.rootAttempt !== "initial" && value.rootAttempt !== "replacement"))) ||
-    ((value.rootProgress !== undefined || value.callerWait !== undefined) &&
-      (stage !== "uia-root-element" ||
-        value.rootAttempt === undefined ||
-        value.actor !== "retired" ||
-        value.expiry !== "caller-wait" ||
-        (value.rootProgress !== "before-dispatch" &&
-          value.rootProgress !== "dispatch-started" &&
-          value.rootProgress !== "dispatch-returned") ||
-        (value.callerWait !== "pending" && value.callerWait !== "ready")))
+    (value.initialRoot !== undefined && value.rootAttempt !== "replacement")
   )
     throw new Error("The native driver UIA failure facts are invalid.")
   return {
@@ -713,7 +758,14 @@ function computerSmokeDriverUiaFailure(value: unknown, stage: string): ComputerS
     expiry: value.expiry as ComputerSmokeDriverUiaFailure["expiry"],
     hresult: value.hresult as ComputerSmokeDriverUiaFailure["hresult"],
     ...(value.rootAttempt === undefined ? {} : { rootAttempt: value.rootAttempt }),
-    ...(value.rootProgress === undefined ? {} : { rootProgress: value.rootProgress, callerWait: value.callerWait }),
+    ...computerSmokeRootWait(
+      value,
+      stage === "uia-root-element" &&
+        value.rootAttempt !== undefined &&
+        value.actor === "retired" &&
+        value.expiry === "caller-wait",
+    ),
+    ...(value.initialRoot === undefined ? {} : { initialRoot: computerSmokeInitialRoot(value.initialRoot) }),
   }
 }
 

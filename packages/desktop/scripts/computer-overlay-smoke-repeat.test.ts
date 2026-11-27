@@ -108,6 +108,57 @@ test("preserves closed root dispatch and wait facts without reclassifying old or
   expect(observeComputerStop(failed("uia-runtime-id", facts)).reason).toBe("malformed_evidence")
 })
 
+test("pairs a terminal replacement with its immutable initial root observation", () => {
+  const replacement = { ...uia, rootAttempt: "replacement", rootProgress: "dispatch-started", callerWait: "pending" }
+  const initialRoot = {
+    stage: "uia-root-element",
+    expiry: "caller-wait",
+    rootProgress: "dispatch-returned",
+    callerWait: "ready",
+  }
+  const paired = { ...replacement, initialRoot }
+  expect(observeComputerStop(failed("uia-root-element", paired))).toMatchObject({ status: "hf7", uia: paired })
+  expect(observeComputerStop(failed("uia-root-element", replacement)).uia).toEqual(replacement)
+
+  const workerExpiry = {
+    ...uia,
+    rootAttempt: "replacement",
+    initialRoot: { stage: "uia-runtime-id", expiry: "worker-current" },
+  }
+  expect(observeComputerStop(failed("uia-root-wrap", workerExpiry))).toMatchObject({
+    status: "failed",
+    uia: workerExpiry,
+  })
+  const prepareExpiry = {
+    ...workerExpiry,
+    actor: "healthy",
+    expiry: "none",
+    initialRoot: { stage: "uia-prepare-connection", expiry: "caller-wait" },
+  }
+  expect(observeComputerStop(failed("uia-root-element", prepareExpiry))).toMatchObject({
+    status: "failed",
+    uia: prepareExpiry,
+  })
+
+  for (const invalid of [
+    { ...paired, rootAttempt: "initial" },
+    { ...paired, rootAttempt: undefined },
+    { ...paired, lookup: "refresh" },
+    { ...paired, call: "hit" },
+    { ...paired, initialRoot: { ...initialRoot, hresult: "unobserved" } },
+    { ...paired, initialRoot: { ...initialRoot, stage: "post" } },
+    { ...paired, initialRoot: { ...initialRoot, expiry: "worker-budget" } },
+    { ...paired, initialRoot: { ...initialRoot, callerWait: undefined } },
+    { ...paired, initialRoot: { ...initialRoot, rootProgress: undefined } },
+    { ...paired, initialRoot: { ...initialRoot, rootProgress: "unknown" } },
+    { ...paired, initialRoot: { ...initialRoot, callerWait: "unknown" } },
+    { ...paired, initialRoot: { ...initialRoot, stage: "uia-prepare-connection" } },
+    { ...workerExpiry, initialRoot: { stage: "uia-root-element", expiry: "worker-current" } },
+  ]) {
+    expect(observeComputerStop(failed("uia-root-element", invalid)).reason).toBe("malformed_evidence")
+  }
+})
+
 test("skips, missing evidence, timeouts and malformed or inconsistent reports stay visible", () => {
   const prerun =
     'computer-smoke-unavailable {"protocol":1,"platform":"win32","skipped":true,"reason":"elevated_fixture"}\n'
