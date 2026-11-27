@@ -876,7 +876,8 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
       if (current.kind !== "ready") return Promise.resolve()
       return finishThenRefresh()
     },
-    refresh,
+    /** Try again: an install held by a first load that failed starts once the lists load. */
+    refresh: () => refresh().then(startIntent),
     /** A Slack or Jira link code for the signed-in account (3.8). Asking again ends the older code. */
     issueCode(platform: "slack" | "jira"): Promise<void> {
       if (current.kind !== "ready") return Promise.resolve()

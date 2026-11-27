@@ -2114,6 +2114,24 @@ describe("cancelled sign-ins and directory installs", () => {
       EVERYWHERE_AUTHORIZE.linear,
     )
 
+    // A first load that failed holds the intent; Try again starts it once the lists load.
+    let failures = 1
+    const retried = browser((route, init) =>
+      route === EVERYWHERE_ROUTES.installs && init.method === "GET" && failures-- > 0
+        ? Promise.resolve(Response.json({ error: { code: "EVERYWHERE_UNAVAILABLE" } }, { status: 503 }))
+        : loopback(route, init),
+    )
+    retried.model.installOnReady("slack")
+    await retried.model.setSession(as(alice))
+    expect(retried.model.state()).toMatchObject({ kind: "ready", loaded: false, problem: "unavailable" })
+    expect(retried.navigations).toEqual([])
+    await retried.model.refresh()
+    await retried.model.refresh()
+    expect(retried.calls.filter((call) => call.init.method === "POST").map((call) => call.path)).toEqual([
+      EVERYWHERE_ROUTES.installs,
+    ])
+    expect(retried.navigations).toHaveLength(1)
+
     env = {}
     harness.use(createAccountApi(deps()))
     const off = browser()

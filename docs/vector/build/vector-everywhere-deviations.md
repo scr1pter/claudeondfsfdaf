@@ -4842,7 +4842,8 @@ the unrouted drafts.
   `takeInstallIntent` removes every `install` key from the address with `history.replaceState` before anything
   starts, keeping the other query keys and the fragment, and answers the platform only for exactly one `slack` or
   `linear`. The model's `installOnReady` holds it, and `startInstall`'s route runs once, after the lists have loaded
-  for a signed-in account; signed out, refused or off it never runs. Signed out, the state's `install` puts it in the
+  for a signed-in account (also after Try again, when the first load failed); signed out, refused or off it never
+  runs. Signed out, the state's `install` puts it in the
   sign-in link: `signInPath(pathname, focus, install)` keeps only `job` and `install`, only on /everywhere, and its
   same-origin check is unchanged, so no code, state or fragment reaches /login. `signInAgain` keeps it too.
   EverywhereAccount.tsx drops the intent when the page also opened with an OAuth return, so a finishing return is not
