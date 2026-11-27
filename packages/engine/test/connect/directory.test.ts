@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn } from "bun:test"
 import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -31,6 +31,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
+import { FileLock } from "@/tool/file-lock"
 import { NpmTest } from "../fake/npm"
 import { noSweep } from "../fixture/connect-sweep"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
@@ -1058,6 +1059,84 @@ it.instance(
       ConnectDirectory.retire(token)
       expect(yield* ConnectDirectory.write(token, terminal).pipe(Effect.flip)).toMatchObject({ phase: "authority" })
       expect((yield* ConnectDirectory.load(f.scope, id))?.run).toEqual(terminal)
+    }),
+  options,
+)
+
+it.instance(
+  "receipt replacement waits for an interrupted reader to close its handle",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      script.state = "unavailable"
+      const queued = yield* f.owner.directoryReview(reviewInput())
+      const done = yield* f.ended(queued.id)
+      const receipt = yield* ConnectDirectory.load(f.scope, queued.id)
+      if (!receipt) throw new Error("The actual directory receipt is missing")
+      const token = yield* ConnectDirectory.issue({ sessionID: receipt.anchor, ...f.scope })
+      const id = Connect.RunID.create()
+      const pending: Connect.Run = { ...queued, id, request: { ...queued.request, id, requestID: id } }
+      const terminal: Connect.Run = { ...done, id, request: pending.request }
+      yield* ConnectDirectory.write(token, pending)
+      const target = path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${id}.json`)
+      const io = yield* Effect.promise(() => import("node:fs/promises"))
+      const open = io.open
+      const rename = io.rename
+      const lock = FileLock.withFiles
+      const opened = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const writerReached = Promise.withResolvers<"lock" | "rename">()
+      let held = false
+      const readSpy = spyOn(io, "open").mockImplementation(async (...args) => {
+        const file = await open(...args)
+        if (args[0] !== target) return file
+        const close = file.close.bind(file)
+        file.close = async () => {
+          await close()
+          held = false
+        }
+        held = true
+        opened.resolve()
+        await release.promise
+        return file
+      })
+      const renameSpy = spyOn(io, "rename").mockImplementation(async (...args) => {
+        if (args[1] === target) {
+          writerReached.resolve("rename")
+          // Model Windows replacement semantics with the real read handle still open.
+          if (held) throw Object.assign(new Error("File held open"), { code: "EPERM" })
+        }
+        return rename(...args)
+      })
+      try {
+        const reader = yield* ConnectDirectory.load(f.scope, id).pipe(Effect.forkChild)
+        yield* Effect.promise(() => opened.promise)
+        const stop = yield* Fiber.interrupt(reader).pipe(Effect.forkChild({ startImmediately: true }))
+        const observer = yield* lock([target])(Effect.sync(() => held)).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        )
+        // Either the writer reaches the shared lock or it calls rename while the read is still open.
+        const lockSpy = spyOn(FileLock, "withFiles").mockImplementation((paths) => {
+          if (paths.includes(target)) writerReached.resolve("lock")
+          return lock(paths)
+        })
+        try {
+          const writer = yield* ConnectDirectory.write(token, terminal).pipe(Effect.exit, Effect.forkChild)
+          const reached = yield* Effect.promise(() => writerReached.promise)
+          release.resolve()
+          yield* Fiber.join(stop)
+          const overlapped = yield* Fiber.join(observer)
+          const result = yield* Fiber.join(writer)
+          expect([reached, overlapped, Exit.isSuccess(result)]).toEqual(["lock", false, true])
+          expect((yield* ConnectDirectory.load(f.scope, id))?.run).toEqual(terminal)
+        } finally {
+          lockSpy.mockRestore()
+        }
+      } finally {
+        release.resolve()
+        renameSpy.mockRestore()
+        readSpy.mockRestore()
+      }
     }),
   options,
 )

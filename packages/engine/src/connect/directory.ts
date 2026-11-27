@@ -129,9 +129,17 @@ const basename = (value: string) => Schema.is(Connect.RunID)(value) && /^[A-Za-z
 const missing = (cause: unknown) =>
   typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT"
 
+// Windows can reject replacement while a reader holds the leaf open. Once admitted, keep the lock until the
+// promise finishes even if its caller is interrupted, since interrupting the effect cannot cancel the filesystem IO.
+const receiptIO = <A>(target: string, operation: () => Promise<A>) =>
+  Effect.tryPromise({ try: operation, catch: (cause) => cause }).pipe(
+    Effect.uninterruptible,
+    FileLock.withFiles([target]),
+  )
+
 // A bounded receipt read: null when there is no file, undefined for a non-file, an oversized file or bad JSON.
 const bounded = (target: string) =>
-  Effect.tryPromise(async () => {
+  receiptIO(target, async () => {
     const leaf = await lstat(target).catch((cause: unknown) => (missing(cause) ? null : Promise.reject(cause)))
     if (leaf === null) return null
     if (!leaf.isFile()) return undefined
@@ -304,10 +312,14 @@ function* writeReceipt(token: Token, run: Connect.Run) {
         try {
           phase = "write"
           await writeFile(temporary, value, { mode: 0o600, flag: "wx" })
-          phase = "retired-before-rename"
-          if (!active()) throw new Error({ message: "The receipt writer was retired." })
-          phase = "rename"
-          await rename(temporary, target)
+          await Effect.runPromise(
+            receiptIO(target, async () => {
+              phase = "retired-before-rename"
+              if (!active()) throw new Error({ message: "The receipt writer was retired." })
+              phase = "rename"
+              await rename(temporary, target)
+            }),
+          )
         } finally {
           await rm(temporary, { force: true }).catch(() => undefined)
         }
