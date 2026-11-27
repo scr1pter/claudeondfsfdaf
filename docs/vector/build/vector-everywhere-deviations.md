@@ -2899,6 +2899,7 @@ The OAuth callbacks, every other route and api/ file, src/pages, the prune scrip
 - **The OAuth code limits differ** (review round one, finding 5): the Slack callback (api/_lib/everywhere/slack/install.ts:56) redirects codes of up to 2,048 characters, but identity.ts `OAUTH_CODE` and the landing's `OAUTH_CODE_PATTERN` (everywhere-model.ts:56) take at most 1,024, as the Linear callback does, so a Slack code of 1,025 to 2,048 characters lands and reads as `invalid-return` instead of a server problem. The callback and identity should use one limit, so a callback never redirects a code the landing refuses. Not changed here: the callbacks are outside this package.
 - **An ended job's sealed summary outlives its installation** (E13, for the lead): `eraseInstallationJobs` could clear `summaryEnc` on the installation's ended jobs; the history index has them.
 - **Cancelled and directory OAuth returns** (for the lead and the owner): `?error=access_denied&state=…` gets a blank 400 from both callbacks rather than a landing with a fixed problem, and spec §3.8's directory install (sign in first, then finish) is not built: a signed-out landing drops the return. Both matter for the listings (L2 Slack, L3 Linear).
+  *2026-11-27 (EV-23):* closed in code; see "2026-11-27, EV-23: cancelled sign-ins and directory installs". Registering the direct install URLs stays with the owner.
 - **The lane's path filter** (vector-everywhere.yml, FIT-4, review-fixes) does not cover packages/web/src/drafts/everywhere*.
 - **`?job=` is dropped by the sign-in round trip** (`signInPath` keeps the path only), and the desktop's link has none yet.
 - **No platform thread links**; the link page also reads each installation's repositories; the fragment stays in the address bar until the page's script runs.
@@ -4813,3 +4814,54 @@ body's `prUrl`, SETTLE_RECORDED's committed reply, the listeners and the release
 entries above, and no existing spec text changed meaning. vector-everywhere-spec.md §11 has a dated status line. Not
 forwarded here: `ChatContext.outside`, `taskPart`'s new parameter and the two import paths named in EV-28's list for
 vector-at-mention.yml, which are code facts the @vector lane can read from source.
+
+## 2026-11-27, EV-23: cancelled sign-ins and directory installs
+
+Closes EV-23's "Cancelled and directory OAuth returns". PR #135 built the cancel half and was closed unmerged; its
+callback was reused here with the changes listed below. All of it sits behind VECTOR_EVERYWHERE_ENABLED (off) and in
+the unrouted drafts.
+
+- **What was wrong.** When a person cancelled at Slack or Linear, the platform returned
+  `?error=access_denied&state=…` and both callbacks answered a blank 400. Spec §3.8's install that starts in a
+  platform's directory (sign in first, then finish) was not built: `signInPath` dropped any intent, and a code with
+  no state got a blank 400.
+- **Callbacks.** `slackOAuthCallback` and `linearOAuthCallback` both return `oauthCallback(platform, config)` from the
+  new api/_lib/everywhere/oauth-callback.ts. It checks the method and the platform switch first, as before. A repeated
+  `code`, `state` or `error` answers 400. With an `error` and no `code`, and the error a short token
+  (`/^[a-z_]{1,64}$/`), it answers 303 to `/everywhere#platform=<p>&error=access_denied`; any other token gives
+  `error=other`. It never reads `error_description` or `error_uri`, and never puts the state in the address. A code
+  with a state works as before (`OAUTH_CODE`, the stored state shape). A code with no state, or an empty one, answers
+  303 to `/everywhere?install=<p>`: the code is dropped and never exchanged. Every redirect sets
+  `referrer-policy: no-referrer` and `cache-control: no-store`, and none makes a platform call or reads the store.
+- **Landing.** `readOAuthReturn` also accepts exactly `platform` (Slack or Linear) and `error=access_denied`, and
+  answers `{ platform, cancelled: true }`. `error=other`, a repeated key or an extra key reads as `invalid-return`.
+  `takeOAuthReturn` also strips a fragment that names `error`. `finishOAuth` turns a cancellation into the failed
+  landing `cancelled` ("You cancelled the sign-in. Start again from Connect or Link when you are ready.") and sends
+  nothing. The server's state was not used, and it expires after its 10 minutes.
+- **Directory install.** `/everywhere?install=slack|linear` is the documented direct install entry.
+  `takeInstallIntent` removes every `install` key from the address with `history.replaceState` before anything
+  starts, keeping the other query keys and the fragment, and answers the platform only for exactly one `slack` or
+  `linear`. The model's `installOnReady` holds it, and `startInstall`'s route runs once, after the lists have loaded
+  for a signed-in account; signed out, refused or off it never runs. Signed out, the state's `install` puts it in the
+  sign-in link: `signInPath(pathname, focus, install)` keeps only `job` and `install`, only on /everywhere, and its
+  same-origin check is unchanged, so no code, state or fragment reaches /login. `signInAgain` keeps it too.
+  EverywhereAccount.tsx drops the intent when the page also opened with an OAuth return, so a finishing return is not
+  cut short by a new install.
+- **Different from the plan or PR #135.** (a) The cancel redirect does not require a state: a cancel from a directory
+  install has none, and the notice is fixed text. PR #135 answered 400 without one. (b) Other error tokens map to
+  `error=other`, as the plan says, where PR #135 answered 400. (c) The page shows `error=other` as `invalid-return`
+  rather than a new problem, as the plan's `"invalid"` answer implies. (d) The plan's optional shared code limit was
+  already done by `40a6ee70c`.
+- **Tests.** everywhere-slack-oauth.test.ts and everywhere-linear-oauth.test.ts: `access_denied` with a state, an
+  `error_description` and an `error_uri` gives 303 to the fixed fragment with no-store and no-referrer; other tokens
+  give `error=other`; no parameters, a code with an error, a repeated key, an upper-case or over-long token, or a slash
+  give 400; a stateless code gives 303 to `/everywhere?install=<p>`; `native.calls` stays empty. everywhere-pages.test.ts:
+  a new describe, "cancelled sign-ins and directory installs" (the cancel through the real callback for each platform,
+  with the store untouched by the callback, no oauth-finish POST, the cancelled notice rendered and the state still
+  stored; `signInPath` with `install`; `takeInstallIntent`; the intent starting once and never while signed out or
+  off), plus eight malformed error fragments and one cancelled read in the existing landing case. Red first: against
+  main's callbacks the two new cases in each oauth file fail (400 for 303); against main's model with only a stub
+  `takeInstallIntent`, six pages cases fail. All pass with the change (7, 18 and 73 pass).
+- **Owner action left.** At the 2.0.0 move, set Slack's direct install URL and the Linear directory link to
+  `https://vectordev.ai/everywhere?install=slack` and `https://vectordev.ai/everywhere?install=linear`. Until then
+  no platform sends a person to the new entry.

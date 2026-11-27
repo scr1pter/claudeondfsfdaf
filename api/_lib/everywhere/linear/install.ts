@@ -1,8 +1,9 @@
-import { ApiError, queryValue, redirect, requireMethod, type ApiRequest, type ApiResponse } from "../../http.js"
-import { platformOn, readConfig, type EverywhereConfig, type LinearConfig } from "../config.js"
+import { ApiError } from "../../http.js"
+import { readConfig, type EverywhereConfig, type LinearConfig } from "../config.js"
 import type { DataKey } from "../crypto.js"
 import { PLATFORM_HOSTS, platformFetch } from "../fetch.js"
-import { installToken, OAUTH, OAUTH_CODE, type InstallRecord, type OAuthExchange } from "../identity.js"
+import { installToken, OAUTH, type InstallRecord, type OAuthExchange } from "../identity.js"
+import { oauthCallback } from "../oauth-callback.js"
 import { linearApi } from "./client.js"
 import { linearGrant, linearOAuth, parseLinearCredentials } from "./credentials.js"
 import { linearId, linearObject } from "./verify.js"
@@ -49,15 +50,5 @@ export async function revokeLinear(installation: string, record: InstallRecord, 
 
 /** No GET account authority: the original state is finished only by the bearer-authenticated account POST. */
 export function linearOAuthCallback(config: () => EverywhereConfig = readConfig) {
-  return async (request: ApiRequest, response: ApiResponse) => {
-    try {
-      requireMethod(request, "GET")
-      if (!platformOn(config(), "linear")) { response.statusCode = 404; response.end(); return }
-      const code = queryValue(request, "code")
-      const state = queryValue(request, "state")
-      if (!code || !OAUTH_CODE.test(code) || !state || !/^[A-Za-z0-9_-]{16,128}$/.test(state)) { response.statusCode = 400; response.end(); return }
-      response.setHeader("referrer-policy", "no-referrer")
-      redirect(response, 303, `/everywhere#${new URLSearchParams({ platform: "linear", code, state })}`)
-    } catch { response.statusCode = 400; response.end() }
-  }
+  return oauthCallback("linear", config)
 }

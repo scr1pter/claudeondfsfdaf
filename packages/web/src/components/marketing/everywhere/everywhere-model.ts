@@ -268,6 +268,7 @@ export const EVERYWHERE_COPY = {
       `Linked Linear user ${userId} in ${label}${hint ? ` to the Vector account ${hint}` : ""}.`,
     already: (userId: string, label: string) => `Linear user ${userId} in ${label} was already linked to this account.`,
     problem: {
+      cancelled: "You cancelled the sign-in. Start again from Connect or Link when you are ready.",
       "invalid-return": "This page was opened with an incomplete or changed sign-in. Start again from Connect or Link.",
       "signed-out": "Sign in to Vector first, then start again from Connect or Link.",
       session: "Your session ended before this finished. Start again from Connect or Link.",
@@ -385,10 +386,16 @@ export type EverywhereState = (
 ) & {
   /** What became of an OAuth return this page was opened with (PUB-8); it outlives the state it started in. */
   readonly landing?: EverywhereLanding | undefined
+  /** A directory install this visit asked for (`?install=`, spec 3.8), not started yet: the sign-in link keeps it. */
+  readonly install?: OAuthPlatform | undefined
 }
 
-/** What a Slack or Linear callback put in /everywhere's fragment (slack/install.ts, linear/install.ts). */
+/** The code and state a Slack or Linear callback put in /everywhere's fragment (api/_lib/everywhere/oauth-callback.ts). */
 export type EverywhereOAuthReturn = { readonly platform: OAuthPlatform; readonly code: string; readonly state: string }
+/** The callback's fragment: a return to finish, or a fixed notice that the person cancelled at the platform. */
+export type EverywhereOAuthCallback =
+  | EverywhereOAuthReturn
+  | { readonly platform: OAuthPlatform; readonly cancelled: true }
 export type EverywhereLandingProblem = keyof typeof EVERYWHERE_COPY.landing.problem
 export type EverywhereLanding =
   | { readonly kind: "finishing"; readonly platform: OAuthPlatform }
@@ -482,9 +489,11 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
   let pendingFor: string | undefined
   // A landing set before the browser's session was known (a malformed return at page open) stays for that session.
   let landingAtOpen = false
+  // A directory install not started yet. Taken before it starts, so a visit starts it at most once.
+  let intent: OAuthPlatform | undefined
 
   function set(next: EverywhereState) {
-    current = { ...next, landing }
+    current = { ...next, landing, install: intent }
     for (const listener of [...listeners]) listener()
   }
 
@@ -719,9 +728,19 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
     set(current.kind === "ready" ? { ...current, busy: false } : current)
   }
 
-  /** The lists are read after a finish, so a new connection or link is in them. */
+  /** The lists are read after a finish, so a new connection or link is in them; then a held install starts. */
   function finishThenRefresh(): Promise<void> {
-    return finish().then(() => (current.kind === "ready" ? refresh() : undefined))
+    return finish()
+      .then(() => (current.kind === "ready" ? refresh() : undefined))
+      .then(startIntent)
+  }
+
+  /** Only once the lists loaded for a signed-in account: signed out, refused or off, the intent waits or is never used. */
+  function startIntent(): Promise<void> {
+    const platform = intent
+    if (!platform || current.kind !== "ready" || !current.loaded || current.busy) return Promise.resolve()
+    intent = undefined
+    return start(EVERYWHERE_ROUTES.installs, platform)
   }
 
   /** What a new account or a sign-out does to the landing: a held return waits for it, or says why it cannot go. */
@@ -831,11 +850,12 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
      * The page was opened with an OAuth return (`takeOAuthReturn`). It is sent once there is a session; signed out,
      * refused or off, it is dropped and the landing says why.
      */
-    finishOAuth(back: EverywhereOAuthReturn | "invalid"): Promise<void> {
+    finishOAuth(back: EverywhereOAuthCallback | "invalid"): Promise<void> {
       pending = undefined
       pendingFor = undefined
-      if (back === "invalid") {
-        setLanding({ kind: "failed", problem: "invalid-return" })
+      // A cancellation sends nothing: the server used nothing, and its state expires on its own.
+      if (back === "invalid" || "cancelled" in back) {
+        setLanding({ kind: "failed", problem: back === "invalid" ? "invalid-return" : "cancelled" })
         landingAtOpen = current.kind === "loading"
         return Promise.resolve()
       }
@@ -887,6 +907,12 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
     /** Linear has no private message to an app, so a link is a Linear sign-in (3.8). */
     startLink: () => start(EVERYWHERE_ROUTES.link, "linear"),
     startInstall: (platform: "slack" | "linear") => start(EVERYWHERE_ROUTES.installs, platform),
+    /** The page was opened with `?install=` (`takeInstallIntent`): Connect starts once the lists are loaded. */
+    installOnReady(platform: OAuthPlatform): Promise<void> {
+      intent = platform
+      set(current)
+      return startIntent()
+    },
     /** Redeems a Jira site connect code. The code goes in the body only. */
     connectJira(code: string): Promise<void> {
       const typed = code.trim()
@@ -920,7 +946,7 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
       const signOut = deps.signOut ?? (() => Promise.resolve())
       return signOut()
         .catch(() => undefined)
-        .then(() => navigate(signInPath(pathname, focus)))
+        .then(() => navigate(signInPath(pathname, focus, intent)))
     },
     /**
      * The page is going away: drop every answer still on its way and the code. A return not sent yet stays, so React's
@@ -1081,30 +1107,38 @@ export function problemOf(status: number, code?: string): EverywhereProblem {
   return "unavailable"
 }
 
-/** The sign-in link keeps only the page path and a selected job. OAuth query parameters and fragments stay out. */
-export function signInPath(pathname: string, focus?: string) {
+/**
+ * The sign-in link keeps only the page path, a selected job and a directory install (`install=slack|linear`). OAuth
+ * query parameters and fragments stay out.
+ */
+export function signInPath(pathname: string, focus?: string, install?: OAuthPlatform) {
   const base = "https://vectordev.ai"
   const parsed = pathname.startsWith("/") && parses(pathname, base) ? new URL(pathname, base) : undefined
   const path = parsed?.origin === base ? parsed.pathname : undefined
   const canFocus = path === "/everywhere" || path === "/everywhere/"
-  const returnTo =
-    canFocus && focus && Everywhere.JOB_ID_PATTERN.test(focus) ? `${path}?job=${focus}` : (path ?? "/everywhere")
+  const query = new URLSearchParams({
+    ...(canFocus && focus && Everywhere.JOB_ID_PATTERN.test(focus) ? { job: focus } : {}),
+    ...(canFocus && (install === "slack" || install === "linear") ? { install } : {}),
+  }).toString()
+  const returnTo = query ? `${path}?${query}` : (path ?? "/everywhere")
   return `/login?returnTo=${encodeURIComponent(returnTo)}`
 }
 
 /**
  * The OAuth return in /everywhere's fragment: exactly `platform`, `code` and `state`, each once, with Slack or Linear,
- * a code identity.ts would take and a state of the stored shape. Anything else is undefined.
+ * a code identity.ts would take and a state of the stored shape; or exactly `platform` and `error=access_denied`, a
+ * cancellation. Anything else, a refusal the callback named `error=other` included, is undefined.
  */
-export function readOAuthReturn(hash: string): EverywhereOAuthReturn | undefined {
+export function readOAuthReturn(hash: string): EverywhereOAuthCallback | undefined {
   const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash)
   const keys = [...params.keys()]
-  if (keys.length !== 3 || !["platform", "code", "state"].every((key) => params.getAll(key).length === 1))
-    return undefined
   const platform = params.get("platform")
+  if (params.getAll("platform").length !== 1 || (platform !== "slack" && platform !== "linear")) return undefined
+  // With `platform` once, two keys leave exactly one other key, and it must be `error`.
+  if (keys.length === 2 && params.get("error") === "access_denied") return { platform, cancelled: true }
+  if (keys.length !== 3 || !["code", "state"].every((key) => params.getAll(key).length === 1)) return undefined
   const code = params.get("code") ?? ""
   const state = params.get("state") ?? ""
-  if (platform !== "slack" && platform !== "linear") return undefined
   if (!OAUTH_CODE_PATTERN.test(code) || !STATE_PATTERN.test(state)) return undefined
   return { platform, code, state }
 }
@@ -1115,12 +1149,32 @@ export function readOAuthReturn(hash: string): EverywhereOAuthReturn | undefined
  * the path and query stay. Answers the return, "invalid" for a malformed one, or undefined when there is none (and
  * then the address is left alone).
  */
-export function takeOAuthReturn(place: OAuthPlace): EverywhereOAuthReturn | "invalid" | undefined {
+export function takeOAuthReturn(place: OAuthPlace): EverywhereOAuthCallback | "invalid" | undefined {
   const hash = place.location.hash
   const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash)
-  if (!["platform", "code", "state"].some((key) => params.has(key))) return undefined
+  if (!["platform", "code", "state", "error"].some((key) => params.has(key))) return undefined
   place.history.replaceState(place.history.state, "", place.location.pathname + place.location.search)
   return readOAuthReturn(hash) ?? "invalid"
+}
+
+/**
+ * Takes a directory install (`?install=slack|linear`, spec 3.8) out of the address bar before it starts, so a reload
+ * or the back button does not start it again. Other query parameters and the fragment stay. Answers the platform, or
+ * undefined when there is none or it is not exactly one of the two.
+ */
+export function takeInstallIntent(place: OAuthPlace): OAuthPlatform | undefined {
+  const params = new URLSearchParams(place.location.search)
+  if (!params.has("install")) return undefined
+  const asked = params.getAll("install")
+  params.delete("install")
+  const rest = params.toString()
+  place.history.replaceState(
+    place.history.state,
+    "",
+    place.location.pathname + (rest ? `?${rest}` : "") + place.location.hash,
+  )
+  const platform = asked.length === 1 ? asked[0] : undefined
+  return platform === "slack" || platform === "linear" ? platform : undefined
 }
 
 /** The oauth-finish answer (identity.ts `OAuthFinish`), only for the platform the return named and its own ids. */
