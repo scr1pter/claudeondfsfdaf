@@ -4836,26 +4836,28 @@ Closes the handoff's "Two failed refreshes in a row on a job-only link" and supe
     notice a second and can drop one.
   - The delay is `timing.jobsRefreshRetryMs` (10 minutes), doubled with each failure in a row and capped at 2 hours.
     The renewal's own short delay (at most 60 s) is kept, for the first failure in a row only. At most four retries are
-    scheduled in any 12 hours (`JOBS_REFRESH_RETRIES`), so a day with a mint that keeps failing costs the two cadence
-    refreshes and four retries.
+    scheduled in any 12 hours (`JOBS_REFRESH_RETRIES`). The first day with a mint that keeps failing costs the two
+    cadence refreshes and four retries; once a failure lasts past the first window, up to eight retries a day can go.
   - `clearJobsRefreshRetry()` also clears the pending wait; it runs in `teardown()` (which also resets the failure
     count), when the phone's cadence takes over in `syncRefresher`, and on `refreshed`. The retry window is kept
     across reconnects. The header comment and the comment above `syncRefresher` say this.
 - **Fixture.** remote-relay.fixture.ts answers a refresh as the relay does: `refreshed` for the connection's own ticket,
   a `ticket-invalid` notice for any other. remote-phone-app.test.ts (22 pass) and everywhere-wiring.test.ts (31 pass)
   are unaffected; the phone client ignores both messages.
-- **Tests (remote-link.test.ts, "jobs (R-C2)").** Nine new cases, with the app's own timing under fake timers: a 500 at
+- **Tests (remote-link.test.ts, "jobs (R-C2)").** Twelve new tests (eight cases, three of them table-driven), with
+  the app's own timing under fake timers: a 500 at
   the 12-hour refresh is retried 10 minutes later and its refresh goes; a forged ticket the relay answers
   `ticket-invalid` is minted and sent again; `refreshed` leaves no retry; 401, 403 and EgressBlocked are not retried;
   over a day with a mint that keeps failing the requests come at 0, 12 h, then 10, 30, 70 and 150 minutes later, and
   24 h (two cadence refreshes plus four retries); a refresh with no answer is retried 30 s plus 10 minutes later
-  (FakeSocket harness); and teardown or a phone's cadence taking over leaves no retry timer. The day test with
+  (FakeSocket harness); a `ticket-invalid` or `ticket-expired` notice to a pending refresh is retried 10 minutes
+  later, without the 30-s wait (FakeSocket harness); and teardown or a phone's cadence taking over leaves no retry timer. The day test with
   successful refreshes still allows at most two refreshes.
   - Red on main's remote-link.ts: 4 fail (the 500 retry, `ticket-invalid`, the day with failing mints, the
-    unanswered refresh), 49 pass. Green: 53 pass. The `refreshed`, 401/403/EgressBlocked and teardown/takeover cases
+    unanswered refresh), 49 pass, before the `ticket-expired` case was added. Green: 55 pass. The `refreshed`, 401/403/EgressBlocked and teardown/takeover cases
     pass on main too, because main never retries; they pin the new code. Mutations, each red: `refreshed` not
     clearing (5 fail), no cap (1), retrying any refusal (3), teardown not clearing (1), takeover not clearing (1), the
     short delay on every failure (1, the existing "plan still renewing" case), no doubling (1), ignoring
-    `ticket-invalid` (1).
+    `ticket-invalid` (1), ignoring `ticket-expired` (1).
 - **Risk.** Each retry wakes the account's Durable Object; the cap bounds that at four more refreshes in 12 hours. The
   Everywhere flag stays off, and remote-runtime.ts passes no `jobs`, so production behaviour does not change.

@@ -730,6 +730,31 @@ describe("jobs (R-C2)", () => {
     }
   })
 
+  test.each(["ticket-invalid", "ticket-expired"])(
+    "a refresh the relay rejects with %s is tried again without waiting for the 30 seconds",
+    async (code) => {
+      const jobs = { want: false }
+      const env = setup({ jobs: { want: () => jobs.want, offer: () => {} }, timing: {} })
+      await env.link.setEnabled(true)
+      jobs.want = true
+      jest.useFakeTimers()
+      try {
+        await env.link.jobsChanged()
+        await turns(() => env.sockets.length === 1)
+        env.socket().open(env.stored.value!.device)
+        await turns(() => env.link.status().state === "online")
+        await advance(12 * hour)
+        expect(env.tickets()).toBe(2)
+        env.socket().server({ t: "error", code })
+        await advance(10 * minute)
+        expect(env.tickets()).toBe(3)
+      } finally {
+        env.link.stop()
+        jest.useRealTimers()
+      }
+    },
+  )
+
   test.each([
     { name: "the link's teardown", end: "teardown" },
     { name: "a phone's cadence taking over", end: "phone" },

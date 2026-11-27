@@ -598,8 +598,8 @@ export function createRemoteLink(deps: LinkDependencies) {
   // inside the relay's computerTicketMaxAgeMs, because each refresh wakes the account's Durable Object and books up to
   // idleTailMs of awake time. Its ticket lapses in between, and the relay asks again only when its peers change, so a
   // phone's cadence that takes over from the jobs cadence refreshes at once unless control() just did. A jobs refresh
-  // that fails is tried again (refreshJobs) while the same jobs cadence owns the same socket; the phone's cadence taking
-  // over, the connection's teardown and a `refreshed` answer end that retry.
+  // that fails is tried again (refreshJobs) while the same jobs cadence owns the same socket; the phone's cadence
+  // taking over, the connection's teardown and a `refreshed` answer end that retry.
   const clearJobsRefreshRetry = () => {
     if (state.jobsRefreshRetry !== undefined) clearTimeout(state.jobsRefreshRetry)
     if (state.refreshPending) clearTimeout(state.refreshPending.timer)
@@ -635,8 +635,8 @@ export function createRemoteLink(deps: LinkDependencies) {
   }
 
   /**
-   * Mints a ticket and sends it in-band. A jobs refresh passes `jobsLink`, which must still hold after each wait, and is
-   * marked pending until the relay answers. The answer says what happened, so the jobs cadence can try again.
+   * Mints a ticket and sends it in-band. A jobs refresh passes `jobsLink`, which must still hold after each wait, and
+   * is marked pending until the relay answers. The answer says what happened, so the jobs cadence can try again.
    */
   const refresh = async (jobsLink?: () => boolean) => {
     const socket = state.socket

@@ -4,9 +4,10 @@ import { deviceBytes, toBase64url } from "./remote-crypto"
 // Test fixture (WP A42): an in-memory Remote relay that the real desktop link (remote-link.ts) and the real phone
 // client (packages/app/src/phone/remote/client.ts) both connect to. It behaves as packages/relay does on the wire: the
 // handshake's `hello` with the other side's online devices and the viewer count, `peers` when they change (with
-// `refresh` when a phone arrives), `ping`/`pong`, `refreshed` or `ticket-invalid` for a refresh, and data frames passed on byte for byte with the target's id swapped
-// for the sender's. A ticket here is `vt1.<role>.<device>`, minted by the tests' fake API. Everything any side sent is
-// kept, so a test can check the relay never saw plaintext. `offer` sends a job offer frame (R-C1) to every computer.
+// `refresh` when a phone arrives), `ping`/`pong`, `refreshed` or `ticket-invalid` for a refresh, and data frames passed
+// on byte for byte with the target's id swapped for the sender's. A ticket here is `vt1.<role>.<device>`, minted by the
+// tests' fake API. Everything any side sent is kept, so a test can check the relay never saw plaintext. `offer` sends a
+// job offer frame (R-C1) to every computer.
 
 export type RelaySocket = {
   readyState: number
