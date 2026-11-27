@@ -37,7 +37,7 @@ import LanderMaterials from "./marketing/LanderMaterials.astro"
 import ReviewPipeline from "./marketing/ReviewPipeline.astro"
 import SiteFooter from "./marketing/SiteFooter.astro"
 import { wordmarkCells } from "../lib/wordmark"
-import { brainRelease } from "../data/vector-releases"
+import { brainRelease, reviewPipelineAvailable } from "../data/vector-releases"
 
 // The landing page is the whole product tour: the hero and its one interactive
 // picture, the self-evolving section, and the card shelf of what Vector does,
@@ -391,18 +391,30 @@ const trustCards = [
 
     <section id="code-review" data-chapter="Review" class="story" aria-labelledby="code-review-title">
       <div class="story-copy" data-reveal-group>
-        <p class="story-kicker" data-reveal>Coming soon</p>
+        <p class="story-kicker" data-reveal>{reviewPipelineAvailable ? "Code review" : "Coming soon"}</p>
         <h2 id="code-review-title" class="story-title" data-reveal>Done, judged, then&nbsp;reviewed.</h2>
         <p class="story-subtitle story-subtitle-long" data-reveal>
-          Soon, turning on code review in the desktop app's settings will send each task you run there that changes
-          files to Vectorscope, Vector's code review agent, once the work is done. With LLM-as-a-judge on, the judge
-          checks the work first.
+          {reviewPipelineAvailable ? (
+            <>
+              With a compatible Linux engine and Vectorscope local reviews on, turn on Code review after each task in
+              the desktop app's Settings&nbsp;→&nbsp;General. Vectorscope, Vector's code review agent, reviews each task
+              you run there that changes files. With LLM-as-a-judge on, it waits for the judge's last round.
+            </>
+          ) : (
+            <>
+              Soon, turning on code review in the desktop app's settings will send each task you run there that changes
+              files to Vectorscope, Vector's code review agent, once the work is done. With LLM-as-a-judge on, the judge
+              checks the work first.
+            </>
+          )}
         </p>
         <div class="story-figure" data-reveal>
           <ReviewPipeline id="code-review-diagram" tone="landing" />
         </div>
         <div class="story-action" data-reveal>
-          <a class="landing-pill" href="/docs/verified-completion#then-code-review">See how it will work</a>
+          <a class="landing-pill" href="/docs/verified-completion#then-code-review">
+            {reviewPipelineAvailable ? "See how it works" : "See how it will work"}
+          </a>
         </div>
       </div>
     </section>

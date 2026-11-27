@@ -1,5 +1,6 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
+import { reviewPipelineAvailable } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -92,8 +93,19 @@ vector vectorscope --pr 482 --json</code><button class="doc-cmd-copy" type="butt
 
           <h2 id="after-every-task">After every task</h2>
           <p>
-            Coming soon: a desktop setting that sends each finished task's changes to Vectorscope, after LLM-as-a-judge
-            when that is on. See <a href="/docs/verified-completion#then-code-review">Verified completion</a>.
+            {reviewPipelineAvailable ? (
+              <>
+                Code review after each task is a desktop app setting in Settings → General. With a compatible Linux
+                engine and Vectorscope local reviews on, it sends each finished task's changes to Vectorscope, after
+                LLM-as-a-judge when that is on. The setting is off by default.
+              </>
+            ) : (
+              <>
+                Coming soon. A desktop setting will send each finished task's changes to Vectorscope, after
+                LLM-as-a-judge when that is on.
+              </>
+            )}
+            See <a href="/docs/verified-completion#then-code-review">Verified completion</a>.
           </p>
 
           <h2 id="cli-github">GitHub from the terminal</h2>

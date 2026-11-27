@@ -25,6 +25,14 @@ export const upcomingRelease = {
 // Update it in the same change that publishes the next desktop installers.
 export const publishedDesktopVersion = "1.99.112"
 
+/** Code review after each task is planned for stable desktop 2.0.0. Source and preview builds do not count. */
+export function reviewPipelineShipped(published: string) {
+  const version = /^(0|[1-9]\d{0,8})\.(?:0|[1-9]\d{0,8})\.(?:0|[1-9]\d{0,8})$/.exec(published)
+  return version !== null && version[0] === published && Number(version[1]) >= 2
+}
+
+export const reviewPipelineAvailable = reviewPipelineShipped(publishedDesktopVersion)
+
 // Vector Hands has not shipped. Keep this draft separate from the published/versioned changelog.
 export const handsReleasePreview = {
   label: "Vector Hands — unreleased",

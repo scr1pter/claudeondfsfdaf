@@ -1,6 +1,7 @@
 ---
 import DocsPage from "../../layouts/DocsPage.astro"
 import ReviewPipeline from "../../components/marketing/ReviewPipeline.astro"
+import { reviewPipelineAvailable } from "../../data/vector-releases"
 
 export const prerender = true
 ---
@@ -21,27 +22,31 @@ export const prerender = true
           </p>
 
           <h2 id="then-code-review">Then code review</h2>
-          <p class="note">Coming soon. This describes a desktop setting that is being built.</p>
+          {!reviewPipelineAvailable && (
+            <p class="note">Coming soon. This setting is planned for an upcoming desktop release.</p>
+          )}
           <ReviewPipeline id="then-code-review-diagram" tone="docs" />
           <p>
-            Code review after each task is a separate setting next to LLM-as-a-judge in Settings, General. It is off by
-            default and appears once Vectorscope local reviews are turned on. When it is on, each task you send from the
-            desktop app that changes files goes to Vectorscope once Vector is done. With the judge off, the review
-            follows the task. With the judge on, the review waits until the judge's last round is done, then reviews the
-            code as that round left it, whatever the verdict. If you stop the judge, nothing is reviewed. A task that
-            ends by asking you something is reviewed after you answer.
+            Code review after each task is a separate desktop app setting, next to LLM-as-a-judge in Settings → General.
+            It is off by default and appears once Vectorscope local reviews are turned on. The review needs a compatible
+            Linux engine. When the setting is on, each task you send from the desktop app that changes files goes to
+            Vectorscope once Vector is done. With the judge off, the review follows the task. With the judge on, the
+            review waits until the judge's last round is done, then reviews the code as that round left it, whatever
+            the verdict. If you stop the judge, the work it was checking isn't reviewed. A task that ends by asking you
+            something is reviewed after you answer.
           </p>
           <p>
-            The review reports and doesn't fix. It covers all uncommitted changes in the repository, your own included,
-            and runs on your Vectorscope model. A repository whose <code>.vector/review.json</code> picks another model
-            or turns on the panel isn't reviewed automatically, and neither is a model with no price Vector can read.
-            When the review finishes, its findings appear under Pull requests, Local reviews, and Vector reads them with
-            your next message, so you can ask it to fix them.
+            The review reports findings and never edits your files. It covers all uncommitted changes in the
+            repository, your own included, and runs on your Vectorscope model. A repository whose
+            <code>.vector/review.json</code> picks another model or turns on the panel isn't reviewed automatically, and
+            neither is a model with no price Vector can read. When the review finishes, its findings appear under Pull
+            requests, Local reviews, and Vector reads them with your next message, so you can ask it to fix them.
           </p>
           <p>
-            Each review costs extra model calls. On a priced model it stops at $0.50 when the run has no spend limit,
-            otherwise at what the limit has left, up to $2, and it doesn't start with less than $0.10 left. A finished
-            task is reviewed once. While a review runs, the next finished task waits for it, then gets its own.
+            Each review costs extra model calls. On a priced model it stops at $2 or at what is left of the run's spend
+            limit, whichever is lower, and at $0.50 when the run has no limit; it doesn't start with less than $0.10
+            left. A finished task is reviewed once. While a review runs, the next finished task waits for it, then gets
+            its own.
             Greetings, questions, plan mode before you approve the plan, subagents, and runs that were stopped, reverted
             or changed no files are never reviewed, and a review cut off by a restart doesn't report back.
           </p>
