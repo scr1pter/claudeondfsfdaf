@@ -144,6 +144,8 @@ describe("independent overlay source admission", () => {
     expect(implementation).not.toMatch(/WindowsUiaDiagnostic\s*[*&]/)
     expect(driver).toContain("std::make_shared<WindowsUiaDiagnostic>()")
     expect(driver).toContain("WindowsUiaBackend::system(uia_diagnostic, life->deadline)")
+    const driverHeader = await readFile(path.join(native, "overlay_driver.h"), "utf8")
+    expect(driverHeader).toContain('#include "uia_native.h"')
     expect(header).toContain("std::atomic<uint64_t> timeout_observation{0}")
     expect(header).toContain("std::atomic<uint64_t>::is_always_lock_free")
     expect(header).toContain("uint64_t{1} + static_cast<uint64_t>(reported_phase(current))")

@@ -1,4 +1,5 @@
 #pragma once
+#include "uia_native.h"
 #include "windows_enum.h"
 #include <array>
 #include <cstdint>
@@ -7,8 +8,6 @@
 #include <string_view>
 
 namespace vector::computer {
-enum class WindowsUiaPhase : uint8_t;
-enum class WindowsUiaExpiry : uint8_t;
 enum class InputGuardianPhase : uint8_t;
 enum class OverlayDriverMode { stop, launch_electron };
 struct OverlayDriverOptions {
