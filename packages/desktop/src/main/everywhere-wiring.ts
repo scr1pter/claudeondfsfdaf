@@ -4,6 +4,7 @@ import { Option, Schema } from "effect"
 import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
+import type { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
 import { ACCOUNT_ID_PATTERN } from "@vectordevai/schema/everywhere"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import { createEverywhereAwake } from "./everywhere-awake"
@@ -67,6 +68,8 @@ export type EverywhereLink = Pick<RemoteLink, "status" | "device" | "jobsChanged
 export type EverywhereJobsDeps = {
   /** The local engine over its authenticated loopback server, with the owner's credentials. */
   readonly engine: { readonly url: string; readonly password: string }
+  /** Owner's versioned settings from the built-in engine's private sidecar channel. */
+  readonly preferences?: () => Promise<EverywherePreferenceWire.Result>
   /** The desktop sign-in (vectorAccount.token). One that cannot be read counts as none. */
   readonly token: () => Promise<string | undefined>
   /** The engine's GET /global/event stream; subscribed only while Remote is on. */
@@ -232,13 +235,19 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
   }
 
   const fetchSettings = async () => {
-    const global = await (deps.fetcher ?? fetch)(new URL("/global/config", deps.engine.url), {
+    const legacy = await (deps.fetcher ?? fetch)(new URL("/global/config", deps.engine.url), {
       headers: { authorization, accept: "application/json" },
       redirect: "error",
       signal: AbortSignal.timeout(10_000),
     })
       .then((response) => (response.ok ? (response.json() as Promise<unknown>) : undefined))
       .catch(() => undefined)
+    const preference = await deps.preferences?.().catch(() => ({ kind: "unavailable" }) as const)
+    const global = !preference || preference.kind === "unsupported"
+      ? legacy
+      : preference.kind === "ready" && typeof legacy === "object" && legacy !== null && !Array.isArray(legacy)
+        ? { ...legacy, everywhere: preference.snapshot.everywhere, locked: preference.snapshot.locked }
+        : undefined
     if (global === undefined && !state.readFailed) log("Vector everywhere could not read its settings.")
     state.readFailed = global === undefined
     const listed = JSON.stringify((global as { everywhere?: { projects?: unknown } } | undefined)?.everywhere?.projects)
@@ -456,8 +465,8 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
     }
   }
 
-  // The settings page writes through PATCH /global/config, which emits `global.disposed`. The stream carries every
-  // session event, so it is kept open only while Remote is on: without Remote no job can run anyway.
+  // Legacy hand edits can arrive on the engine event stream. Sidecar preference writes call refresh() directly,
+  // since the stream is kept open only while Remote is on.
   const syncEvents = (enabled: boolean) => {
     if (enabled && !state.subscription && state.started && !state.stopped) {
       state.subscription = new AbortController()
@@ -495,11 +504,7 @@ export function createEverywhereJobs(deps: EverywhereJobsDeps) {
       evaluate()
       if (edge && before === "on") void requestPending()
     },
-    /**
-     * Reads the settings, folders and probes again on request. Nothing in the app calls it yet: it is kept for the
-     * settings page's deferred write path (handoff EV-21, "The write path is deferred"), which must call it after
-     * writing while Remote is off.
-     */
+    /** Reads settings, folders and probes after a save, even while Remote is off. */
     async refresh() {
       state.folders = new Map()
       state.probes = freshProbes()

@@ -2,6 +2,7 @@ import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/ag
 import type { RemoteReviewAsk } from "../../../app/src/context/remote-review-ask"
 import type { VectorAccountPlatform } from "@vectordevai/app/vector-account"
 import type { DesktopMenuAction } from "@vectordevai/app/desktop-menu"
+import type { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
 import type { WslServersPlatform } from "@vectordevai/app/wsl/types"
 import type { UpdaterState } from "@vectordevai/app/updater"
 import type { PublishProgressEvent, PublishProjectInput, PublishResult, PublishTarget } from "../main/publish"
@@ -930,6 +931,11 @@ export type ElectronAPI = {
   /** Bug reports this computer sent and what became of each (WP A33); the report ids stay in the main process. */
   reports: ReportsPlatform
   remote: RemoteAPI
+  everywherePreferences: {
+    read(): Promise<EverywherePreferenceWire.Result>
+    update(input: EverywherePreferenceWire.Update): Promise<EverywherePreferenceWire.ChangeResult>
+    onChange(callback: () => void): () => void
+  }
   phoneAlerts: PhoneAlertsAPI
   vault: VaultAPI
   ops: OpsAPI
