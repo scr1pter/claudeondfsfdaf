@@ -350,10 +350,14 @@ size_t run_overlay_driver_tests() {
       diagnostic.note_timeout(side);
       require(!diagnostic.failure_root_wait(), "overlay-driver.worker-expiry-cannot-report-caller-wait");
     }
-    WindowsUiaDiagnostic unrelated;
-    unrelated.phase.store(WindowsUiaPhase::root_handle);
-    unrelated.note_timeout(WindowsUiaExpiry::caller_wait, WindowsUiaCallerWait::pending);
-    require(!unrelated.failure_root_wait(), "overlay-driver.non-root-phase-cannot-report-root-dispatch");
+    for (const auto caller : {WindowsUiaCallerWait::pending, WindowsUiaCallerWait::ready}) {
+      WindowsUiaDiagnostic diagnostic;
+      diagnostic.phase.store(WindowsUiaPhase::security_current);
+      diagnostic.note_timeout(WindowsUiaExpiry::caller_wait, caller);
+      const auto wait = diagnostic.failure_root_wait();
+      require(wait && !wait->progress && wait->caller == caller,
+        "overlay-driver.security-phase-retains-only-caller-wait");
+    }
   });
   test([] {
     // The closed uia object rides beside stage and cause only, and never changes ok, skip, reason or exit.
@@ -397,6 +401,15 @@ size_t run_overlay_driver_tests() {
     const OverlayDriverResult wrong_stage{false, false, L"native_failure", L"uia-root-wrap", L"core_failure:no_ui_tree", traced};
     require(!wrong_stage.wire().HasKey(L"uia") && wrong_stage.exit_code() == 1,
       "overlay-driver.root-wait-detail-cannot-change-another-phase");
+    auto later = traced;
+    later.root_attempt = OverlayDriverUiaRootAttempt::initial;
+    later.root_wait = WindowsUiaRootWait{std::nullopt, WindowsUiaCallerWait::ready};
+    const OverlayDriverResult security{false, false, L"native_failure", L"uia-security-current", L"core_failure:no_ui_tree", later};
+    const auto later_detail = security.wire().GetNamedObject(L"uia");
+    require(later_detail.Size() == 7 && !later_detail.HasKey(L"rootProgress") && named(later_detail, L"callerWait") == L"ready" &&
+      security.exit_code() == 1, "overlay-driver.security-wait-remains-a-failed-first-root");
+    const OverlayDriverResult misplaced{false, false, L"native_failure", L"post", L"core_failure:no_ui_tree", later};
+    require(!misplaced.wire().HasKey(L"uia"), "overlay-driver.wait-cannot-label-posting-failure");
     // Incoherent or out-of-range facts drop the whole object; stage and cause are unchanged.
     for (const auto& failure : {OverlayDriverUiaFailure{OverlayDriverLookup::first, OverlayDriverUiaCall::root, true, WindowsUiaExpiry::caller_wait, {}},
            OverlayDriverUiaFailure{static_cast<OverlayDriverLookup>(2), OverlayDriverUiaCall::root, false, WindowsUiaExpiry::caller_wait, {}},

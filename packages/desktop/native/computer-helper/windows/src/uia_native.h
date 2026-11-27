@@ -51,7 +51,7 @@ inline constexpr std::array<std::wstring_view, 4> windows_uia_expiries{L"none", 
 enum class WindowsUiaRootProgress : uint8_t { before_dispatch, dispatch_started, dispatch_returned };
 enum class WindowsUiaCallerWait : uint8_t { none, pending, ready };
 struct WindowsUiaRootWait {
-  WindowsUiaRootProgress progress;
+  std::optional<WindowsUiaRootProgress> progress;
   WindowsUiaCallerWait caller;
 };
 struct WindowsUiaDiagnostic {
@@ -85,12 +85,13 @@ struct WindowsUiaDiagnostic {
   }
   std::optional<WindowsUiaRootWait> failure_root_wait() const noexcept {
     const auto observed = timeout_observation.load(std::memory_order_relaxed);
-    if ((observed & 0xffff) != 1 + static_cast<uint64_t>(WindowsUiaPhase::root_element) ||
-        ((observed >> 16) & 0xff) != static_cast<uint8_t>(WindowsUiaExpiry::caller_wait)) return {};
+    if (((observed >> 16) & 0xff) != static_cast<uint8_t>(WindowsUiaExpiry::caller_wait)) return {};
     const auto wait = static_cast<WindowsUiaCallerWait>((observed >> 28) & 0xf);
+    if (wait != WindowsUiaCallerWait::pending && wait != WindowsUiaCallerWait::ready) return {};
+    if ((observed & 0xffff) != 1 + static_cast<uint64_t>(WindowsUiaPhase::root_element))
+      return WindowsUiaRootWait{std::nullopt, wait};
     const auto progress = static_cast<WindowsUiaRootProgress>((observed >> 24) & 0xf);
-    if ((wait != WindowsUiaCallerWait::pending && wait != WindowsUiaCallerWait::ready) ||
-        progress > WindowsUiaRootProgress::dispatch_returned) return {};
+    if (progress > WindowsUiaRootProgress::dispatch_returned) return {};
     return WindowsUiaRootWait{progress, wait};
   }
   void note_root_element_status(int32_t status) noexcept {

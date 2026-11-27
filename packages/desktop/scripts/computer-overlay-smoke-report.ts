@@ -637,9 +637,13 @@ export const COMPUTER_SMOKE_DRIVER_UIA_HRESULTS = ["unobserved", ...COMPUTER_SMO
 export type ComputerSmokeDriverStage = (typeof COMPUTER_SMOKE_DRIVER_STAGES)[number]
 export type ComputerSmokeDriverCause = (typeof COMPUTER_SMOKE_DRIVER_CAUSES)[number]
 type ComputerSmokeRootWait = {
-  rootProgress: "before-dispatch" | "dispatch-started" | "dispatch-returned"
+  rootProgress?: "before-dispatch" | "dispatch-started" | "dispatch-returned"
   callerWait: "pending" | "ready"
 }
+const COMPUTER_SMOKE_UIA_PHASE_STAGES: readonly string[] = COMPUTER_SMOKE_DRIVER_STAGES.slice(
+  COMPUTER_SMOKE_DRIVER_STAGES.indexOf("uia-root-current"),
+  COMPUTER_SMOKE_DRIVER_STAGES.indexOf("uia-actor-com-expired") + 1,
+)
 const COMPUTER_SMOKE_INITIAL_ROOT_STAGES = [
   "uia-root-element",
   "uia-root-wrap",
@@ -693,15 +697,19 @@ export function computerSmokeDriverFailure(value: Record<string, unknown>): Comp
   }
 }
 
-function computerSmokeRootWait(value: Record<string, unknown>, allowed: boolean): ComputerSmokeRootWait | undefined {
+function computerSmokeRootWait(
+  value: Record<string, unknown>,
+  allowed: boolean,
+  rootElement: boolean,
+): ComputerSmokeRootWait | undefined {
   const { rootProgress, callerWait } = value
   if (rootProgress === undefined && callerWait === undefined) return undefined
+  if (!allowed || (callerWait !== "pending" && callerWait !== "ready"))
+    throw new Error("The native driver UIA failure facts are invalid.")
+  if (!rootElement && rootProgress === undefined) return { callerWait }
   if (
-    !allowed ||
-    (rootProgress !== "before-dispatch" &&
-      rootProgress !== "dispatch-started" &&
-      rootProgress !== "dispatch-returned") ||
-    (callerWait !== "pending" && callerWait !== "ready")
+    !rootElement ||
+    (rootProgress !== "before-dispatch" && rootProgress !== "dispatch-started" && rootProgress !== "dispatch-returned")
   )
     throw new Error("The native driver UIA failure facts are invalid.")
   return { rootProgress, callerWait }
@@ -719,7 +727,7 @@ function computerSmokeInitialRoot(value: unknown): ComputerSmokeInitialRoot {
   return {
     stage: stage as ComputerSmokeInitialRoot["stage"],
     expiry,
-    ...computerSmokeRootWait(value, stage === "uia-root-element"),
+    ...computerSmokeRootWait(value, expiry === "caller-wait", stage === "uia-root-element"),
   }
 }
 
@@ -760,10 +768,11 @@ function computerSmokeDriverUiaFailure(value: unknown, stage: string): ComputerS
     ...(value.rootAttempt === undefined ? {} : { rootAttempt: value.rootAttempt }),
     ...computerSmokeRootWait(
       value,
-      stage === "uia-root-element" &&
+      (stage === "stop-root-retired" || COMPUTER_SMOKE_UIA_PHASE_STAGES.includes(stage)) &&
         value.rootAttempt !== undefined &&
         value.actor === "retired" &&
         value.expiry === "caller-wait",
+      stage === "uia-root-element",
     ),
     ...(value.initialRoot === undefined ? {} : { initialRoot: computerSmokeInitialRoot(value.initialRoot) }),
   }

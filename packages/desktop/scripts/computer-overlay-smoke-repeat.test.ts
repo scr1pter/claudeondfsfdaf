@@ -108,6 +108,32 @@ test("preserves closed root dispatch and wait facts without reclassifying old or
   expect(observeComputerStop(failed("uia-runtime-id", facts)).reason).toBe("malformed_evidence")
 })
 
+test("preserves the first-root caller wait after the root element phase", () => {
+  const initial = { ...uia, rootAttempt: "initial" }
+  const stage = "uia-security-current"
+  for (const callerWait of ["pending", "ready"]) {
+    const facts = { ...initial, callerWait }
+    expect(observeComputerStop(failed(stage, facts))).toMatchObject({ status: "failed", uia: facts })
+  }
+  expect(observeComputerStop(failed(stage, initial)).uia).toEqual(initial)
+  const facts = { ...initial, callerWait: "pending" }
+  expect(observeComputerStop(failed("stop-root-retired", facts)).uia).toEqual(facts)
+  for (const invalid of [
+    { ...facts, rootAttempt: undefined },
+    { ...facts, lookup: "refresh" },
+    { ...facts, call: "hit" },
+    { ...facts, actor: "healthy", expiry: "none" },
+    { ...facts, expiry: "worker-current" },
+    { ...facts, callerWait: "unknown" },
+    { ...facts, rootProgress: "dispatch-returned" },
+  ]) {
+    expect(observeComputerStop(failed(stage, invalid)).reason).toBe("malformed_evidence")
+  }
+  for (const invalidStage of ["uia-root-element", "uia-create", "post"]) {
+    expect(observeComputerStop(failed(invalidStage, facts)).reason).toBe("malformed_evidence")
+  }
+})
+
 test("pairs a terminal replacement with its immutable initial root observation", () => {
   const replacement = { ...uia, rootAttempt: "replacement", rootProgress: "dispatch-started", callerWait: "pending" }
   const initialRoot = {
@@ -133,7 +159,7 @@ test("pairs a terminal replacement with its immutable initial root observation",
     ...workerExpiry,
     actor: "healthy",
     expiry: "none",
-    initialRoot: { stage: "uia-prepare-connection", expiry: "caller-wait" },
+    initialRoot: { stage: "uia-prepare-connection", expiry: "caller-wait", callerWait: "ready" },
   }
   expect(observeComputerStop(failed("uia-root-element", prepareExpiry))).toMatchObject({
     status: "failed",
@@ -154,6 +180,7 @@ test("pairs a terminal replacement with its immutable initial root observation",
     { ...paired, initialRoot: { ...initialRoot, callerWait: "unknown" } },
     { ...paired, initialRoot: { ...initialRoot, stage: "uia-prepare-connection" } },
     { ...workerExpiry, initialRoot: { stage: "uia-root-element", expiry: "worker-current" } },
+    { ...workerExpiry, initialRoot: { ...workerExpiry.initialRoot, callerWait: "ready" } },
   ]) {
     expect(observeComputerStop(failed("uia-root-element", invalid)).reason).toBe("malformed_evidence")
   }
