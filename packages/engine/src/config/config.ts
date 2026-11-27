@@ -563,6 +563,8 @@ export const jobCheckout = Effect.fnUntraced(function* () {
   return folders.some((folder) => FSUtil.contains(root, folder))
 })
 
+// The same comparison as Worktree's canonical (worktree/index.ts, canonicalPath and folded) and instruction.ts's
+// jobBase; keep them alike. Not imported, because Worktree brings git, the database and the project store into config.
 const canonicalFolder = (input: string) =>
   Effect.try({ try: () => FSUtil.realpath(input), catch: () => undefined }).pipe(
     Effect.orElseSucceed(() => path.resolve(input)),

@@ -4831,8 +4831,15 @@ vector-at-mention.yml, which are code facts the @vector lane can read from sourc
   the change (200 instead of 400; the CLI approved and printed "Status: trusted") and are green after it.
 - **Not built.** The plan's optional step 3, a desktop recheck of GET /config/trust before each runner prompt: with the
   engine refusing every approval, nothing can make the checkout trusted between prompts.
-- **Left open.** The app's Repository trust page reads `approvable: false` with `ignored: true` as an invited guest's
-  view, so in a job's checkout it would say only "the person who invited you" can trust it. The button is gone, which is
-  right, but the words are wrong for the owner. Fixing them needs the status to say why it is not approvable (an API
-  field and a regenerated SDK) or the app to recognise the folder, so it is left for the app lane. The TUI's /trust does
-  not read `approvable`; it asks, then shows the 400 as "Could not trust this repository".
+- **Left open.** The app reads `approvable: false` with `ignored: true` and `settings: true` as an invited guest's
+  view, in two places. The Repository trust page (project-trust-model.ts) says only "the person who invited you" can
+  trust it. The session header's ProjectTrustPrompt (session-header.tsx, project-trust-prompt.tsx through
+  `projectTrustHostDecides`) shows the owner a toast, "Only the host can trust this repository", saying Vector ignores
+  the settings "until the person who invited you trusts it", when they open a session in the job's checkout. No approval
+  is offered in either place, which is right, but the words are wrong for the owner. Fixing them needs the status to
+  say why it is not approvable (an API field and a regenerated SDK) or the app to recognise the folder, so both places
+  are left for the app lane. The flow is behind `VECTOR_EVERYWHERE_ENABLED`, which is off. The TUI's /trust does not
+  read `approvable`; it asks, then shows the 400 as "Could not trust this repository". The engine refusal keeps it
+  safe; its words need a decision on what the TUI says, which also covers an invited guest.
+- **CLI test.** The CLI test's harness resolves to what the real CLI prints (src/index.ts through `FormatError`), so
+  it checks that `vector trust approve` prints the refusal itself, not "Unexpected error" and the defect's message.
