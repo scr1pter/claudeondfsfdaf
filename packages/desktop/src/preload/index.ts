@@ -85,7 +85,7 @@ const api: ElectronAPI = {
     cancelPairing: () => ipcRenderer.invoke("remote-pair-cancel"),
     unpair: (device) => ipcRenderer.invoke("remote-unpair", device),
     disconnectAll: () => ipcRenderer.invoke("remote-disconnect-all"),
-    isPhoneTurn: (sessionIDs) => ipcRenderer.invoke("remote-phone-turn", sessionIDs),
+    isPhoneTurn: (sessionIDs, review) => ipcRenderer.invoke("remote-phone-turn", sessionIDs, review),
     onChange: (callback) => {
       const handler = (_event: unknown, status: Parameters<typeof callback>[0]) => callback(status)
       ipcRenderer.on("remote-changed", handler)
