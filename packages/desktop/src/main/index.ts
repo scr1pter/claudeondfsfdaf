@@ -82,7 +82,7 @@ import { electronComputerDeps } from "./computer-electron"
 import { setComputerService } from "./computer-ipc"
 import { createComputerLifecycle } from "./computer-lifecycle"
 import { engineEventSource, setDesktopWorkBlocker, startKeepAwake } from "./keep-awake"
-import { remoteLink, startRemote, stopRemote } from "./remote-runtime"
+import { remoteLink, startRemote, stopRemote, waitingForEverywhereJobs } from "./remote-runtime"
 import { startVault, stopVault } from "./vault-runtime"
 import { getStore } from "./store"
 import { USAGE_STORE } from "./store-keys"
@@ -367,7 +367,7 @@ const main = Effect.gen(function* () {
       if (process.platform !== "darwin") app.quit()
       return
     }
-    void backgroundModeStatus(scheduledAgentWorkState()).then((status) => {
+    void backgroundModeStatus({ ...scheduledAgentWorkState(), everywhereWaiting: waitingForEverywhereJobs() }).then((status) => {
       logger.log("background mode decision", { keepAlive: status.keepAlive, reason: status.reason })
       void updateTray()
       if (!status.keepAlive) app.quit()
@@ -467,6 +467,7 @@ const main = Effect.gen(function* () {
   const usageSharing = () => getStore(USAGE_STORE).get("enabled") !== false
   registerIpcHandlers({
     killSidecar: () => killSidecar(),
+    everywherePreferences: () => server?.everywherePreferences,
     relaunch,
     awaitInitialization: Effect.fnUntraced(
       function* () {
@@ -658,6 +659,7 @@ const main = Effect.gen(function* () {
     // Vector everywhere jobs (everywhere-wiring.ts).
     startRemote({
       engine: { url, password },
+      preferences: () => listener.everywherePreferences({ version: 1, kind: "read" }),
       packaged: app.isPackaged,
       watchingChanged: () => {
         keepAwake?.refresh()
@@ -718,7 +720,7 @@ const main = Effect.gen(function* () {
   // background-mode keep-alive would leave a process the user can see no window
   // for and has no menu to quit. trayReady gates the keep-alive below on that.
   trayReady = createTray({
-    readState: () => scheduledAgentWorkState(),
+    readState: () => ({ ...scheduledAgentWorkState(), everywhereWaiting: waitingForEverywhereJobs() }),
     openVector: () => {
       const win = getMainWindow()
       if (!win) {

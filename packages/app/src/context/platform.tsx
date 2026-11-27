@@ -7,6 +7,7 @@ import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
 import type { VectorAccountPlatform } from "../vector-account"
 import type { Computer } from "@vectordevai/schema/computer"
+import type { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
 import type { ReportsPlatform } from "../support-reports"
 import type { PhoneAlertEvent } from "./settings"
 import type { OpsMergeRequest, OpsRequest } from "../features/cloud/ops/ops-requests"
@@ -76,6 +77,12 @@ export type RemotePlatform = {
   /** Whether a phone started a session's turn or the review that raised this ask. */
   isPhoneTurn(sessionIDs: string[], review?: RemoteReviewAsk): Promise<boolean>
   onChange(callback: (status: RemoteStatus) => void): () => void
+}
+
+export type EverywherePreferencesPlatform = {
+  read(): Promise<EverywherePreferenceWire.Result>
+  update(input: EverywherePreferenceWire.Update): Promise<EverywherePreferenceWire.ChangeResult>
+  onChange(callback: () => void): () => void
 }
 
 /** Brain Vault on this computer, as the desktop's main process reports it (WP A45). No key, code or content. */
@@ -267,6 +274,7 @@ type PlatformBase = {
 
   /** Vector Remote on this computer (desktop only; WP A41): pairing, the paired phones and "Disconnect all phones". */
   remote?: RemotePlatform
+  everywherePreferences?: EverywherePreferencesPlatform
 
   /** Brain Vault on this computer (desktop only; WP A45): Settings → Memory → Backup and the nightly backup. */
   vault?: VaultPlatform
