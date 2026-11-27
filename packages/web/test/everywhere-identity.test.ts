@@ -6,6 +6,7 @@ import { eraseInstallation } from "../../../api/_lib/everywhere/erase"
 import {
   CODE_ALPHABET,
   LINK_TRIES_MAX,
+  addTrackerRepository,
   createState,
   findInstall,
   findLink,
@@ -593,6 +594,80 @@ describe("Jira site connect codes", () => {
 
 describe("repository mappings", () => {
   const repo = (fullName: string, id = fullName === "acme/api" ? 7 : fullName === "acme/web" ? 8 : 9) => ({ fullName, id })
+
+  test("tracker privacy marks keep their own time through repository edits and accept explicit reconfirmation", async () => {
+    const world = new World()
+    await world.install(LINEAR, A.id)
+    const place = randomUUID()
+    const input = { account: A.id, installation: LINEAR, place, repositories: [repo("acme/api")] }
+    const markedAt = world.fake.clock.now
+    expect(await setMapping(world.ctx(), { ...input, private: true })).toMatchObject({
+      ok: true,
+      mapping: { private: true, privateSetAt: markedAt, setAt: markedAt },
+    })
+    world.fake.clock.advance(5_000)
+    expect(await setMapping(world.ctx(), input)).toMatchObject({
+      ok: true,
+      mapping: { private: true, privateSetAt: markedAt, setAt: world.fake.clock.now },
+    })
+    world.fake.clock.advance(5_000)
+    expect(await addTrackerRepository(world.ctx(), {
+      account: A.id,
+      installation: LINEAR,
+      place,
+      fullName: "acme/web",
+      verifyRepository: async () => ({ ...repo("acme/web"), shared: false }),
+    })).toMatchObject({ ok: true })
+    expect(await findMapping(world.store, LINEAR, place)).toMatchObject({
+      private: true,
+      privateSetAt: markedAt,
+      setAt: world.fake.clock.now,
+      repositories: [repo("acme/api"), repo("acme/web")],
+    })
+    world.fake.clock.advance(5_000)
+    expect(await setMapping(world.ctx(), { ...input, private: true })).toMatchObject({
+      ok: true,
+      mapping: { private: true, privateSetAt: world.fake.clock.now },
+    })
+    world.fake.clock.advance(5_000)
+    await setMapping(world.ctx(), { ...input, private: false })
+    expect(await findMapping(world.store, LINEAR, place)).toMatchObject({
+      private: false,
+      privateSetAt: world.fake.clock.now,
+    })
+  })
+
+  test("an old tracker mark stays undated until the connector explicitly sets it", async () => {
+    const world = new World()
+    await world.install(JIRA, A.id)
+    const place = "ENG"
+    const key = everywhereKeys.repo(JIRA, place)
+    world.fake.data.set(key, {
+      kind: "string",
+      value: JSON.stringify({
+        repositoryIds: [7],
+        fullNames: ["acme/api"],
+        setBy: A.id,
+        private: true,
+        setAt: world.fake.clock.now,
+      }),
+    })
+    expect(await findMapping(world.store, JIRA, place)).toMatchObject({ private: true })
+    expect(await findMapping(world.store, JIRA, place)).not.toHaveProperty("privateSetAt")
+    world.fake.clock.advance(5_000)
+    const input = { account: A.id, installation: JIRA, place, repositories: [repo("acme/api")] }
+    expect(await setMapping(world.ctx(), input)).toMatchObject({ ok: true })
+    expect(await findMapping(world.store, JIRA, place)).not.toHaveProperty("privateSetAt")
+    expect(await setMapping(world.ctx(), { ...input, account: B.id, private: true })).toEqual({
+      ok: false,
+      code: "not-connector",
+    })
+    expect(await findMapping(world.store, JIRA, place)).not.toHaveProperty("privateSetAt")
+    expect(await setMapping(world.ctx(), { ...input, private: true })).toMatchObject({
+      ok: true,
+      mapping: { private: true, privateSetAt: world.fake.clock.now },
+    })
+  })
 
   test("only the connector sets a place's repositories", async () => {
     const world = new World()

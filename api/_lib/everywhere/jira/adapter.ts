@@ -54,9 +54,10 @@ export function createJiraAdapter(deps: JiraDeps) {
     if (account && linked?.record.account !== account) throw new ApiError(409, "JIRA_LINK_CHANGED", "The Jira account link changed.")
     return { task, snapshot, account, linkRaw: linked?.raw }
   }
-  const persist = async (view: JobView, update: (record: JiraTaskRecord) => JiraTaskRecord, input: { readonly draft?: unknown; readonly clearDraft?: boolean } = {}) => {
+  const persist = async (view: JobView, update: (record: JiraTaskRecord) => JiraTaskRecord | undefined, input: { readonly draft?: unknown; readonly clearDraft?: boolean } = {}) => {
     const checked = await assertTask(view)
     const next = update({ ...checked.task.record, ...(checked.account ? { account: checked.account } : {}) })
+    if (!next) return
     const linked = next.account ? await readLinkSnapshot(ctx().store, next.installation, next.userId) : undefined
     if (next.account && linked?.record.account !== next.account) throw new ApiError(409, "JIRA_LINK_CHANGED", "The Jira account link changed.")
     if (await writeJiraTask(ctx(), next, { expected: checked.task, installationRaw: checked.snapshot.raw, linkRaw: linked?.raw, ...input }) !== "written") throw new JiraFailure()
@@ -136,8 +137,10 @@ export function createJiraAdapter(deps: JiraDeps) {
         value: jiraChoice(checked.task.record.authority, checked.task.record.id, String(view.reply.place), repository) }))
       const text = options.length ? `Reply with one exact repository option:\n${options.map((option) => `${option.value} — ${option.repository.fullName}`).join("\n")}` :
         "Ask the site connector to map this Jira project to a repository, then send your task again."
-      await persist(view, (record) => ({ ...record, state: "INPUT_REQUIRED", code: "repository", resultEnc: seal(ctx().keys, text, everywhereKeys.jiraTask(record.id)) }),
-        { draft: { kind: "repository", parsed: { trigger, place: view.reply.place, reply: view.reply }, options } })
+      // CancelTask can commit while the repository options are being read. The final read owns the draft write.
+      await persist(view, (record) => JIRA_TERMINAL.has(record.state) ? undefined : ({
+        ...record, state: "INPUT_REQUIRED", code: "repository", resultEnc: seal(ctx().keys, text, everywhereKeys.jiraTask(record.id)),
+      }), { draft: { kind: "repository", parsed: { trigger, place: view.reply.place, reply: view.reply }, options } })
     },
     erase: (installation) => eraseInstallation({ ...ctx(), jobs: jobEraser(ctx().store) }, installation, "revoked").then(() => undefined),
   }
