@@ -10,6 +10,7 @@ import {
   measureCost,
   parseNumstat,
 } from "../../src/cli/cmd/github.evidence"
+import { sanitizeModelText } from "../../src/cli/cmd/github.publish"
 import { parseJudgeScores, parseJudgeVerdict } from "../../src/session/judge-verdict"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
 
@@ -286,6 +287,47 @@ describe("buildEvidenceBody", () => {
       shareUrl,
     })
     expect(body).toContain(`[Public session](${shareUrl})`)
+  })
+
+  test("indented checks keep command and multiline output as code without HTML or fences", () => {
+    const body = buildEvidenceBody({
+      response: "",
+      changes: [],
+      messages: [withParts(assistant(), [bash("bun test\n# command", "# output\r\n```\r> text", 1)])],
+      runUrl,
+      checkFormat: "indented",
+    })
+
+    expect(body).toContain("\n    ❌ bun test # command (exit 1)\n    # output\n    ```\n    > text\n")
+    expect(body).not.toContain("<details>")
+    expect(body).not.toContain("\n```\n")
+  })
+
+  test("indented checks stay one code block after the publisher's untrusted-text sanitizer", () => {
+    const hostile = "</details>\n\n```\n<img src=x>\n@octocat a && b\n\n# heading"
+    const published = sanitizeModelText(
+      buildEvidenceBody({
+        response: "",
+        changes: [],
+        messages: [withParts(assistant(), [bash("bun test", hostile, 1), bash("bun typecheck", "", 0)])],
+        runUrl,
+        checkFormat: "indented",
+      }),
+    )
+    const start = published.indexOf("### Checks\n\n") + "### Checks\n\n".length
+    const section = published.slice(start, published.indexOf("\n**Cost:**"))
+
+    // Every non-blank line is indented, so GitHub shows the whole section as code and no output line becomes markup.
+    expect(section.split("\n").filter((line) => line.trim())).toEqual([
+      "    ❌ bun test (exit 1)",
+      "    &lt;/details&gt;",
+      "    '''",
+      "    &lt;img src=x&gt;",
+      "    `@octocat` a &amp;&amp; b",
+      "    # heading",
+      "    ✅ bun typecheck (exit 0)",
+      "    (no output)",
+    ])
   })
 
   test("stays under GitHub's body limit, keeping the evidence and Closes line", () => {

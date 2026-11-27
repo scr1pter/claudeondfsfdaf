@@ -1989,7 +1989,7 @@ describe("the conversation restore (V27, BT06)", () => {
         expect(restoreLines(one.run.lines)).toEqual([SESSION_NOT_RESTORED])
         expect(one.run.lines).toContain(SESSION_SAVED)
         expect(one.cloud.requests).toEqual([keyRequest(), settle("changes")])
-        expect(one.bundle.summary?.body).toContain("<code>echo lint-run-one</code> (exit 0)")
+        expect(one.bundle.summary?.body).toContain("### Checks\n\n    ✅ echo lint-run-one (exit 0)\n    lint-run-one")
         expect(JSON.stringify(one.archive)).toContain(MARKER)
         // Production's precondition: the saved session's id is one this database does not know.
         expect(yield* audience.knows(one.source)).toBe(false)
