@@ -36,10 +36,35 @@ export const Receipt = Schema.Struct({
   run: Connect.Run,
 })
 
+const WritePhase = Schema.Literals([
+  "authority",
+  "size",
+  "retired-before-write",
+  "mkdir",
+  "write",
+  "retired-before-rename",
+  "rename",
+])
+const FileErrorCode = Schema.Literals([
+  "EACCES",
+  "EBUSY",
+  "EEXIST",
+  "EIO",
+  "EISDIR",
+  "EMFILE",
+  "ENFILE",
+  "ENOENT",
+  "ENOSPC",
+  "ENOTDIR",
+  "ENOTEMPTY",
+  "EPERM",
+  "EROFS",
+])
+
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectDirectory.Error", {
   message: Schema.String,
-  // Set only when the run is too large for a receipt; every other refusal is about authority or the file system.
-  oversized: Schema.optional(Schema.Boolean),
+  phase: Schema.optional(WritePhase),
+  code: Schema.optional(FileErrorCode),
 }) {}
 
 // A client-editable session name or metadata is not permission to use a hidden parent. Only the owner service lends
@@ -251,7 +276,10 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
     FileLock.key(run.request.directory) !== FileLock.key(binding.directory) ||
     (runs.has(token) && runs.get(token) !== run.id)
   )
-    return yield* new Error({ message: "The directory review receipt has no valid writer authority." })
+    return yield* new Error({
+      phase: "authority",
+      message: "The directory review receipt has no valid writer authority.",
+    })
   if (run.status === "done") writer.terminal = true
   runs.set(token, run.id)
   const value = JSON.stringify({
@@ -264,19 +292,27 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
     run,
   })
   if (Buffer.byteLength(value) > MAX_BYTES)
-    return yield* new Error({ message: "The directory review result exceeds its receipt limit.", oversized: true })
+    return yield* new Error({ phase: "size", message: "The directory review result exceeds its receipt limit." })
+  let phase: typeof WritePhase.Type = "retired-before-write"
   yield* Effect.tryPromise({
-    try: () => {
+    try: (signal) => {
       const pending = writer.tail.then(async () => {
         const active = () => read(token) === binding && current(binding) && !(writer.terminal && run.status !== "done")
+        signal.throwIfAborted()
         if (!active()) throw new Error({ message: "The receipt writer was retired." })
         const directory = folder(binding)
+        phase = "mkdir"
         await fs.mkdir(directory, { recursive: true, mode: 0o700 })
         const target = path.join(directory, `${run.id}.json`)
         const temporary = `${target}.${randomUUID()}.tmp`
         try {
+          phase = "write"
           await fs.writeFile(temporary, value, { mode: 0o600, flag: "wx" })
-          await replace(temporary, target, active)
+          await replace(temporary, target, signal, () => {
+            phase = "retired-before-rename"
+            if (!active()) throw new Error({ message: "The receipt writer was retired." })
+            phase = "rename"
+          })
         } finally {
           await fs.rm(temporary, { force: true }).catch(() => undefined)
         }
@@ -287,30 +323,37 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
       )
       return pending
     },
-    catch: (cause) =>
-      new Error({ message: `The directory review receipt could not be saved: ${LockFs.describe(cause)}` }),
+    catch: (cause) => {
+      const code = LockFs.code(cause)
+      return new Error({
+        phase,
+        message: "The directory review receipt could not be saved.",
+        ...(Schema.is(FileErrorCode)(code) ? { code } : {}),
+      })
+    },
   })
   return hash(value)
 })
 
-/**
- * Windows refuses to rename over a receipt another handle has open, and the refusal clears once that handle closes.
- * This module's own reads hold a receipt open while a run list, the request ledger or a prune reads it, and so may
- * another process or a virus scan. Engine (windows) run 45924630534 saved a refused review as failed when its rename
- * met a run list's read. An error LockFs counts as transient is retried for its short window, as the lock files are,
- * with the writer's authority checked again before each try; any other error is reported at once.
- */
-async function replace(
-  temporary: string,
-  target: string,
-  active: () => boolean,
-  start = performance.now(),
-  delay = LockFs.TRANSIENT_BASE_DELAY_MS,
-): Promise<void> {
-  if (!active()) throw new Error({ message: "The receipt writer was retired." })
-  return fs.rename(temporary, target).catch(async (cause: unknown) => {
-    if (!LockFs.isTransient(cause) || performance.now() - start >= LockFs.TRANSIENT_WINDOW_MS) throw cause
-    await setTimeout(delay)
-    return replace(temporary, target, active, start, LockFs.nextDelay(delay))
-  })
+/** Windows can block replacement while a reader holds the receipt open. Active writes get a short retry window. */
+async function replace(temporary: string, target: string, signal: AbortSignal, recheck: () => void): Promise<void> {
+  const deadline = performance.now() + LockFs.TRANSIENT_WINDOW_MS
+  let delay = LockFs.TRANSIENT_BASE_DELAY_MS
+  let failure: unknown
+  for (;;) {
+    signal.throwIfAborted()
+    recheck()
+    if (performance.now() >= deadline)
+      throw failure ?? new Error({ message: "The receipt replacement window elapsed." })
+    try {
+      await fs.rename(temporary, target)
+      return
+    } catch (cause) {
+      const remaining = deadline - performance.now()
+      if (!LockFs.isTransient(cause) || remaining <= 0) throw cause
+      failure = cause
+      await setTimeout(Math.min(delay, remaining), undefined, { signal })
+      delay = LockFs.nextDelay(delay)
+    }
+  }
 }

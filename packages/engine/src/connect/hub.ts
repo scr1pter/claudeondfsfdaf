@@ -1280,9 +1280,11 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
             // A result that could not be preserved, too large or refused by the file system, is a failed review, never
             // a truncated clean result. Keep only actual trusted usage and lineage, then attempt a bounded failure
             // receipt before notifying the owner.
-            const error = Cause.squash(persisted.cause)
+            const cause = Cause.squash(persisted.cause)
+            const error = cause instanceof ConnectDirectory.Error ? cause : undefined
             yield* Effect.logWarning("directory review result could not be saved", {
-              cause: Cause.pretty(persisted.cause),
+              phase: error?.phase,
+              code: error?.code,
             })
             completed = {
               ...completed,
@@ -1291,7 +1293,7 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
                 state: "failed",
                 verdict: "incomplete",
                 summary:
-                  error instanceof ConnectDirectory.Error && error.oversized
+                  error?.phase === "size"
                     ? "The directory review result could not be saved within its receipt limits."
                     : "The directory review result could not be saved.",
                 findings: [],

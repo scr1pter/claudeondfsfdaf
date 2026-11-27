@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { spawn } from "node:child_process"
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Logger, Option, References, Schema } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { Database } from "@vectordevai/core/database/database"
 import { BackgroundJobTable } from "@vectordevai/core/background-job.sql"
@@ -12,6 +12,7 @@ import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { BackgroundJobStore } from "@vectordevai/core/background-job-store"
 import { Global } from "@vectordevai/core/global"
 import { EffectFlock } from "@vectordevai/core/util/effect-flock"
+import { LockFs } from "@vectordevai/core/util/lock-fs"
 import { Npm } from "@vectordevai/core/npm"
 import { SessionAudience } from "@vectordevai/core/session/audience"
 import { Connect } from "@vectordevai/schema/connect"
@@ -1178,8 +1179,10 @@ it.instance(
 
 it.instance(
   "a terminal receipt the file system refuses is a persisted failure that does not blame its size",
-  () =>
-    Effect.gen(function* () {
+  () => {
+    const warnings: unknown[] = []
+    const logger = Logger.make(({ message }) => void warnings.push(message))
+    return Effect.gen(function* () {
       const f = yield* fixture
       script.gate = yield* Deferred.make<void>()
       const queued = yield* f.owner.directoryReview(reviewInput())
@@ -1195,6 +1198,11 @@ it.instance(
       yield* Deferred.succeed(script.gate, undefined)
       const done = yield* f.ended(queued.id)
       expect(seen.refused).toBe(1)
+      expect(
+        warnings.filter(
+          (message) => Array.isArray(message) && message[0] === "directory review result could not be saved",
+        ),
+      ).toEqual([["directory review result could not be saved", { phase: "rename", code: "EACCES" }]])
       expect(done.result).toMatchObject({
         state: "failed",
         verdict: "incomplete",
@@ -1204,6 +1212,79 @@ it.instance(
       })
       const next = yield* f.reload(queued.id, ask.sessionID)
       expect((yield* f.owner.get(queued.id).pipe(Effect.provideService(InstanceRef, next))).result).toEqual(done.result)
+    }).pipe(Effect.provide(Logger.layer([logger])), Effect.provideService(References.MinimumLogLevel, "Warn"))
+  },
+  options,
+)
+
+const terminalWriter = Effect.gen(function* () {
+  const f = yield* fixture
+  script.state = "unavailable"
+  const queued = yield* f.owner.directoryReview(reviewInput())
+  const done = yield* f.ended(queued.id)
+  const receipt = yield* ConnectDirectory.load(f.scope, queued.id)
+  if (!receipt) throw new Error("The actual directory receipt is missing")
+  const id = Connect.RunID.create()
+  const token = yield* ConnectDirectory.issue({ sessionID: receipt.anchor, ...f.scope })
+  const run: Connect.Run = { ...done, id, request: { ...done.request, id } }
+  const target = path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${id}.json`)
+  return { token, run, target }
+})
+
+it.instance(
+  "a receipt retry never starts after its rename deadline",
+  () =>
+    Effect.gen(function* () {
+      const { token, run, target } = yield* terminalWriter
+      const seen = yield* refuseRename(target, "EPERM", async () => true)
+      const timers = yield* Effect.promise(() => import("node:timers/promises"))
+      const sleep = timers.setTimeout
+      const now = performance.now.bind(performance)
+      let offset = 0
+      const clock = spyOn(performance, "now").mockImplementation(() => now() + offset)
+      const timer = spyOn(timers, "setTimeout").mockImplementation((_delay, value, options) => {
+        offset = LockFs.TRANSIENT_WINDOW_MS + 1
+        return sleep(0, value, options)
+      })
+      try {
+        expect(Exit.isFailure(yield* ConnectDirectory.write(token, run).pipe(Effect.exit))).toBe(true)
+        expect(seen.refused).toBe(1)
+      } finally {
+        timer.mockRestore()
+        clock.mockRestore()
+      }
+    }),
+  options,
+)
+
+it.instance(
+  "interrupting a receipt writer aborts its pending retry",
+  () =>
+    Effect.gen(function* () {
+      const { token, run, target } = yield* terminalWriter
+      let attempts = 0
+      yield* refuseRename(target, "EPERM", async () => ++attempts === 1)
+      const timers = yield* Effect.promise(() => import("node:timers/promises"))
+      const sleep = timers.setTimeout
+      const backedOff = Promise.withResolvers<AbortSignal | undefined>()
+      const release = Promise.withResolvers<void>()
+      const timer = spyOn(timers, "setTimeout").mockImplementation(async (_delay, value, options) => {
+        backedOff.resolve(options?.signal)
+        await release.promise
+        return sleep(0, value, options)
+      })
+      try {
+        const writer = yield* ConnectDirectory.write(token, run).pipe(Effect.forkChild)
+        const signal = yield* Effect.promise(() => backedOff.promise)
+        yield* Fiber.interrupt(writer)
+        release.resolve()
+        // Wait behind the interrupted write on the same token, including its temporary-file cleanup.
+        yield* ConnectDirectory.write(token, run)
+        expect([signal?.aborted, attempts]).toEqual([true, 2])
+      } finally {
+        release.resolve()
+        timer.mockRestore()
+      }
     }),
   options,
 )
