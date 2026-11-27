@@ -1,0 +1,49 @@
+name: Windows Connected receipt diagnostic
+
+on:
+  push:
+    branches: [trace-review-save]
+
+permissions:
+  contents: read
+
+jobs:
+  receipt:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      VECTOR_DISABLE_MODELS_FETCH: "true"
+      DO_NOT_TRACK: "1"
+    steps:
+      - name: Check out the diagnostic source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Set up Bun with frozen dependencies
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Install ripgrep for the offline test guard
+        uses: ./.github/actions/install-ripgrep-windows
+      - name: Configure fixture Git identity
+        run: |
+          git config --global user.name Vector
+          git config --global user.email bot@vectordev.ai
+      - name: Build Engine test dependencies
+        timeout-minutes: 20
+        run: GITHUB_ACTIONS=false bun turbo run build --filter='@vectordevai/engine^...' --log-order=stream
+      - name: Compare replacing synthetic closed and held receipt destinations
+        timeout-minutes: 2
+        working-directory: packages/engine
+        run: bun --no-env-file test/connect/directory-held-handle-probe.ts
+      - name: Exercise the directory receipt under the normal Engine preload
+        timeout-minutes: 5
+        working-directory: packages/engine
+        run: GITHUB_ACTIONS=false bun test --timeout 30000 test/connect/directory.test.ts
