@@ -248,7 +248,11 @@ const answering = <A, E, R>(turn: Effect.Effect<A, E, R>, permission: string) =>
         for (const request of yield* permissions.list()) {
           if (request.permission !== permission || answered.some((item) => item.id === request.id)) continue
           answered.push(request)
-          yield* permissions.reply({ requestID: request.id, reply: "once" })
+          yield* permissions.reply({
+            requestID: request.id,
+            reply: "once",
+            ...(request.permission === "connect_write" ? { confirm: true } : {}),
+          })
         }
         return state.done ? true : undefined
       }),

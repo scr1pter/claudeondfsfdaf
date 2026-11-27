@@ -14,6 +14,7 @@ import { isFreeModel, isFreeModelRef } from "@vectordevai/schema/free-model"
 import { Billing } from "@vectordevai/schema/billing"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { PermissionV1 } from "@vectordevai/core/v1/permission"
+import { createHash } from "node:crypto"
 import path from "path"
 import { SessionV1 } from "@vectordevai/core/v1/session"
 import os from "os"
@@ -95,7 +96,8 @@ import { BrainKnowledge } from "@vectordevai/core/brain/knowledge"
 import { BrainLearn } from "@vectordevai/core/brain/learn"
 import { BrainSkill } from "@vectordevai/core/brain/skill"
 import type { BrainSchema } from "@vectordevai/core/brain/schema"
-import { UNATTENDED_KEY } from "@vectordevai/core/everywhere/frame"
+import { UNATTENDED_KEY, UNATTENDED_SHELL_KEY, UNATTENDED_SHELL_OFFLINE } from "@vectordevai/core/everywhere/frame"
+import { JOB_ID_PATTERN } from "@vectordevai/schema/everywhere"
 import { ownerBlock, scopeOf, scopeQuery, PINNED_SESSION_PREFIX } from "@vectordevai/core/review/prompt"
 import { REVIEW_LENSES } from "@vectordevai/core/review/types"
 import { holdbackText } from "@vectordevai/core/review/holdback"
@@ -327,6 +329,8 @@ export interface Interface {
   }>
   readonly awaitTitles: () => Effect.Effect<void>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  /** The owner-authenticated create handler records eligible jobs in this engine process. */
+  readonly recordScreenedRecallJob?: (session: Session.Info) => Effect.Effect<void>
   readonly prompt: (input: PromptInput, options?: PromptOptions) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly resumeFreeModels: (
@@ -419,6 +423,49 @@ const layer = Layer.effect(
     // Request messages whose recall already ran in this process, so a message that recalled nothing is not scored again
     // on every step.
     const recallsTried = new Set<MessageID>()
+    type ScreenedRequest = {
+      readonly messageID: MessageID
+      readonly promptDigest: string
+      recall?: { readonly id: PartID; readonly ids: readonly string[]; readonly newest?: boolean }
+    }
+    const screenedJobs = new Map<
+      SessionID,
+      {
+        readonly projectID: Session.Info["projectID"]
+        readonly directory: string
+        readonly createdAt: number
+        readonly jobID: string
+        request?: ScreenedRequest
+      }
+    >()
+    const screenedJobID = (session: Session.Info) => {
+      const job = session.metadata?.[UNATTENDED_KEY]
+      if (
+        session.parentID ||
+        session.internal ||
+        session.metadata?.[UNATTENDED_SHELL_KEY] !== UNATTENDED_SHELL_OFFLINE ||
+        !isRecord(job) ||
+        job.by !== "everywhere" ||
+        typeof job.jid !== "string" ||
+        !JOB_ID_PATTERN.test(job.jid)
+      )
+        return
+      return job.jid
+    }
+    const screenedPromptDigest = (message: SessionV1.WithParts) =>
+      createHash("sha256").update(SessionMemory.asked(message)).digest("hex")
+    const recordScreenedRecallJob = (session: Session.Info) =>
+      Effect.sync(() => {
+        const jobID = screenedJobID(session)
+        if (!jobID) return
+        screenedJobs.set(session.id, {
+          projectID: session.projectID,
+          directory: session.directory,
+          createdAt: session.time.created,
+          jobID,
+        })
+        if (screenedJobs.size > MAX_INSTRUCTION_SNAPSHOTS) screenedJobs.delete(screenedJobs.keys().next().value!)
+      })
     // The model learner a finished run left reading its session's last message, which the session's next run cancels.
     const learners = new Map<SessionID, Fiber.Fiber<void>>()
     // The skill drafter a finished run left wording its skill, cancelled the same way.
@@ -2325,6 +2372,12 @@ const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
+      const screenedJob = screenedJobs.get(session.id)
+      const screenedRequest: ScreenedRequest | undefined =
+        screenedJob && human && !input.noReply && options?.screenedRecallOwner === true
+          ? { messageID: message.info.id, promptDigest: screenedPromptDigest(message) }
+          : undefined
+      if (screenedJob) screenedJob.request = screenedRequest
       if (input.noReply === true) return message
       let quieted = false
       const replyLoop = () =>
@@ -2371,6 +2424,11 @@ const layer = Layer.effect(
             return yield* replyLoop()
           })
         }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (screenedJob && screenedJob.request === screenedRequest) screenedJob.request = undefined
+          }),
+        ),
       )
       // A prompt sent while the session is busy joins the run already going, and that run can end without reading it:
       // a rejected permission, a content filter or a provider error ends the loop where it is. It is answered now,
@@ -2931,6 +2989,19 @@ const layer = Layer.effect(
         // A role whose output leaves the machine gets back only what it was given to start with: what the memory tool
         // found for it is not filled in from the owner's personal memory or private documents.
         const audience = audienceOf(session, agent.name)
+        const outwardRoot = audience === "outward" && !session.parentID && !session.internal
+        const screenedJob = outwardRoot ? screenedJobs.get(sessionID) : undefined
+        const screenedMessage = screenedJob?.request && msgs.find((message) => message.info.id === lastUser.id)
+        const screenedRequest =
+          screenedJob?.projectID === session.projectID &&
+          screenedJob.directory === session.directory &&
+          screenedJob.createdAt === session.time.created &&
+          screenedJob.jobID === screenedJobID(session) &&
+          screenedJob.request?.messageID === lastUser.id &&
+          screenedMessage &&
+          screenedJob.request.promptDigest === screenedPromptDigest(screenedMessage)
+            ? screenedJob.request
+            : undefined
         const holdback = holdsReviewBack(session)
         // Attachments the user marked to remember become documents while this request runs, never at admission. A
         // session a guest is in keeps none.
@@ -2938,16 +3009,22 @@ const layer = Layer.effect(
           msgs = yield* keepAttached({ sessionID, msgs, user: lastUser })
         // Tier 1 recall: once per request message on the main agent, from what the user wrote and attached, within the
         // budget its size allows. It is saved on the message, so later steps send the same bytes and the cache holds.
-        // An outward role gets none: recall is not screened (its entries and document cards take no audience), and what
-        // it brings is saved on the message. The gate covers every outward role, not only unattended sessions, so a
-        // sized outward root role added later gets no recall either (vector-everywhere-deviations.md, EV-14 (b)).
-        if (!quick && sized && sized.tier !== "chat" && !session.parentID && !session.internal && audience === "owner")
+        // A laptop's screened recall is held for its admitted request only and never stored in the transcript.
+        if (
+          !quick &&
+          sized &&
+          sized.tier !== "chat" &&
+          !session.parentID &&
+          !session.internal &&
+          (audience === "owner" || screenedRequest)
+        )
           msgs = yield* recallFor({
             sessionID,
             msgs,
             user: lastUser,
             tier: sized.tier,
             personal,
+            screenedRequest,
             habits: research(lastUser),
           })
         // A subagent starts with how the owner works, and one a Thorough request launched with a brief besides, saved
@@ -2969,7 +3046,40 @@ const layer = Layer.effect(
               query: (sized?.users ?? SessionMemory.request(msgs)).map(SessionMemory.typed).join("\n"),
               first: !msgs.some((message) => message.info.role === "assistant" && message.info.agent !== "quick"),
             })
+        if (outwardRoot)
+          msgs = msgs.map((message) => ({
+            ...message,
+            parts: message.parts.filter((part) => !SessionMemory.recall(part)),
+          }))
         msgs = yield* withheldRecall(sessionID, msgs, { personal, audience, holdback })
+        if (screenedRequest?.recall && screenedJobs.get(sessionID)?.request === screenedRequest) {
+          const recall = screenedRequest.recall
+          const place = yield* instruction.place()
+          const eligible = yield* brain.lines(place, recall.ids, { personal: false, audience: "outward" })
+          const text = Brain.recallText(
+            recall.ids.flatMap((id) => eligible.get(id) ?? []),
+            { newest: recall.newest },
+          )
+          if (text && screenedJobs.get(sessionID)?.request === screenedRequest)
+            msgs = msgs.map((message) =>
+              message.info.id !== lastUser.id
+                ? message
+                : {
+                    ...message,
+                    parts: [
+                      ...message.parts,
+                      {
+                        id: recall.id,
+                        messageID: message.info.id,
+                        sessionID,
+                        type: "text",
+                        synthetic: true,
+                        text,
+                      },
+                    ],
+                  },
+            )
+        }
         // What the request carries out of the brain, for Vector Local's network log; counted only while it is on.
         const carried = Egress.policy().enabled
           ? carriedOf(msgs, personal, personal && audience === "owner", learned.length)
@@ -4098,6 +4208,7 @@ const layer = Layer.effect(
       user: SessionV1.User
       tier: TaskSize.Tier
       personal: boolean
+      screenedRequest?: ScreenedRequest
       habits?: boolean
     }) {
       const message = input.msgs.find((item) => item.info.id === input.user.id)
@@ -4109,26 +4220,33 @@ const layer = Layer.effect(
       const place = yield* instruction.place()
       // What the request touches seeds recall over code links: the files of the last messages and the working tree's
       // changes, read once for the request.
-      const changed = yield* git.status(place.root).pipe(
-        Effect.map((items) => items.flatMap((item) => (item.status === "deleted" ? [] : [item.file]))),
-        Effect.catchCause(() => Effect.succeed([] as string[])),
-      )
+      const changed = input.screenedRequest
+        ? []
+        : yield* git.status(place.root).pipe(
+            Effect.map((items) => items.flatMap((item) => (item.status === "deleted" ? [] : [item.file]))),
+            Effect.catchCause(() => Effect.succeed([] as string[])),
+          )
       const result = yield* knowledge.recall(place, {
         query,
         files: SessionMemory.files(message),
-        seeds: SessionMemory.workingSet(input.msgs, place.root, changed),
+        ...(!input.screenedRequest ? { seeds: SessionMemory.workingSet(input.msgs, place.root, changed) } : {}),
         tier: input.tier,
         // Once Run Guard has warned, document context is halved.
         tight: (yield* guard.snapshot(input.sessionID))?.warned === true,
-        personal: input.personal,
+        personal: input.personal && !input.screenedRequest,
+        ...(input.screenedRequest ? { audience: "outward" as const } : {}),
         exclude:
-          input.habits && input.personal
+          input.habits && input.personal && !input.screenedRequest
             ? new Set([...SessionMemory.injected(input.msgs), ...(yield* notHabits(place))])
             : SessionMemory.injected(input.msgs),
         sessionID: input.sessionID,
         requestID: message.info.id,
       })
       if (!result.text) return input.msgs
+      if (input.screenedRequest) {
+        input.screenedRequest.recall = { id: PartID.ascending(), ids: result.ids, newest: result.newest }
+        return input.msgs
+      }
       // Only the repository's lines are saved with the message; personal ones are filled in for each request below.
       const part = yield* sessions.updatePart({
         id: PartID.ascending(),
@@ -4902,6 +5020,7 @@ const layer = Layer.effect(
       currentModel,
       awaitTitles,
       cancel,
+      recordScreenedRecallJob,
       prompt,
       loop,
       resumeFreeModels,
@@ -5284,6 +5403,8 @@ export const PromptInput = Schema.Struct({
 export type PromptInput = Schema.Schema.Type<typeof PromptInput>
 
 export type PromptOptions = {
+  /** Set only from the V1 HTTP credential principal. Other forwarded-request restrictions still apply. */
+  readonly screenedRecallOwner?: boolean
   /**
    * Whether a file:// part's URL is one the user attached themselves (the app's composer, `vector run -f`, a command
    * from their own config). Those are read without asking; every other file part, including all of them when this is

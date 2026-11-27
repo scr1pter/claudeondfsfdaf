@@ -186,6 +186,18 @@ export const RunID = Schema.String.check(Schema.isStartsWith("cr_"), Schema.isLe
 )
 export type RunID = typeof RunID.Type
 
+/** A phone shows up to this many characters of a write preview. Larger patches must be approved on the computer. */
+export const MAX_PHONE_APPROVAL_DIFF = 12_000
+
+/** The details a client needs to show before asking for an explicit Connect write approval. */
+export function writeApprovalDetails(metadata: unknown, maxDiff = Infinity) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return
+  const { runID, description, diff } = metadata as Record<string, unknown>
+  if (!Schema.is(RunID)(runID) || typeof description !== "string" || !description.trim()) return
+  if (diff !== undefined && (typeof diff !== "string" || !diff.trim() || diff.length > maxDiff)) return
+  return { description: description.trim(), diff }
+}
+
 // Who asked. A member never appears here, so a member cannot start another member's hand-off. `sessionID` is absent
 // only for a run a person starts on a directory with no session.
 export const Requester = Schema.Struct({
