@@ -287,8 +287,12 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       // Read once: the wiring offers the worktree only while the engine's probe does, and that may change mid-job.
       const worktree = deps.safeWorktree
       if (!worktree || worktree.policy !== "unattended-v1") {
-        await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "held", summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed." })
-        settled = true
+        settled = await deliver({
+          jid,
+          lease: job.lease.id,
+          outcome: "held",
+          summary: "This computer cannot yet create an unattended worktree safely. No changes were pushed.",
+        })
         return
       }
       let frame: FrameOptions | undefined
@@ -401,8 +405,7 @@ export function createEverywhereRunner(deps: RunnerDeps) {
       if (controller.signal.aborted) throw new Error("Everywhere job stopped")
       const summary = await checkedSummary(job, await engine.summary(session), [...sessions], engine.posting)
       if (needs.size > 0) {
-        await deps.jobs.settle({ jid, lease: job.lease.id, outcome: "needs-approval", summary, needs: [...needs] })
-        settled = true
+        settled = await deliver({ jid, lease: job.lease.id, outcome: "needs-approval", summary, needs: [...needs] })
         return
       }
       const staged = await git.stage(snapshot, placed.directory)

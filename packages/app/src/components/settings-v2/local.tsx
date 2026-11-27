@@ -3,6 +3,7 @@ import { For, Show, createMemo, createResource, createSignal, onCleanup } from "
 import { useDialog } from "@vectordevai/ui/context/dialog"
 import { ButtonV2 } from "@vectordevai/ui/v2/button-v2"
 import { Switch } from "@vectordevai/ui/v2/switch-v2"
+import { useServer } from "@/context/server"
 import { useServerSync } from "@/context/server-sync"
 import { DialogAllowSource, useLocalChange } from "@/features/local/allow-dialog"
 import { DialogEgressLog } from "@/features/local/egress-log"
@@ -29,6 +30,7 @@ import {
   SUBTITLE,
   configRoles,
   enginePlace,
+  lowerFirst,
   offInLocal,
   popoverLines,
   refusal,
@@ -51,6 +53,7 @@ import {
   checkVerdict,
   heldText,
   serverRows,
+  surfaceNote,
   switchView,
   webChoices,
   webNote,
@@ -72,6 +75,7 @@ const title = (id: (typeof SECTIONS)[number]["id"]) => SECTIONS.find((section) =
 
 export function SettingsLocalV2() {
   const reader = useLocalStatus({ retry: true })
+  const server = useServer()
   const serverSync = useServerSync()
   const local = useLocalChange()
   const dialog = useDialog()
@@ -168,6 +172,7 @@ export function SettingsLocalV2() {
                 pending={pending()}
                 restart={desktop.latest?.restartNeeded === true && status().policy.enabled}
                 mismatch={desktop.latest?.mismatch}
+                surface={surfaceNote({ desktop: desktop.latest !== undefined, connection: server.current })}
                 onToggle={(enabled) => void run({ enabled }, enabled ? "Vector Local is on." : "Vector Local is off.")}
                 onApplyHeld={(changes) => void run({ held: [...changes] }, "The change in your config applies now.")}
                 onSetup={setup}
@@ -259,6 +264,8 @@ function SwitchCard(props: {
   pending: boolean
   restart: boolean
   mismatch?: string
+  /** Which Vector the switch is for, in the desktop app (surfaceNote). */
+  surface?: string
   onToggle: (enabled: boolean) => void
   onApplyHeld: (changes: readonly string[]) => void
   onSetup: () => void
@@ -282,6 +289,7 @@ function SwitchCard(props: {
         </Switch>
       </div>
       <div class="settings-v2-card-body">
+        <Show when={props.surface}>{(note) => <p data-slot="local-muted">{note()}</p>}</Show>
         <Show when={view().note}>{(note) => <p data-slot="local-note">{note()}</p>}</Show>
         <Show when={props.status.agent}>
           <p data-slot="local-note">{AGENT}</p>
@@ -737,7 +745,7 @@ function AllowedCard(props: {
               <div data-slot="local-row-copy">
                 <strong>{row.name}</strong>
                 <span data-slot="local-sub">
-                  Sends {row.sends.toLowerCase()} to {row.hosts}.
+                  Sends {row.sends.toLowerCase()} to {lowerFirst(row.hosts)}.
                 </span>
                 <span data-slot="local-sub">Reason: {row.reason}</span>
                 <span data-slot="local-sub">
