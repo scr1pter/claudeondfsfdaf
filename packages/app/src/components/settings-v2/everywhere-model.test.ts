@@ -6,9 +6,11 @@ import { COMPUTER_CAPS } from "@vectordevai/schema/everywhere"
 import type { RemoteStatus } from "@/context/platform"
 import {
   CLOSED_LID,
+  CONTINUE_FAILED,
   CONTINUE_NOTE,
   HOW_JOBS_RUN,
   JOB_RUNNING,
+  JOB_UNCONFIRMED,
   OWN_SESSION_LIMITS,
   PAGE_DESCRIPTION,
   PUSH_RULE,
@@ -16,6 +18,8 @@ import {
   RULE_KEYS,
   VERSION_NOTE,
   checksLine,
+  continuationState,
+  continueEverywhereJob,
   everywhereJobs,
   everywhereOffered,
   everywhereTab,
@@ -27,6 +31,104 @@ import {
   openWorktree,
 } from "./everywhere-model"
 import { filterSettingsGroups, isSettingsTab, settingsGroups } from "./settings-registry"
+
+test("Continue requires a successful scoped status snapshot even before the first live event", () => {
+  const job = "ses_everywhere"
+  expect(continuationState(undefined, job, false)).toBe("unavailable")
+  expect(continuationState([], job, false)).toBe("unavailable")
+  expect(continuationState({ [job]: null }, job, false)).toBe("unavailable")
+  expect(continuationState({ [job]: { type: "busy" } }, job, false)).toBe("running")
+  expect(continuationState({ [job]: { type: "retry" } }, job, false)).toBe("running")
+  expect(continuationState({ [job]: { type: "idle" } }, job, true)).toBe("running")
+  expect(continuationState({ [job]: { type: "idle" } }, job, false)).toBe("ready")
+  expect(continuationState({ ses_other: { type: "busy" } }, job, false)).toBe("ready")
+})
+
+describe("continueEverywhereJob", () => {
+  // A fake Engine: `statuses` answers the scoped status read (an Error rejects it), `created` answers the create.
+  const run = async (input: {
+    statuses?: unknown
+    created?: string | Error
+    working?: boolean[]
+    current?: boolean[]
+  }) => {
+    const calls: string[] = []
+    const working = [...(input.working ?? [])]
+    const current = [...(input.current ?? [])]
+    await continueEverywhereJob({
+      job: "ses_job",
+      working: () => working.shift() ?? false,
+      current: () => current.shift() ?? true,
+      status: async () => {
+        calls.push("status")
+        if (input.statuses instanceof Error) throw input.statuses
+        return input.statuses
+      },
+      create: async () => {
+        calls.push("create")
+        if (input.created instanceof Error) throw input.created
+        return input.created
+      },
+      open: (id) => calls.push(`open ${id}`),
+      problem: (text) => calls.push(`problem ${text}`),
+    })
+    return calls
+  }
+
+  test("a live busy job is refused without asking the Engine", async () => {
+    expect(await run({ working: [true], statuses: {}, created: "ses_new" })).toEqual([`problem ${JOB_RUNNING}`])
+  })
+
+  test("creates and opens a session only after the snapshot shows the job finished", async () => {
+    expect(await run({ statuses: {}, created: "ses_new" })).toEqual(["status", "create", "open ses_new"])
+    expect(await run({ statuses: { ses_job: { type: "idle" } }, created: "ses_new" })).toEqual([
+      "status",
+      "create",
+      "open ses_new",
+    ])
+  })
+
+  test("a busy, retrying or unreadable snapshot creates nothing", async () => {
+    expect(await run({ statuses: { ses_job: { type: "busy" } }, created: "ses_new" })).toEqual([
+      "status",
+      `problem ${JOB_RUNNING}`,
+    ])
+    expect(await run({ statuses: { ses_job: { type: "retry" } }, created: "ses_new" })).toEqual([
+      "status",
+      `problem ${JOB_RUNNING}`,
+    ])
+    expect(await run({ statuses: undefined, created: "ses_new" })).toEqual(["status", `problem ${JOB_UNCONFIRMED}`])
+    expect(await run({ statuses: new Error("offline"), created: "ses_new" })).toEqual([
+      "status",
+      `problem ${JOB_UNCONFIRMED}`,
+    ])
+  })
+
+  test("a live busy event that lands while the snapshot is read still refuses", async () => {
+    expect(await run({ working: [false, true], statuses: {}, created: "ses_new" })).toEqual([
+      "status",
+      `problem ${JOB_RUNNING}`,
+    ])
+  })
+
+  test("after a server change nothing is created, reported or opened", async () => {
+    expect(await run({ current: [false], statuses: {}, created: "ses_new" })).toEqual(["status"])
+    expect(await run({ current: [true, false], statuses: {}, created: "ses_new" })).toEqual(["status", "create"])
+    expect(await run({ current: [true, false], statuses: {}, created: new Error("gone") })).toEqual([
+      "status",
+      "create",
+    ])
+  })
+
+  test("a create that fails or returns no session says so", async () => {
+    expect(await run({ statuses: {}, created: undefined })).toEqual(["status", "create", `problem ${CONTINUE_FAILED}`])
+    expect(await run({ statuses: {}, created: new Error("refused") })).toEqual([
+      "status",
+      "create",
+      `problem ${CONTINUE_FAILED}`,
+    ])
+  })
+})
 
 // VE-41 (EV-21): Settings → Vector everywhere, read-only (EV-21, "Ruling on (a)"). Jobs are off by default, a folder
 // is listed only when the person's own settings file lists it, a limit outside the runner's caps makes the block off,
@@ -477,6 +579,8 @@ describe("what the page says", () => {
       OWN_SESSION_LIMITS,
       CONTINUE_NOTE,
       JOB_RUNNING,
+      JOB_UNCONFIRMED,
+      CONTINUE_FAILED,
       VERSION_NOTE,
       REPOSITORY_RULE,
       PUSH_RULE,

@@ -36,6 +36,7 @@ import {
   REPOSITORY_RULE,
   VERSION_NOTE,
   checksLine,
+  continueEverywhereJob,
   everywhereJobs,
   everywhereTab,
   everywhereView,
@@ -262,8 +263,9 @@ export const SettingsEverywhereV2: Component<{ offered: boolean }> = (props) => 
   const settings = () => howJobsRun(view())
   const checks = () =>
     checksLine({ view: view(), os: platform.platform === "desktop" ? platform.os : undefined, shell: shell() })
-  // Live from the event stream: a job whose status this window has not heard since it opened reads as finished.
+  // Live events can disable the button immediately. The action also asks the Engine before creating a session.
   const running = (job: EverywhereJob) => serverSync().session.data.session_working(job.id)
+  const [continuing, setContinuing] = createSignal(false)
   const page = () => jobsPage(props.offered)
   const serverKey = () => ServerConnection.key(sdk().server)
 
@@ -272,16 +274,24 @@ export const SettingsEverywhereV2: Component<{ offered: boolean }> = (props) => 
     navigate(sessionHref(serverKey(), sessionID))
   }
 
-  const continueJob = (job: EverywhereJob) => {
-    if (running(job)) return setProblem(JOB_RUNNING)
+  const continueJob = async (job: EverywhereJob) => {
+    if (continuing() || !ours()) return
+    const client = sdk().client
+    setContinuing(true)
     setProblem(undefined)
-    void sdk()
-      .client.session.create({ directory: job.directory, title: job.continueTitle }, { throwOnError: false })
-      .then((result) => {
-        if (!result.data?.id) return setProblem("Vector could not start a new session in that folder.")
-        open(result.data.id)
-      })
-      .catch(() => setProblem("Vector could not start a new session in that folder."))
+    await continueEverywhereJob({
+      job: job.id,
+      working: () => running(job),
+      current: () => ours() && sdk().client === client,
+      status: () =>
+        client.session.status({ directory: job.directory }, { throwOnError: false }).then((result) => result.data),
+      create: () =>
+        client.session
+          .create({ directory: job.directory, title: job.continueTitle }, { throwOnError: false })
+          .then((result) => result.data?.id),
+      open,
+      problem: setProblem,
+    }).finally(() => setContinuing(false))
   }
 
   return (
@@ -575,8 +585,8 @@ export const SettingsEverywhereV2: Component<{ offered: boolean }> = (props) => 
                                 <ButtonV2
                                   variant="outline"
                                   size="small"
-                                  disabled={running(job)}
-                                  onClick={() => continueJob(job)}
+                                  disabled={running(job) || continuing()}
+                                  onClick={() => void continueJob(job)}
                                 >
                                   Continue in a new session on this branch
                                 </ButtonV2>
