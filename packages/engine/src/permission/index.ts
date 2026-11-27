@@ -22,7 +22,9 @@ export const TIMED_OUT =
 export interface Interface {
   /** Resolves with the person's answer, or `undefined` when a rule allowed the request without a prompt. */
   readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<Answer | undefined, PermissionV1.Error>
-  readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
+  readonly reply: (
+    input: PermissionV1.ReplyInput,
+  ) => Effect.Effect<void, PermissionV1.NotFoundError | PermissionV2.ConfirmationRequiredError>
   /**
    * Declines one unanswered request that timed out with `CorrectedError({ feedback: message })`. Unlike a rejection it
    * leaves the session's other requests pending. Returns whether it was still pending.
@@ -149,6 +151,12 @@ const layer = Layer.effect(
       const { approved, pending } = yield* InstanceState.get(state)
       const existing = pending.get(input.requestID)
       if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+      if (
+        PermissionPolicy.requiresConnectConfirmation(existing.info.permission) &&
+        input.reply !== "reject" &&
+        (input.reply !== "once" || input.confirm !== true)
+      )
+        return yield* new PermissionV2.ConfirmationRequiredError({ requestID: input.requestID })
       const reply =
         input.reply === "always" &&
         !PermissionV2.canAlwaysApprove(existing.info.permission, existing.info.always, existing.info.patterns)

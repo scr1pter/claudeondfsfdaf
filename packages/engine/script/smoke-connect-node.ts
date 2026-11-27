@@ -6,22 +6,27 @@ import { createConnection } from "node:net"
 import { setTimeout } from "node:timers/promises"
 
 /** Exercises the real bundled owner, runner, hub and HttpApi handler under the desktop's native Node transport. */
-export async function connectedReviews(engine: { url: URL; authorization: string }, directory: string, ownerModel: string) {
+export async function connectedReviews(
+  engine: { url: URL; authorization: string },
+  directory: string,
+  ownerModel: string,
+  nonGitDirectory?: string,
+) {
   assert.equal(process.versions.bun, undefined, "connect transport acceptance must run under native Node")
   const headers = {
     authorization: engine.authorization,
     "content-type": "application/json",
     "x-vector-directory": encodeURIComponent(directory),
   }
-  const request = (route: string, body?: unknown) =>
+  const request = (route: string, body?: unknown, selectedDirectory = directory) =>
     fetch(new URL(route, engine.url), {
       method: body === undefined ? "GET" : "POST",
-      headers,
+      headers: { ...headers, "x-vector-directory": encodeURIComponent(selectedDirectory) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(10_000),
     })
-  const json = async (route: string, body?: unknown): Promise<unknown> => {
-    const response = await request(route, body)
+  const json = async (route: string, body?: unknown, selectedDirectory = directory): Promise<unknown> => {
+    const response = await request(route, body, selectedDirectory)
     const text = await response.text()
     assert.equal(response.ok, true, `${route} returned ${response.status}: ${text.slice(0, 2_000)}`)
     return text ? JSON.parse(text) : undefined
@@ -41,19 +46,36 @@ export async function connectedReviews(engine: { url: URL; authorization: string
 
   // Check the real owner-global loader, not the desktop's merged/project config or this fixture's seed object.
   const global = await json("/global/config")
-  assert.ok(isRecord(global) && isRecord(global.agent) && isRecord(global.agent.vectorscope), "the native Node owner-global review configuration is missing")
+  assert.ok(
+    isRecord(global) && isRecord(global.agent) && isRecord(global.agent.vectorscope),
+    "the native Node owner-global review configuration is missing",
+  )
   assert.equal(global.agent.vectorscope.model, ownerModel, "the native Node owner-global review model was not loaded")
+
+  const project = await json("/project/current")
+  assert.ok(
+    isRecord(project) && project.vcs === "git",
+    "the native Connect smoke did not discover its actual Git repository",
+  )
 
   const approvedSession = await session()
   const early = { done: false, result: undefined as unknown }
   // Catch immediately so an unexpected early response cannot become an unobserved rejection during polling.
-  const approved = json(`/experimental/session/${approvedSession}/connect`, { background: false }).catch(
-    (error: unknown) => error,
-  ).then((result) => { early.done = true; early.result = result; return result })
+  const approved = json(`/experimental/session/${approvedSession}/connect`, { background: false })
+    .catch((error: unknown) => error)
+    .then((result) => {
+      early.done = true
+      early.result = result
+      return result
+    })
   const approval = await wait(async () => {
     const permission = await pending(approvedSession)
     if (permission) return permission
-    assert.equal(early.done, false, `the native Node owner review returned before consent: ${early.result instanceof Error ? early.result.message : (JSON.stringify(early.result) ?? "no result").slice(0, 2000)}`)
+    assert.equal(
+      early.done,
+      false,
+      `the native Node owner review returned before consent: ${early.result instanceof Error ? early.result.message : (JSON.stringify(early.result) ?? "no result").slice(0, 2000)}`,
+    )
     return undefined
   }, "the native Node owner review never asked before work")
   assert.ok(isRecord(approval) && typeof approval.id === "string")
@@ -72,8 +94,8 @@ export async function connectedReviews(engine: { url: URL; authorization: string
   await json(`/permission/${approval.id}/reply`, { reply: "once" })
   const result = await approved
   assert.ok(isRecord(result) && result.status === "done" && isRecord(result.result))
-  assert.notEqual(result.result.state, "cancelled", "a normally approved request was cancelled")
-  assert.equal(result.result.verdict, "not-reviewed", "the non-Git fixture must never claim a clean review")
+  assert.equal(result.result.state, "completed", "the approved clean Git review did not complete")
+  assert.equal(result.result.verdict, "not-reviewed", "the unchanged Git fixture must not claim a reviewed diff")
   const idle = await json("/session/status")
   assert.ok(isRecord(idle) && idle[approvedSession] === undefined)
 
@@ -197,6 +219,23 @@ export async function connectedReviews(engine: { url: URL; authorization: string
   assert.equal(directoryTerminalRetry.result.state, "cancelled")
   assert.deepEqual(await json("/permission"), [], "a terminal native retry created new owner consent")
   assert.deepEqual(await visibleSessions(), visibleBefore, "the canceled directory review left a visible conversation")
+  if (nonGitDirectory) {
+    const created = await json("/session", { title: "Native Node non-Git refusal" }, nonGitDirectory)
+    assert.ok(isRecord(created) && typeof created.id === "string")
+    const refused = await json(`/experimental/session/${created.id}/connect`, { background: false }, nonGitDirectory)
+    assert.ok(isRecord(refused) && refused.status === "done" && isRecord(refused.result))
+    assert.equal(refused.result.state, "refused")
+    assert.equal(refused.result.refusal, "unavailable")
+    assert.equal(refused.result.verdict, "not-reviewed")
+    assert.equal(refused.result.summary, "VectorScope is not ready: Open a Git repository to use connected reviews.")
+    const permissions = await json("/permission", undefined, nonGitDirectory)
+    assert.ok(Array.isArray(permissions))
+    assert.equal(
+      permissions.some((row: unknown) => isRecord(row) && row.sessionID === created.id),
+      false,
+      "a non-Git review asked for consent instead of refusing before work",
+    )
+  }
   return [] as string[]
 }
 

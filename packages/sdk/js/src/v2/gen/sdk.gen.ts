@@ -8800,6 +8800,7 @@ export class Permission extends HeyApiClient {
       workspace?: string
       reply?: "once" | "always" | "reject"
       message?: string
+      confirm?: true
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -8813,6 +8814,7 @@ export class Permission extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "reply" },
             { in: "body", key: "message" },
+            { in: "body", key: "confirm" },
           ],
         },
       ],
@@ -11205,6 +11207,7 @@ export class Permission2 extends HeyApiClient {
       requestID: string
       reply?: PermissionV2Reply
       message?: string
+      confirm?: true
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -11217,6 +11220,7 @@ export class Permission2 extends HeyApiClient {
             { in: "path", key: "requestID" },
             { in: "body", key: "reply" },
             { in: "body", key: "message" },
+            { in: "body", key: "confirm" },
           ],
         },
       ],

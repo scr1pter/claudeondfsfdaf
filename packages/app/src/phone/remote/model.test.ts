@@ -717,6 +717,7 @@ describe("connected tools (CW-23c)", () => {
     const long = ask("connect_write", { runID: "cr_01", description: fix, diff: "+".repeat(20_000) })!
     expect(long.detail!.startsWith(`${fix}\n\n${"+".repeat(12_000)}\n\n`)).toBe(true)
     expect(long.detail!.endsWith("The rest of this change is shown only in Vector on your computer.")).toBe(true)
+    expect(long.denyOnly).toBe(true)
     expect(ask("connect_write", { runID: "cr_01", description: fix })!.detail).toBe(
       `${fix}\n\nThe change itself is shown only in Vector on your computer.`,
     )
@@ -735,7 +736,10 @@ describe("connected tools (CW-23c)", () => {
     expect(ask("connect_cloud", { runID: "cr_01", description: "Send to Vector's cloud." })).toMatchObject({
       title: "Use connect_cloud",
       detail: "anthropic/claude",
+      denyOnly: true,
     })
+    expect(ask("connect_write", { runID: "cr_01", description: fix, diff: "" })).toMatchObject({ denyOnly: true })
+    expect(ask("connect_write", { runID: "cr_01", description: fix, diff })?.denyOnly).toBeUndefined()
   })
 
   test("the open conversation's connected-tools asks: read once, then followed through events", () => {

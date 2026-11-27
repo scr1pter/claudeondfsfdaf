@@ -10,6 +10,7 @@ import { ProviderV2 } from "@vectordevai/core/provider"
 import { SpendGuard } from "@vectordevai/core/spend-guard"
 import { ReadOnlyGit } from "@vectordevai/core/read-only-git"
 import type { Connect } from "@vectordevai/schema/connect"
+import { ProjectID } from "@vectordevai/schema/project-id"
 import { ConnectHub } from "@/connect/hub"
 import { VectorScopeAdapter } from "@/connect/adapters/vectorscope"
 import { ConnectGit } from "@/connect/git"
@@ -856,4 +857,41 @@ local(
     }),
   { git: true },
   60_000,
+)
+
+local(
+  "the non-Git reason requires the selected instance's directory, global project and no Git VCS",
+  () =>
+    Effect.gen(function* () {
+      const instance = yield* requireInstance
+      const project = { ...instance.project, id: ProjectID.global, vcs: undefined }
+      const nonRepository = { ...instance, worktree: "/", project }
+      const linked = path.join(yield* tmpdirScoped(), "linked")
+      yield* Effect.promise(() => fs.symlink(instance.directory, linked, "dir"))
+      for (const input of [
+        {
+          context: nonRepository,
+          directory: instance.directory,
+          reason: "Open a Git repository to use connected reviews.",
+        },
+        { context: nonRepository, directory: linked, reason: REFUSED },
+        {
+          context: { ...nonRepository, project: { ...project, vcs: "git" as const } },
+          directory: instance.directory,
+          reason: REFUSED,
+        },
+        {
+          context: { ...nonRepository, project: { ...project, id: instance.project.id } },
+          directory: instance.directory,
+          reason: REFUSED,
+        },
+      ]) {
+        const result = yield* ConnectGit.use(input.directory, () => Effect.die("Unexpected Git admission")).pipe(
+          Effect.provideService(InstanceRef, input.context),
+          Effect.flip,
+        )
+        expect(result).toMatchObject({ _tag: "Connect.Refusal", code: "unavailable", message: input.reason })
+      }
+    }),
+  { git: true },
 )

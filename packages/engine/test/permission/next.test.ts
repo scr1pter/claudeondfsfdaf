@@ -22,6 +22,42 @@ const env = AppNodeBuilder.build(
 )
 const it = testEffect(env)
 
+it.instance("Connect writes and cloud need explicit Allow once", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const approved = yield* permission.approved()
+    for (const name of ["connect_write", "connect_cloud"]) {
+      const ask = permission.ask({
+        sessionID: SessionID.make("ses_connect_confirmation"),
+        permission: name,
+        patterns: ["fixture"],
+        always: ["fixture"],
+        metadata: {},
+        ruleset: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const pending = yield* ask.pipe(Effect.forkScoped)
+      const [request] = yield* waitForPending(1)
+      const refusals = [{ reply: "once" }, { reply: "always" }, { reply: "always", confirm: true }] as const
+      for (const reply of refusals) {
+        expect(yield* fail(permission.reply({ requestID: request.id, ...reply }))).toMatchObject({
+          _tag: "Permission.ConfirmationRequiredError",
+        })
+        expect(yield* permission.list()).toEqual([request])
+      }
+      const confirmed = { requestID: request.id, reply: "once", confirm: true } as const
+      yield* permission.reply(confirmed)
+      expect(yield* Fiber.join(pending)).toBe("once")
+      expect(yield* fail(permission.reply(confirmed))).toBeInstanceOf(PermissionV1.NotFoundError)
+      expect(yield* permission.approved()).toEqual(approved)
+
+      const denied = yield* ask.pipe(Effect.forkScoped)
+      const [second] = yield* waitForPending(1)
+      yield* permission.reply({ requestID: second.id, reply: "reject" })
+      expect(yield* fail(Fiber.join(denied))).toBeInstanceOf(PermissionV1.RejectedError)
+    }
+  }),
+)
+
 test("after-screen command markers preserve shell allowlists, denials and unread-command rules", () => {
   const rules: PermissionV1.Ruleset = [
     { permission: "bash", pattern: "*", action: "deny" },
