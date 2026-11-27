@@ -1277,15 +1277,23 @@ export const layerWith = <R>(factories: readonly ConnectAdapter.Factory<R>[]) =>
           const persisted = yield* entry.call.directory.complete(completed).pipe(Effect.exit)
           if (Exit.isSuccess(persisted)) entry.receiptHash = persisted.value
           if (Exit.isFailure(persisted)) {
-            // A result too large to preserve is a failed review, never a truncated clean result. Keep only actual
-            // trusted usage and lineage, then attempt a bounded failure receipt before notifying the owner.
+            // A result that could not be preserved, too large or refused by the file system, is a failed review, never
+            // a truncated clean result. Keep only actual trusted usage and lineage, then attempt a bounded failure
+            // receipt before notifying the owner.
+            const error = Cause.squash(persisted.cause)
+            yield* Effect.logWarning("directory review result could not be saved", {
+              cause: Cause.pretty(persisted.cause),
+            })
             completed = {
               ...completed,
               result: {
                 ...result,
                 state: "failed",
                 verdict: "incomplete",
-                summary: "The directory review result could not be saved within its receipt limits.",
+                summary:
+                  error instanceof ConnectDirectory.Error && error.oversized
+                    ? "The directory review result could not be saved within its receipt limits."
+                    : "The directory review result could not be saved.",
                 findings: [],
                 notes: ["Vector did not retain a complete result. Run the review again after resolving this error."],
               },
