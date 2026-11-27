@@ -81,8 +81,9 @@ import { LocalPolicy } from "./policy"
 //   (in strict mode Bun.fetch and a captured fetch go through the guard's proxy, but a captured WebSocket class
 //   connects directly, since Bun's WebSocket does not read the proxy environment). Vector's own code never calls
 //   Bun.fetch, which a test checks, and the guard is the first import of every entry point. Under Bun the `undici`
-//   package's fetch is Bun.fetch, so the requests of the libraries that use it, such as @actions/github's Octokit
-//   (`vector github`), are not seen either;
+//   package's fetch is Bun.fetch, so a library that sends through it is not seen either. Vector's own GitHub clients
+//   (`vector github`'s Octokit and GraphQL clients) are each given a labelled fetch (githubFetch, Egress.fetch as
+//   `github`), and @actions/github is read only for its event context, never to make a client, which a test checks;
 // - a Bun.connect captured before install, including `import { connect } from "bun"`;
 // - Bun.SQL (postgres) and Bun.RedisClient, which connect natively;
 // - in strict mode, Bun.fetch once a test sets NO_PROXY or a proxy variable of its own after install;

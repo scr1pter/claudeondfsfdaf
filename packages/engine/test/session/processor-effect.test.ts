@@ -4,9 +4,10 @@ import { SessionStatusEvent } from "@vectordevai/schema/session-status-event"
 import { Database } from "@vectordevai/core/database/database"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { expect } from "bun:test"
+import { expect, spyOn } from "bun:test"
 import { tool } from "ai"
-import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import path from "path"
 import z from "zod"
 import type { Agent } from "../../src/agent/agent"
@@ -233,6 +234,26 @@ const providerErrorLLM = Layer.succeed(
 )
 const providerErrorEnv = LayerNode.compile(root, [...replacements, [LLM.node, providerErrorLLM]])
 const itProviderError = testEffect(providerErrorEnv)
+
+const overlappingToolCall = testEffect(
+  LayerNode.compile(root, [
+    ...replacements,
+    [
+      LLM.node,
+      Layer.succeed(
+        LLM.Service,
+        LLM.Service.of({
+          stream: () =>
+            Stream.make(
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.toolInputStart({ id: "call-1", name: "lookup" }),
+              LLMEvent.toolCall({ id: "call-1", name: "lookup", input: { query: "weather" } }),
+            ).pipe(Stream.concat(Stream.never)),
+        }),
+      ),
+    ],
+  ]),
+)
 
 const fragmentFailureLLM = Layer.succeed(
   LLM.Service,
@@ -1012,6 +1033,97 @@ it.live("session.processor effect tests complete AI SDK tool calls when native f
         expect(call.state.time.end).toBeDefined()
       }),
     { trusted: true, config: (url) => providerCfg(url) },
+  ),
+)
+
+overlappingToolCall.effect("a tool annotation survives an overlapping provider transition", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "tool")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const model = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+        const reading = yield* Deferred.make<SessionV1.ToolPart>()
+        const transitioned = yield* Deferred.make<void>()
+        const updatePart = session.updatePart
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            spyOn(session, "updatePart").mockImplementation(<T extends SessionV1.Part>(part: T) => {
+              if (
+                part.type !== "tool" ||
+                part.callID !== "call-1" ||
+                part.state.status !== "running" ||
+                part.state.metadata
+              )
+                return updatePart(part)
+              // The provider read its previous state. Hold its write while the independent executor records metadata.
+              return Deferred.succeed(reading, part).pipe(
+                Effect.andThen(Effect.sleep("1 millis")),
+                Effect.andThen(updatePart(part)),
+                Effect.tap(() => Deferred.succeed(transitioned, undefined)),
+              )
+            }),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()).pipe(Effect.asVoid),
+        )
+        const run = yield* handle
+          .process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: ref,
+            },
+            sessionID: chat.id,
+            model,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "tool" }],
+            tools: {},
+          })
+          .pipe(Effect.forkChild)
+        const part = yield* Deferred.await(reading)
+        const annotation = yield* handle
+          .updateToolCall(part.callID, (current) => ({
+            ...current,
+            state: {
+              status: "running",
+              title: "Weather lookup",
+              metadata: { sessionId: "child-session" },
+              input: { query: "weather" },
+              time: { start: 1 },
+            },
+          }))
+          .pipe(Effect.forkChild({ startImmediately: true }))
+        yield* TestClock.adjust("1 millis")
+        yield* Fiber.join(annotation)
+        yield* Deferred.await(transitioned)
+        const key = { sessionID: chat.id, messageID: msg.id, partID: part.id }
+        const running = yield* session.getPart(key)
+        yield* handle.completeToolCall(part.callID, {
+          title: "Weather lookup finished",
+          metadata: { source: "test" },
+          output: "result:weather",
+        })
+        yield* Fiber.interrupt(run)
+        expect(running).toMatchObject({
+          state: { status: "running", title: "Weather lookup", metadata: { sessionId: "child-session" } },
+        })
+        expect(yield* session.getPart(key)).toMatchObject({
+          state: {
+            status: "completed",
+            title: "Weather lookup finished",
+            output: "result:weather",
+            metadata: { source: "test" },
+          },
+        })
+      }),
+    { trusted: true, config: cfg },
   ),
 )
 
