@@ -11,6 +11,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -43,7 +44,14 @@ import * as UnattendedSeccomp from "../../src/tool/shell/unattended-seccomp"
 import type { Tool } from "../../src/tool/tool"
 import { Truncate } from "../../src/tool/truncate"
 import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, provideInstance, testInstanceStoreLayer, tmpdir, tmpdirScoped } from "../fixture/fixture"
+import {
+  disposeAllInstances,
+  provideInstance,
+  testInstanceStoreLayer,
+  tmpdir,
+  tmpdirScoped,
+  trustWorkspace,
+} from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -103,7 +111,8 @@ afterEach(async () => {
 
 type Sent = { readonly status: number; readonly body: Record<string, unknown> & { message?: string } }
 
-function harness(providerUrl: string) {
+/** The engine's HTTP server on a fresh fixture repository, or on `checkout` given the same config and trust. */
+function harness(providerUrl: string, checkout?: string) {
   return Effect.acquireRelease(
     Effect.promise(async () => {
       const names = [
@@ -124,11 +133,16 @@ function harness(providerUrl: string) {
       })
       // The owner's other sessions run as they always do: no sandbox switch for the whole engine.
       delete process.env.VECTOR_SHELL_SANDBOX
-      const tmp = await tmpdir({
-        git: true,
-        trusted: true,
-        config: { ...testProviderConfig(providerUrl), model: MODEL, permission: { "*": "allow" } },
-      })
+      const config = { ...testProviderConfig(providerUrl), model: MODEL, permission: { "*": "allow" as const } }
+      const tmp = await tmpdir({ git: true, trusted: true, config })
+      if (checkout) {
+        await Bun.write(
+          path.join(checkout, "vector.json"),
+          JSON.stringify({ $schema: "https://vectordev.ai/config.json", ...config }),
+        )
+        await trustWorkspace(checkout)
+      }
+      const directory = checkout ?? tmp.path
       const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
       const owner = ServerAuth.header({ username: "vector", password: OWNER_PASSWORD })!
       const guest = ServerAuth.header({ username: "guest", password: GUEST_PASSWORD })!
@@ -139,7 +153,7 @@ function harness(providerUrl: string) {
         as: "owner" | "forwarded" | "guest" | "anonymous" = "owner",
       ): Promise<Sent> => {
         const url = new URL(route, listener.url)
-        url.searchParams.set("directory", tmp.path)
+        url.searchParams.set("directory", directory)
         const response = await fetch(url, {
           method,
           keepalive: false,
@@ -155,7 +169,7 @@ function harness(providerUrl: string) {
       }
       return {
         send,
-        directory: tmp.path,
+        directory,
         async close() {
           await listener.stop(true)
           await tmp[Symbol.asyncDispose]()
@@ -227,6 +241,68 @@ function scratch() {
   const root = process.platform === "win32" ? os.tmpdir() : path.join("/tmp", "vector-v2", "everywhere")
   mkdirSync(root, { recursive: true })
   return mkdtempSync(path.join(root, "ev16-"))
+}
+
+/**
+ * A job checkout as Worktree.createUnattended makes one: `git worktree add` from the owner's repository in a home folder
+ * to a folder under the data folder there, so the checkout's own gitdir and the shared Git metadata sit in the folder the
+ * unattended home mask hides. `root` is outside the private /tmp mount, so that mount alone cannot hide it. A second
+ * job's checkout, a file of the main checkout and a key in that home's .ssh are there to stay hidden.
+ */
+function linkedCheckout(root: string) {
+  const fixture = realpathSync(mkdtempSync(path.join(root, ".vector-unattended-git-")))
+  const home = path.join(fixture, "home")
+  const project = path.join(home, "project")
+  const jobs = path.join(home, ".local", "share", "vector", "everywhere-worktree", "project")
+  const checkout = path.join(jobs, "vej_fixture")
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@vector.test", "-c", "commit.gpgsign=false", ...args],
+      { cwd, env: { PATH: process.env.PATH, HOME: home, GIT_CONFIG_NOSYSTEM: "1" } },
+    )
+    if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`)
+  }
+  mkdirSync(project, { recursive: true })
+  mkdirSync(jobs, { recursive: true })
+  mkdirSync(path.join(home, ".ssh"))
+  writeFileSync(path.join(home, ".ssh", "id_fixture"), "synthetic key")
+  git(project, "init", "-q", "-b", "main")
+  writeFileSync(path.join(project, "README.md"), "base\n")
+  git(project, "add", "README.md")
+  git(project, "commit", "-q", "-m", "fixture base")
+  git(project, "worktree", "add", "-q", "-b", "vector/ve-fixture", checkout)
+  git(project, "worktree", "add", "-q", "-b", "vector/ve-other", path.join(jobs, "vej_other"))
+  writeFileSync(path.join(project, "main-only.txt"), "main checkout only")
+  const common = path.join(project, ".git")
+  return { fixture, home, project, checkout, common, gitdir: path.join(common, "worktrees", "vej_fixture") }
+}
+
+/** Git reads in the job checkout, then writes to its Git metadata and reads of the rest of the home, each reported. */
+function gitProbe(git: ReturnType<typeof linkedCheckout>) {
+  return [
+    "echo change >> README.md",
+    'echo "status=$(git status --porcelain=v1 --branch --untracked-files=no 2>&1 | tr "\\n" "|")"',
+    'echo "log=$(git log -1 --format=%s 2>&1)"',
+    'echo "diff=$(git diff --numstat 2>&1)"',
+    `(echo x > "${git.gitdir}/HEAD") 2>/dev/null && echo gitdir=written || echo gitdir=refused`,
+    `(echo x > "${git.common}/config") 2>/dev/null && echo config=written || echo config=refused`,
+    `(echo x > "${git.common}/objects/planted") 2>/dev/null && echo objects=written || echo objects=refused`,
+    `(mkdir -p "${git.common}/hooks" && echo x > "${git.common}/hooks/post-checkout") 2>/dev/null && echo hook=written || echo hook=refused`,
+    `test -e "${git.common}/worktrees/vej_other" && echo other=visible || echo other=hidden`,
+    `test -e "${git.project}/main-only.txt" && echo main=visible || echo main=hidden`,
+    `test -e "${git.home}/.ssh/id_fixture" && echo key=visible || echo key=hidden`,
+    "",
+  ].join("\n")
+}
+
+/** What gitProbe prints when Git works in the checkout and nothing else of the home is readable or writable. */
+function expectGitProbe(output: string | undefined) {
+  expect(output).toContain("status=## vector/ve-fixture| M README.md|")
+  expect(output).toContain("log=fixture base\n")
+  expect(output).toContain("diff=1\t0\tREADME.md\n")
+  for (const line of ["gitdir=refused", "config=refused", "objects=refused", "hook=refused"])
+    expect(output).toContain(line)
+  for (const line of ["other=hidden", "main=hidden", "key=hidden"]) expect(output).toContain(line)
 }
 
 describe("which sessions are offline-only (R-M2)", () => {
@@ -614,6 +690,27 @@ describe("an offline-only session's commands (R-M2)", () => {
       })
       expect(written).toBe("exit=7 \n")
     }),
+  )
+
+  liveIf(offline)(
+    "git reads a linked job checkout whose repository sits in the masked home, and its metadata stays read-only",
+    () =>
+      Effect.gen(function* () {
+        // The shell tool masks os.homedir(), which Bun reads once at startup, so the owner's repository goes there.
+        const git = linkedCheckout(os.homedir())
+        yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(git.fixture, { recursive: true, force: true })))
+        const llm = yield* TestLLMServer
+        const h = yield* harness(llm.url, git.checkout)
+        const marked = yield* created(h, { title: "Unattended", metadata: MARKS })
+        yield* llm.tool("bash", { command: gitProbe(git), description: "Read the checkout with git" })
+        yield* llm.text("done")
+        const state = completed(yield* prompt(h, marked.id), "bash")
+        expect(state?.metadata.sandbox).toBe(Sandbox.UNATTENDED_NOTICE)
+        expectGitProbe(state?.output)
+        expect(readFileSync(path.join(git.gitdir, "HEAD"), "utf8")).toBe("ref: refs/heads/vector/ve-fixture\n")
+        expect(existsSync(path.join(git.common, "objects", "planted"))).toBe(false)
+        expect(existsSync(path.join(git.common, "hooks", "post-checkout"))).toBe(false)
+      }),
   )
 
   it.live("terminals and the session's own shell route never run anything for it", () =>
@@ -1128,6 +1225,79 @@ describe("Sandbox.unattended", () => {
         expect(readFileSync(existingMask, "utf8")).toBe("synthetic credential target")
       } finally {
         rmSync(fixture, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.skipIf(!offline)(
+    "binds back only a linked checkout's own gitdir and the shared Git entries it reads, and nothing for a crafted one",
+    () => {
+      const git = linkedCheckout("/var/tmp")
+      const decide = (checkout: string, command = "true") =>
+        Sandbox.unattended({
+          shell: "/bin/sh",
+          command,
+          cwd: checkout,
+          workspaceRoot: checkout,
+          home: git.home,
+          env: { PATH: "/usr/bin:/bin" },
+        })
+      // Every read-only bind source inside the host home, which the mask hides unless it is bound back.
+      const restored = (decided: ReturnType<typeof decide>) =>
+        decided.type === "sandboxed"
+          ? [
+              ...new Set(
+                decided.wrapped.args.flatMap((arg, index, args) =>
+                  arg === "--ro-bind" && args[index + 1]!.startsWith(`${git.home}/`) ? [args[index + 1]!] : [],
+                ),
+              ),
+            ].sort()
+          : undefined
+      try {
+        const decided = decide(git.checkout, gitProbe(git))
+        expect(restored(decided)).toEqual(
+          [
+            path.join(git.checkout, ".git"),
+            git.gitdir,
+            ...["HEAD", "config", "info", "logs/refs", "objects", "refs"].map((entry) => path.join(git.common, entry)),
+          ].sort(),
+        )
+        if (decided.type !== "sandboxed") return
+        const filter = path.join(git.fixture, "filter")
+        writeFileSync(filter, decided.wrapped.seccomp!)
+        const fd = openSync(filter, "r")
+        const inside = (() => {
+          try {
+            return Bun.spawnSync([decided.wrapped.command, ...decided.wrapped.args], {
+              env: decided.wrapped.env,
+              stdio: [fd, "pipe", "pipe"],
+            })
+          } finally {
+            closeSync(fd)
+          }
+        })()
+        expect(inside.exitCode).toBe(0)
+        expectGitProbe(inside.stdout.toString())
+        expect(readFileSync(path.join(git.gitdir, "HEAD"), "utf8")).toBe("ref: refs/heads/vector/ve-fixture\n")
+
+        // A marker naming another job's gitdir (whose back-reference names that job's checkout) or a folder that is not
+        // a gitdir restores nothing but the marker itself.
+        for (const [name, gitdir] of [
+          ["borrowed", path.join(git.common, "worktrees", "vej_other")],
+          ["keys", path.join(git.home, ".ssh")],
+          ["home", git.home],
+        ]) {
+          const crafted = path.join(git.home, name)
+          mkdirSync(crafted)
+          writeFileSync(path.join(crafted, ".git"), `gitdir: ${gitdir}\n`)
+          expect(restored(decide(crafted))).toEqual([path.join(crafted, ".git")])
+        }
+        // A shared entry that is a link could name any folder of the home, so a link restores nothing either.
+        renameSync(path.join(git.common, "objects"), path.join(git.common, "objects-real"))
+        symlinkSync(path.join(git.common, "objects-real"), path.join(git.common, "objects"))
+        expect(restored(decide(git.checkout))).toEqual([path.join(git.checkout, ".git")])
+      } finally {
+        rmSync(git.fixture, { recursive: true, force: true })
       }
     },
   )

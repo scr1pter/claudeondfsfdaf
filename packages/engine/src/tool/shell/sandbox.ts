@@ -375,7 +375,7 @@ export function unattended(
   const cwd = absoluteDirectory(input.cwd)
   if (!home || !cwd || !containsOrSame(cwd, home.workspace) || containsOrSame(bootstrap, home.host))
     return { type: "refused", message: UNATTENDED_REFUSAL }
-  const metadata = gitMetadata(home.workspace)
+  const metadata = gitMetadata(home.workspace, home.host, canonical(input.data ?? Global.Path.data))
   const decided = offlineCommand(
     {
       ...input,
@@ -421,12 +421,65 @@ export function unattended(
 // The checkout's own `.git` sits inside the one folder a command may write, where a command could plant a hook, a
 // config (core.fsmonitor, a filter driver) or another gitdir that the next git outside the sandbox would run. It is
 // bound read-only, a mount point no command can replace (a linked worktree's marker already is, and its gitdir is not
-// writable in workspace mode). A `.git` that is a link cannot be pinned that way, so it is refused (undefined).
-function gitMetadata(workspaceRoot: string) {
+// writable in workspace mode). A `.git` that is a link cannot be pinned that way, so it is refused (undefined). A linked
+// checkout's own gitdir and shared metadata come back read-only as well (linkedGit).
+function gitMetadata(workspaceRoot: string, home: string, data: string) {
   const marker = path.join(canonical(workspaceRoot), ".git")
   const info = fs.lstatSync(marker, { throwIfNoEntry: false })
   if (info === undefined) return []
-  return info.isSymbolicLink() ? undefined : ["--ro-bind", marker, marker]
+  if (info.isSymbolicLink()) return undefined
+  return ["--ro-bind", marker, marker, ...(info.isFile() ? readOnly(linkedGit(marker, home, data)) : [])]
+}
+
+// What git reads from a linked checkout's shared folder: objects, refs and the files beside them, never hooks, other
+// checkouts' gitdirs or anything else in the repository's folder.
+const SHARED_GIT = ["objects", "refs", "packed-refs", "reftable", "logs/refs", "config", "HEAD", "shallow", "info"]
+
+/**
+ * A job's linked checkout (Worktree.createUnattended) keeps its gitdir at <common>/worktrees/<name> and shares <common>
+ * with the owner's repository, usually inside the home folder the mask hides, so git there would find no repository.
+ * Read from the files git writes (no git runs on the host): the marker names the gitdir, the gitdir's `commondir` names
+ * <common> and its `gitdir` names this marker back. That gitdir and the existing SHARED_GIT entries are bound back.
+ * Anything unexpected binds nothing (git then fails inside): a gitdir that is not <common>/worktrees/<name>, a
+ * back-reference to another checkout, an entry that is a link (it could name any folder of the home), a <common> that
+ * holds the home folder or overlaps the checkout or Vector's data folder, or an entry that holds or sits in a secret.
+ */
+function linkedGit(marker: string, home: string, data: string) {
+  try {
+    const named = fs.readFileSync(marker, "utf8").match(/^gitdir: ([^\n]+)\n?$/)
+    if (!named) return []
+    const gitdir = fs.realpathSync(path.resolve(path.dirname(marker), named[1]))
+    const common = fs.realpathSync(path.resolve(gitdir, fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim()))
+    const back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim()
+    const entries = [
+      gitdir,
+      ...SHARED_GIT.map((entry) => path.join(common, entry)).filter(
+        (file) => fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined,
+      ),
+    ]
+    const secrets = [
+      ...[...SECRETS, ...UNATTENDED_SECRETS].map((entry) => canonical(path.join(home, entry))),
+      ...credentialStorePaths(home, data),
+    ]
+    if (
+      gitdir !== path.join(common, "worktrees", path.basename(gitdir)) ||
+      !fs.statSync(gitdir).isDirectory() ||
+      fs.realpathSync(path.resolve(gitdir, back)) !== marker ||
+      !["objects", "refs"].every((entry) => entries.includes(path.join(common, entry))) ||
+      containsOrSame(home, common) ||
+      overlaps(common, path.dirname(marker)) ||
+      overlaps(common, data) ||
+      entries.some((file) => fs.realpathSync(file) !== file || secrets.some((secret) => overlaps(file, secret)))
+    )
+      return []
+    return entries
+  } catch {
+    return []
+  }
+}
+
+function overlaps(first: string, second: string) {
+  return containsOrSame(first, second) || containsOrSame(second, first)
 }
 
 function hiddenStores(home: string, workspace: string) {
@@ -443,7 +496,6 @@ function visibleWithPrivateHome(file: string, home: string, workspace: string) {
 export function unattendedHome(homePath: string, workspacePath: string, searchPath?: string) {
   const host = absoluteDirectory(homePath)
   const workspace = absoluteDirectory(workspacePath)
-  const overlaps = (first: string, second: string) => containsOrSame(first, second) || containsOrSame(second, first)
   if (!host || !workspace || overlaps(host, UNATTENDED_HOME) || containsOrSame(host, workspace)) return undefined
   const tools = (directories: readonly string[]) =>
     directories.flatMap((directory) => {
