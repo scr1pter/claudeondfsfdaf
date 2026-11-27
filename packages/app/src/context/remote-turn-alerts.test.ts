@@ -17,7 +17,13 @@ import type { Platform } from "./platform"
 const DIRECTORY = "/repo"
 const NOW = 1_000_000
 const ROOT = { id: "ses_root", title: "Fix the login" }
-const HELPER = { id: "ses_helper", parentID: "ses_root", title: "Delete the build folder (@general subagent)" }
+// The engine's lifecycle record for a running helper, as sync.session.resolve returns it to the ask controller.
+const HELPER = {
+  id: "ses_helper",
+  parentID: "ses_root",
+  title: "Delete the build folder (@general subagent)",
+  metadata: { subagent: { rootSessionID: ROOT.id, parentSessionID: ROOT.id, status: "running" } },
+}
 const SESSIONS = [ROOT, HELPER]
 const listed = {
   signedIn: true,
@@ -111,13 +117,9 @@ describe("a phone's turn with every listener on", () => {
     expect(env.decisions).toEqual([false])
     // The ask alerts on this computer once, whoever else listens.
     expect(env.desktop).toEqual(["permission"])
-    // The phone gets two pushes for this one ask today: Hands' ask alert (route approvals) beside Codium's helper alert
-    // (route sessions). That duplicate is recorded for the lead in codium-deviations.md ("Codium finish: B09 combined
-    // Remote authorization", For the lead); the fix there changes this expectation.
-    expect(env.sent.toSorted((a, b) => (a.route ?? "").localeCompare(b.route ?? ""))).toEqual([
-      { event: "needsYou", title: "ask", route: "approvals" },
-      { event: "needsYou", title: "A helper needs you: Fix the login", route: "sessions" },
-    ])
+    // The phone gets one push for this one ask, from the helper path, titled with the conversation.
+    expect(env.sent).toEqual([{ event: "needsYou", title: "A helper needs you: Fix the login", route: "sessions" }])
+    expect(JSON.stringify(env.sent)).not.toContain(HELPER.title)
   })
 
   test("the same request outside a phone's turn is answered by auto-accept, and no one is alerted", async () => {
@@ -151,6 +153,7 @@ describe("a phone's turn with every listener on", () => {
     )
     expect(env.decisions).toEqual([false])
     expect(env.codium()).toEqual([])
+    expect(env.sent).toEqual([{ event: "needsYou", title: "ask", route: "approvals" }])
   })
 
   test("an interrupted helper alerts once, with no report, prompt, command or helper title in it", async () => {

@@ -3,13 +3,28 @@ import { alertTitle, type PhoneAlert } from "./phone-alerts"
 const record = (value: unknown) =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
 
+// A helper is a child session with lifecycle metadata. A fork also has a parent, but no lifecycle.
+function helperSession(value: unknown) {
+  const info = record(value)
+  const lifecycle = record(record(info?.metadata)?.subagent)
+  if (!info || !lifecycle || typeof info.id !== "string" || typeof info.parentID !== "string") return undefined
+  return { id: info.id, parentID: info.parentID, lifecycle }
+}
+
+/**
+ * Whether a helper's ask reaches the paired phones through createHelperPhoneAlerts instead of the ask alert. The
+ * engine records a helper's wait only while it runs, so any other child keeps the ask alert.
+ */
+export function helperOwnsAskPhoneAlert(value: unknown) {
+  return helperSession(value)?.lifecycle.status === "running"
+}
+
 /** Read lifecycle-owned metadata, never a task's output. No reason, prompt or partial command is included in a push. */
 export function helperPhoneAlert(value: unknown, now: number) {
-  const info = record(value)
-  const metadata = record(info?.metadata)
-  const lifecycle = record(metadata?.subagent)
-  if (!info || !lifecycle || typeof info.id !== "string" || typeof info.parentID !== "string") return undefined
-  const parent = typeof lifecycle.rootSessionID === "string" ? lifecycle.rootSessionID : info.parentID
+  const helper = helperSession(value)
+  if (!helper) return undefined
+  const lifecycle = helper.lifecycle
+  const parent = typeof lifecycle.rootSessionID === "string" ? lifecycle.rootSessionID : helper.parentID
   const waiting = record(lifecycle.waiting)
   const interrupted = record(lifecycle.interruption)
   const event =
@@ -22,7 +37,7 @@ export function helperPhoneAlert(value: unknown, now: number) {
         ? { at: interrupted.at, label: "A helper was interrupted", waiting: false }
         : undefined
   if (!event || !Number.isFinite(event.at) || event.at > now || now - event.at > 5 * 60_000) return undefined
-  return { parent, label: event.label, waiting: event.waiting, key: `${info.id}:${event.at}:${event.label}` }
+  return { parent, label: event.label, waiting: event.waiting, key: `${helper.id}:${event.at}:${event.label}` }
 }
 
 type Session = { title?: string | null; parentID?: string; internal?: string }

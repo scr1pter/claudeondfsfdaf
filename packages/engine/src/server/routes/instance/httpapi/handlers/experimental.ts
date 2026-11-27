@@ -228,8 +228,9 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       payload: typeof SessionStopInput.Type
     }) {
       yield* access(ctx.params.sessionID, true)
+      // The session in the path is the one stopped, whatever the body names (Track B B09).
       return yield* shown(
-        yield* taskError(tasks.interrupt({ sessionID: ctx.params.sessionID, ...ctx.payload }, taskPrompts)),
+        yield* taskError(tasks.interrupt({ ...ctx.payload, sessionID: ctx.params.sessionID }, taskPrompts)),
       )
     })
 

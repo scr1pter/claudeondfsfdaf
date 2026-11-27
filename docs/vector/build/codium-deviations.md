@@ -6486,6 +6486,12 @@ These are pointers only; nothing is fixed here.
 - B10 (For the lead): the privacy-draft note, B10-3 and the "memory files" count wording.
 - B09a and B09b (For the lead): Hands' second, helper-titled phone alert for a helper's ask
   (`packages/app/src/pages/layout/ask-notifications.ts:59-64`), and the `session-stop.test.ts` excess-field status.
+  27 Nov 2026: both closed on branch `helper-alert-dedupe` (backlog B09-hands-alert). `ask-notification-controller.ts`
+  skips Hands' phone push for a running helper (`helperOwnsAskPhoneAlert` in `helper-phone-alert.ts`), so the phone
+  gets one root-titled push from `createHelperPhoneAlerts`; forks and helpers that are not running keep Hands' push.
+  `sessionStop` spreads the payload before the path's `sessionID`, and the excess-field case is pinned to 200 with the
+  extras dropped. The spread order is defensive: the schema already drops extras, so no test can turn red on it.
+  Refusing extras with 400 to match `additionalProperties: false` stays open for the lead. CI: pending, not pushed.
 - H1c's D1 and D2 and H2a's two hosted API fields: accept them, or move them to H1a.
 - New from DZ:
   - the B11 shift recorded in the checkpoint, which is a decision on whether to re-measure both sources on one day;

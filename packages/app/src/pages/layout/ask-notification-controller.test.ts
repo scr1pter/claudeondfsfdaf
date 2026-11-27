@@ -42,7 +42,9 @@ function fixture() {
     owned: true,
     viewed: true,
     auto: false as boolean | Promise<boolean>,
-    session: session as (typeof session & { internal?: string }) | undefined,
+    session: session as
+      | (typeof session & { internal?: string; parentID?: string; metadata?: Record<string, unknown> })
+      | undefined,
     preferences: { agent: true, permissions: true, permissionSound: true },
     sounds: 0,
     notifications: [] as { title: string; href: string }[],
@@ -197,6 +199,43 @@ test("paired-phone alerts share the observed-ask cooldown without duplicating de
   fake.controller.close()
   await fake.controller.observe(question("que_closed"))
   expect(fake.state.phones).toHaveLength(2)
+})
+
+// Track B B09: a running helper's ask reaches the phones once, from createHelperPhoneAlerts, titled with the root.
+const runningHelper = { rootSessionID: "ses_parent", parentSessionID: "ses_parent", status: "running" }
+
+test("a running helper's asks still alert this computer but leave the phone push to the helper path", async () => {
+  const fake = fixture()
+  fake.state.viewed = false
+  fake.state.session = { ...session, parentID: "ses_parent", metadata: { subagent: runningHelper } }
+  await fake.controller.observe(permission("per_helper", "bash"))
+  fake.state.now += 5000
+  await fake.controller.observe(question("que_helper"))
+  expect(fake.state.phones).toEqual([])
+  expect(fake.state.notifications.map((item) => item.title)).toEqual(["permission", "question"])
+  expect(fake.state.toasts.map((item) => item.kind)).toEqual(["permission", "question"])
+  expect(fake.state.sounds).toBe(1)
+  fake.controller.close()
+})
+
+test("a root conversation, a fork and a helper that is not running keep the ask phone push", async () => {
+  for (const value of [
+    session,
+    { ...session, parentID: "ses_parent" },
+    { ...session, parentID: "ses_parent", metadata: {} },
+    { ...session, parentID: "ses_parent", metadata: { subagent: "not a helper" } },
+    { ...session, metadata: { subagent: runningHelper } },
+    { ...session, parentID: "ses_parent", metadata: { subagent: { ...runningHelper, status: "completed" } } },
+    { ...session, parentID: "ses_parent", metadata: { subagent: { ...runningHelper, status: "cancelled" } } },
+  ]) {
+    const fake = fixture()
+    fake.state.session = value
+    await fake.controller.observe(permission("per_child", "bash"))
+    fake.state.now += 5000
+    await fake.controller.observe(question("que_child"))
+    expect(fake.state.phones).toEqual([sessionID, sessionID])
+    fake.controller.close()
+  }
 })
 
 test("replacing an unviewed toast preserves the new alert's phone cooldown", async () => {
