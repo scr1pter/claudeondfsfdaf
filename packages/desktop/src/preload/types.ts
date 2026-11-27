@@ -1,4 +1,5 @@
 import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
+import type { RemoteReviewAsk } from "../../../app/src/context/remote-review-ask"
 import type { VectorAccountPlatform } from "@vectordevai/app/vector-account"
 import type { DesktopMenuAction } from "@vectordevai/app/desktop-menu"
 import type { WslServersPlatform } from "@vectordevai/app/wsl/types"
@@ -115,8 +116,8 @@ export type RemoteAPI = {
   cancelPairing: () => Promise<RemoteStatus>
   unpair: (device: string) => Promise<RemoteStatus>
   disconnectAll: () => Promise<RemoteStatus & { killed: boolean }>
-  /** Whether a phone started the turn any of these sessions runs; the app's auto-accept leaves those to a person. */
-  isPhoneTurn: (sessionIDs: string[]) => Promise<boolean>
+  /** Whether a phone started a session's turn or the review that raised this ask. */
+  isPhoneTurn: (sessionIDs: string[], review?: RemoteReviewAsk) => Promise<boolean>
   onChange: (callback: (status: RemoteStatus) => void) => () => void
 }
 

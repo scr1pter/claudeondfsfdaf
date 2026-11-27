@@ -222,7 +222,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     offering: 0,
   }
 
-  const turns = createRemoteTurns()
+  const turns = createRemoteTurns(deps.engine.request)
   const approvals = createPasskeyApprovals({ origin: deps.origin, now })
   const pairing = createRemotePairing({
     origin: deps.origin,
@@ -400,7 +400,7 @@ export function createRemoteLink(deps: LinkDependencies) {
   const readEvents = async (controller: AbortController) => {
     try {
       for await (const event of deps.engine.events(controller.signal)) {
-        turns.observe(event.payload)
+        turns.observe(event.payload, event.directory)
         if (state.watching && STREAMED.has(event.payload.type)) await queueEvent(event)
         if (!state.watching && turns.size === 0) break
       }
@@ -1006,10 +1006,10 @@ export function createRemoteLink(deps: LinkDependencies) {
       await evaluate()
       return { ...status(), killed }
     },
-    /** Whether any of these sessions runs a turn a phone started (the app's auto-accept leaves those to a person). */
-    isPhoneTurn(sessionIDs: unknown) {
+    /** Whether a phone started a session's turn or the review that raised this ask. */
+    isPhoneTurn(sessionIDs: unknown, review?: unknown) {
       if (!Array.isArray(sessionIDs)) return false
-      return turns.has(sessionIDs.filter((id): id is string => typeof id === "string").slice(0, 64))
+      return turns.has(sessionIDs.filter((id): id is string => typeof id === "string").slice(0, 64), review)
     },
     /** Whether a phone is attached and watching; keep-awake holds the computer awake for busy sessions then. */
     watching: () => state.watching,
@@ -1021,6 +1021,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     phones: (): readonly PairedPhone[] => state.identity?.phones ?? [],
     stop() {
       state.stopped = true
+      turns.clearReviews()
       clearRetry()
       close()
       state.stream?.abort()

@@ -55,6 +55,7 @@ const ID = /^[A-Za-z0-9_-]{1,128}$/
 const QUERY_VALUE = 512
 const TEXT_LIMIT = 32_000
 const ANSWER_LIMIT = 4 * 1024 * 1024
+const MAX_REVIEW_HOLDS = 64
 
 type Query = Record<string, (value: string) => boolean>
 type Route = {
@@ -82,6 +83,33 @@ const isText = (value: string) => value.length <= 200
 // letters and digits only, which is all RunID.create() emits. remote-routes.test.ts checks this one against the schema.
 const isSession = (value: string) => value.startsWith("ses") && isId(value)
 const isRun = (value: string) => /^cr_[A-Za-z0-9_-]{1,61}$/.test(value)
+
+type ReviewScope = { sessionID: string; directory: string }
+type ReviewIdentity = ReviewScope & { runID: string }
+
+function reviewIdentity(value: unknown): ReviewIdentity | undefined {
+  const input = recordOf(value)
+  if (!input || typeof input.runID !== "string" || !isRun(input.runID)) return
+  if (typeof input.sessionID !== "string" || !isSession(input.sessionID)) return
+  if (typeof input.directory !== "string" || !input.directory || input.directory.length > 4_096) return
+  return { runID: input.runID, sessionID: input.sessionID, directory: input.directory }
+}
+
+function reviewRun(body: unknown, scope: ReviewScope) {
+  const run = recordOf(body)
+  const request = recordOf(run?.request)
+  const requester = recordOf(request?.requester)
+  if (!run || !request || !requester || typeof run.id !== "string" || !isRun(run.id)) return
+  if (request.id !== run.id || requester.kind !== "user" || requester.sessionID !== scope.sessionID) return
+  if (request.directory !== scope.directory || request.to !== "vectorscope" || request.action !== "review") return
+  if (request.background !== true) return
+  const status = run.status
+  if (status !== "queued" && status !== "running" && (status !== "done" || typeof recordOf(run.result)?.state !== "string"))
+    return
+  return { runID: run.id, status, target: reviewTarget(request.target) }
+}
+
+const reviewID = ({ runID, sessionID, directory }: ReviewIdentity) => JSON.stringify([runID, sessionID, directory])
 
 /** The allowlist. `:name` segments are ids. Methods and paths not listed here never reach the engine. */
 export const REMOTE_ROUTES: readonly Route[] = [
@@ -147,11 +175,46 @@ export const REMOTE_ROUTES: readonly Route[] = [
   },
 ]
 
-/** Sessions whose current turn a phone started. The app's auto-accept answers none of their requests. */
-export function createRemoteTurns() {
+/** Phone-started turns and detached reviews whose approval requests must wait for a person. */
+export function createRemoteTurns(engine?: (request: EngineRequest) => Promise<EngineAnswer>) {
   // Each held session's hold: when it began, and whether it came from the session above it (then the helper's own
   // record ending releases it as well).
   const marked = new Map<string, { at: number; inherited: boolean }>()
+  const starting = new Set<ReviewScope>()
+  type ReviewHold = ReviewIdentity & { checking?: boolean; recheck?: boolean }
+  const reviews = new Map<string, ReviewHold>()
+
+  function checkReview(key: string, hold: ReviewHold) {
+    if (!engine) return
+    if (hold.checking) {
+      hold.recheck = true
+      return
+    }
+    hold.checking = true
+    void engine({
+      method: "GET",
+      path: `/experimental/connect/runs/${hold.runID}`,
+      query: { sessionID: hold.sessionID, directory: hold.directory },
+    })
+      .then((answer) => {
+        if (reviews.get(key) !== hold) return
+        const run = answer.status === 200 ? reviewRun(answer.body, hold) : undefined
+        // The scoped Connect API uses 400 even for a missing run. Generic failures leave approval manual.
+        if (
+          (run?.runID === hold.runID && run.status === "done") ||
+          (answer.status === 400 && recordOf(answer.body)?.code === "not_found")
+        )
+          reviews.delete(key)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        hold.checking = false
+        if (!hold.recheck || reviews.get(key) !== hold) return
+        hold.recheck = false
+        checkReview(key, hold)
+      })
+  }
+
   return {
     /**
      * Holds a session for the phone's turn about to start. The returned function puts back the hold that stood before,
@@ -168,20 +231,70 @@ export function createRemoteTurns() {
         else marked.delete(sessionID)
       }
     },
-    /** Whether any of these sessions (a request's session and the sessions above it) runs a phone's turn. */
-    has(sessionIDs: readonly string[]) {
-      return sessionIDs.some((id) => marked.has(id))
+    /** Holds a signed review's questions while starting, then only its exact run once the engine names it. */
+    startReview(scope: ReviewScope, target: NonNullable<ReturnType<typeof reviewTarget>>) {
+      if (starting.size + reviews.size >= MAX_REVIEW_HOLDS) return
+      starting.add(scope)
+      return (answer?: RouteAnswer) => {
+        if (!starting.delete(scope) || answer?.status !== 200) return false
+        const run = reviewRun(answer.body, scope)
+        if (!run?.target || reviewKey(run.target) !== reviewKey(target)) return false
+        if (run.status === "done") return true
+        const hold: ReviewHold = { ...scope, runID: run.runID }
+        const key = reviewID(hold)
+        reviews.set(key, hold)
+        // A run can finish between creating the response and receiving it, before its event can find this hold.
+        checkReview(key, hold)
+        return true
+      }
+    },
+    /** Session lineage for ordinary phone turns, or the exact run for a detached review prompt. */
+    has(sessionIDs: readonly string[], review?: unknown) {
+      if (sessionIDs.some((id) => marked.has(id))) return true
+      const identity = reviewIdentity(review)
+      if (!identity || identity.sessionID !== sessionIDs[0]) return false
+      return (
+        reviews.has(reviewID(identity)) ||
+        [...starting].some(
+          ({ sessionID, directory }) => sessionID === identity.sessionID && directory === identity.directory,
+        )
+      )
+    },
+    cancelledReview(review: ReviewIdentity) {
+      reviews.delete(reviewID(review))
+    },
+    clearReviews() {
+      reviews.clear()
+      starting.clear()
     },
     /**
      * Follows the engine's events: a session that is idle again ran its phone turn to the end; a helper session
      * created, or resumed (its record running again since the mark), under a marked session is the phone's too, until
      * it is idle or its record has ended. A deleted session holds nothing.
      */
-    observe(event: { type?: unknown; properties?: unknown }) {
+    observe(event: { type?: unknown; properties?: unknown }, directory?: string) {
       const properties = (event.properties ?? {}) as Record<string, unknown>
+      if (event.type === "server.connected") {
+        // The server has subscribed before sending readiness, so no terminal update can fall between this read
+        // and the stream. Repeat the scoped reads after a reconnect to cover completions during the outage.
+        for (const [key, hold] of reviews) checkReview(key, hold)
+        return
+      }
+      if (event.type === "connect.run.updated") {
+        if (!directory || typeof properties.sessionID !== "string") return
+        const scope = { sessionID: properties.sessionID, directory }
+        const run = reviewRun(properties.run, scope)
+        if (run?.status === "done") reviews.delete(reviewID({ ...scope, runID: run.runID }))
+        return
+      }
       if (event.type === "session.deleted") {
         const info = recordOf(properties.info)
-        if (typeof info?.id === "string") marked.delete(info.id)
+        if (typeof info?.id === "string") {
+          marked.delete(info.id)
+          for (const [key, hold] of reviews) {
+            if (hold.directory === directory && hold.sessionID === info.id) checkReview(key, hold)
+          }
+        }
         return
       }
       if (event.type === "session.created" || event.type === "session.updated") {
@@ -210,7 +323,7 @@ export function createRemoteTurns() {
       }
     },
     get size() {
-      return marked.size
+      return marked.size + starting.size + reviews.size
     },
   }
 }
@@ -369,11 +482,11 @@ export function createRemoteRoutes(deps: RouteDependencies) {
     await deps.saveCredential(phone, verified)
     const off = await connectionsOff(directory)
     if (off) return off
-    // Held as a phone's turn is, before the engine starts the review, so no `connect` or `connect_model` question it
-    // raises before the engine answers reaches the app's auto-accept. Only the conversation's next idle releases the
-    // hold, even after a start the engine did not take: a phone turn begun while the start waited may hold it too, and
-    // `RemoteTurns` cannot tell the two apart here. A hold kept too long only leaves more questions to a person.
-    if (!deps.turns.has([sessionID])) deps.turns.mark(sessionID)
+    const finish = deps.turns.startReview({ sessionID, directory }, input.target)
+    if (!finish) return refuse(429, "REMOTE_REVIEW_BUSY", "Too many phone reviews are still running on this computer.")
+    // Keep the original turn hold until this start is identified or the next idle, whichever comes first. The
+    // restore only releases this start's own mark, so independent signed phone turns keep their existing protection.
+    const restore = deps.turns.has([sessionID]) ? undefined : deps.turns.mark(sessionID)
     return send(
       {
         method: "POST",
@@ -391,6 +504,15 @@ export function createRemoteRoutes(deps: RouteDependencies) {
         "REMOTE_REVIEW_TIMEOUT",
         "Your computer did not answer within 3 minutes. A review still waiting for an approval stops then; answer its approval right away.",
       ),
+    ).then(
+      (answer) => {
+        if (finish(answer)) restore?.()
+        return answer
+      },
+      (error) => {
+        finish()
+        throw error
+      },
     )
   }
 
@@ -461,6 +583,8 @@ export function createRemoteRoutes(deps: RouteDependencies) {
       })
       // A turn the engine did not take leaves the session as it was, still held if an earlier turn holds it.
       if (restore && (answer.status < 200 || answer.status >= 300)) restore()
+      if (match.route.path === "/experimental/connect/runs/:runID/cancel" && answer.status === 200 && answer.body === true)
+        deps.turns.cancelledReview({ runID: match.params.runID!, sessionID: query.sessionID!, directory })
       return answer
     },
   }
