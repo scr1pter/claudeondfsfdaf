@@ -1,7 +1,7 @@
 import { MemoryRouter, Route, useLocation } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { DialogProvider } from "@vectordevai/ui/context/dialog"
-import { createSignal, Show } from "solid-js"
+import { createEffect, createSignal, onMount, Show } from "solid-js"
 import { render } from "solid-js/web"
 import { SettingsEverywhereV2 } from "../../src/components/settings-v2/everywhere"
 import { GlobalProvider } from "../../src/context/global"
@@ -11,6 +11,7 @@ import { ProjectTrustProvider } from "../../src/context/project-trust"
 import { ServerConnection, ServerProvider } from "../../src/context/server"
 import { ServerSDKProvider } from "../../src/context/server-sdk"
 import { ServerSyncProvider, useServerSync } from "../../src/context/server-sync"
+import { afterPaint, launchScreen } from "../../src/features/launch/launch-bridge"
 import "../../src/index.css"
 
 const platform: Platform = {
@@ -36,6 +37,12 @@ function Fixture() {
   const ready = () =>
     statuses().ses_everywhere_active?.type === "busy" && statuses().ses_everywhere_idle?.type === "idle"
   const coldStart = new URLSearchParams(location.search).has("cold")
+  // Vite puts the launch screen over every page, and only NewLayout's LaunchReadyProbe lifts it. Send
+  // the same ready signals for this page: its shell painted, no persisted settings, the engine and bootstrap answered.
+  onMount(() => afterPaint(() => launchScreen.signal("shell")))
+  launchScreen.signal("settings")
+  createEffect(() => launchScreen.signal("engine", Boolean(sync().data.path.directory)))
+  createEffect(() => launchScreen.signal("data", sync().ready))
   return (
     <main>
       <button type="button" disabled={!coldStart && !ready()} onClick={() => setOpen(true)}>
