@@ -461,6 +461,14 @@ function lockedOut(user: ConfigLocalV1.Info, userMay: ReadonlySet<string>, warni
     warnings.push(`Your company set Vector Local, so ${dropped.join(", ")} in your user config do not apply.`)
 }
 
+/**
+ * The allow entry that lets `source`'s request to `name` through, if any. An entry's hosts limit it to those hosts and
+ * the names under them; an entry with none covers every host the source's labelled requests go to. The registry's
+ * hosts are not that limit: they are the hosts a source usually reaches, and a source also follows redirects and
+ * mirrors the registry does not list (Hugging Face's download hosts, GitHub's attachment and release-asset hosts, the
+ * language-server installers' other hosts, a cloud computer's viewer, VECTOR_MODELS_URL), while a source whose address
+ * the user or company sets lists none. Narrowing host-less entries waits on a registry audit.
+ */
 function allowEntry(policy: LocalMode.Policy, source: string | undefined, name: string) {
   if (!source) return undefined
   return policy.allow.find(

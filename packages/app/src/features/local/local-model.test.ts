@@ -29,6 +29,7 @@ import {
   SUBTITLE,
   WEB_ACCESS,
   allowChoices,
+  allowHosts,
   allowUpdate,
   blockedNotice,
   offWhy,
@@ -247,6 +248,27 @@ describe("the Allow dialog", () => {
       confirm: true,
       by: "app",
     })
+  })
+})
+
+// An allow entry with no hosts covers every host its source reaches (LocalPolicy.allowEntry), and Always allow adds
+// one, so the dialog and Settings never present the registry's usual hosts as the limit.
+describe("where an allowed service may go", () => {
+  test("an entry that names hosts goes only to those", () => {
+    expect(allowHosts(["tools.example.org"], ["x.example"])).toBe("tools.example.org")
+  })
+
+  test("an entry with no hosts covers any host the service reaches, and names the usual ones", () => {
+    expect(allowHosts(undefined, ["github.com", "api.github.com", "vectordev.ai"])).toBe(
+      "Any host it reaches, usually github.com, api.github.com and vectordev.ai",
+    )
+    expect(allowHosts([], source("github").hosts)).toBe(
+      "Any host it reaches, usually github.com, api.github.com and vectordev.ai",
+    )
+  })
+
+  test("a service whose address the user or company sets has no usual hosts to name", () => {
+    expect(allowHosts(undefined, [])).toBe("The addresses set for it")
   })
 })
 
