@@ -189,9 +189,8 @@ const LOCAL_NEEDS = [
  */
 export function localAllows(policy: LocalMode.Policy) {
   return LOCAL_NEEDS.every((need) => {
-    // 2026-11-16 (EV-15): desktop github-api.ts still sends unlabelled, so under Vector Local the backstop refuses every
-    // GitHub API call whatever is allowed, and a claimed job could only end held. Until EV-21 labels those calls
-    // `github`, that need refuses whenever Vector Local is on, and laptop jobs stay declined under it.
+    // EV-15: the production GitHub thread and publication ports still need live job and repository authority.
+    // Until those ports are wired, keep declining laptop jobs under Vector Local before claiming one.
     if (need.source === "github" && policy.enabled) return false
     const source = LocalSources.get(need.source)
     return (
