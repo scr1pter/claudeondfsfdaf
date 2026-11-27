@@ -2,6 +2,7 @@ import type { Argv } from "yargs"
 import { EOL } from "os"
 import { confirm, select } from "@clack/prompts"
 import { Effect } from "effect"
+import { Flag } from "@vectordevai/core/flag/flag"
 import type { LocalMode } from "@vectordevai/schema/local-mode"
 import type { LocalSettings } from "@/config/local-settings"
 import { cmd } from "./cmd"
@@ -21,6 +22,21 @@ const NEEDS_TERMINAL =
 // of the block the owner let apply that the terminal's Vector reads when it starts, never the desktop app's.
 const ELSEWHERE =
   "A Vector that is already running keeps holding it until it next starts, or until you confirm it with /local in its terminal UI. The desktop app keeps a record of its own, so it still holds the change."
+/**
+ * Which Vector these settings are for. A terminal's Vector and the desktop app read different config folders and keep
+ * separate confirmed copies (Config.localConfirmedFile), so `vector local on` never turns it on in the app; only the
+ * company's policy and VECTOR_LOCAL reach both.
+ */
+export const SURFACE =
+  "This is Vector Local for Vector in a terminal. The desktop app keeps its own setting, in its Settings → Vector Local. Your company's policy applies to both."
+
+/**
+ * The SURFACE line for this process, or none in a Vector the desktop app started (VECTOR_CLIENT=desktop: its built-in
+ * terminal and its agents' commands). Those inherit the app's config folders, so they show the app's own setting.
+ */
+export function surface(client = Flag.VECTOR_CLIENT) {
+  return client === "desktop" ? undefined : SURFACE
+}
 
 export const LocalCommand = cmd({
   command: "local",
@@ -274,7 +290,11 @@ export const LocalAllowCommand = effectCmd({
         demandOption: true,
       })
       .option("reason", { describe: "why you allow it; shown beside it", type: "string" })
-      .option("host", { describe: "only these hosts of it", type: "string", array: true })
+      .option("host", {
+        describe: "only these hosts (without --host it covers every host the service reaches)",
+        type: "string",
+        array: true,
+      })
       .option("remove", { describe: "take the allowance back", type: "boolean", default: false }),
   handler: Effect.fn("Cli.local.allow")(function* (args) {
     if (args.remove) return describe(yield* change({ allow: { remove: [args.source] } }))
@@ -355,6 +375,8 @@ function describe(status: {
   UI.println(
     `${UI.Style.TEXT_DIM}Network log: kept for ${status.log.retain_days} days in ${status.log.directory} while Vector Local is on.${UI.Style.TEXT_NORMAL}`,
   )
+  const note = surface()
+  if (note) UI.println(`${UI.Style.TEXT_DIM}${note}${UI.Style.TEXT_NORMAL}`)
 }
 
 function serverLine(server: {
@@ -411,9 +433,10 @@ const choose = Effect.fn("Cli.local.choose")(function* <S extends { readonly ori
 // Nothing answered on this computer: what it has room for, and what to install.
 const noServer = Effect.fn("Cli.local.noServer")(function* () {
   const { LocalHardware } = yield* Effect.promise(() => import("@vectordevai/core/local-mode/hardware"))
-  const { LocalRecommend } = yield* Effect.promise(() => import("@vectordevai/core/local-mode/recommend"))
+  const { LocalSettings } = yield* Effect.promise(() => import("@/config/local-settings"))
   const hardware = yield* Effect.promise(() => LocalHardware.read())
-  const suggested = LocalRecommend.recommend({ usable: hardware.usable })
+  // The company's table when its policy sets one Vector can use, else the bundled examples.
+  const suggested = LocalSettings.recommendation(hardware.usable)
   UI.println("No model server answered on this computer.")
   UI.println(LocalHardware.describe(hardware))
   const agent = suggested.roles.agent
