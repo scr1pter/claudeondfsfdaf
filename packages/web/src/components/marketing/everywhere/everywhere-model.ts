@@ -117,6 +117,7 @@ const JOB_FIELDS = new Set([
   "receivedAt",
   "endedAt",
   "prUrl",
+  "threadUrl",
   "summary",
 ])
 const AUDIT_FIELDS = new Set(["id", "at", "event", "platform", "installation", "jid", "code", "userId", "byOther"])
@@ -180,7 +181,11 @@ export const EVERYWHERE_COPY = {
   mappingsUnread: "The repositories set for this connection could not be read.",
   noRepositories: "No repository is set for this place.",
   slackMappingHint: "In a Slack channel, send @Vector repo owner/name to set its repository.",
-  trackerMappingHint: "Linear teams and Jira keys cannot be given repositories from this page yet.",
+  trackerMappingHint: "Choose a GitHub repository connected to this Vector account.",
+  linearTeamId: "Linear team ID",
+  jiraProjectKey: "Jira key",
+  githubRepository: "GitHub repository",
+  addRepository: "Add repository",
   unknownId: "(not verified yet)",
   removeRepository: "Remove",
   removeMapping: "Remove mapping",
@@ -197,6 +202,7 @@ export const EVERYWHERE_COPY = {
   jobsUnread: "Your jobs could not be read.",
   sharedSummary: "This page does not show summaries of jobs in shared places.",
   pullRequest: "Pull request",
+  githubThread: "GitHub thread",
   focusMissing: "That job is not among your jobs of the last 30 days.",
   received: "Received",
   endedAt: "Ended",
@@ -310,6 +316,7 @@ export const EVERYWHERE_COPY = {
     "installed-elsewhere": "Another Vector account connected this site.",
     changed: "That changed while this page was open. The page has been reloaded.",
     "not-allowed": "This account cannot do that.",
+    "repository-unverified": "Choose a repository connected to this Vector account.",
     "too-many": "Too many requests. Wait a moment and try again.",
     invalid: "Vector could not accept that. Check it and try again.",
     unavailable: "Vector everywhere could not be reached. Try again.",
@@ -428,6 +435,7 @@ export type EverywhereJob = {
   readonly receivedAt: number
   readonly endedAt?: number
   readonly prUrl?: string
+  readonly threadUrl?: string
   /** Only for a job in a private place: a summary on a shared job is dropped. */
   readonly summary?: string
 }
@@ -926,6 +934,26 @@ export function createEverywhereAccountModel(deps: EverywhereDeps = {}) {
         () => ({ notice: "connected" }),
       )
     },
+    addTrackerRepository(installation: string, placeInput: string, repositoryInput: string): Promise<void> {
+      if (current.kind !== "ready" || current.busy) return Promise.resolve()
+      const install = current.installs.find((entry) => entry.installation === installation)
+      const place = placeInput.trim()
+      const addRepository = repositoryInput.trim()
+      if (
+        !install ||
+        install.status !== undefined ||
+        current.unread.includes(installation) ||
+        !Everywhere.isTrackerPlace(install.platform, place) ||
+        !Everywhere.isRepositoryName(addRepository)
+      ) {
+        patch({ problem: "invalid" })
+        return Promise.resolve()
+      }
+      return act(
+        () => send("PUT", EVERYWHERE_ROUTES.repos, { installation, place, addRepository }),
+        () => ({ notice: "saved" }),
+      )
+    },
     unlink(installation: string, userId: string) {
       return act(
         () => send("DELETE", EVERYWHERE_ROUTES.links, { installation, userId }),
@@ -1100,6 +1128,7 @@ export function readAuthorize(value: unknown, platform: "slack" | "linear"): str
 export function problemOf(status: number, code?: string): EverywhereProblem {
   if (code === "EVERYWHERE_CODE_INVALID") return "code-invalid"
   if (code === "EVERYWHERE_INSTALLED_ELSEWHERE") return "installed-elsewhere"
+  if (code === "EVERYWHERE_REPOSITORY_UNVERIFIED") return "repository-unverified"
   if (status === 404) return "not-found"
   if (status === 409) return "changed"
   if (status === 403) return "not-allowed"
@@ -1254,6 +1283,7 @@ function readJob(item: unknown): EverywhereJob | undefined {
     typeof url === "string" &&
     (Everywhere.PR_URL_PATTERN.exec(url)?.[1] ?? "").toLowerCase() === repository.toLowerCase()
   if (!optional(item.prUrl, pullRequest)) return undefined
+  const threadUrl = item.platform === "github" ? readGithubThreadUrl(item.threadUrl, repository) : undefined
   const summary = (text: unknown) =>
     typeof text === "string" && text.length > 0 && text.length <= Everywhere.LIMITS.summaryChars
   if (!optional(item.summary, summary)) return undefined
@@ -1272,9 +1302,18 @@ function readJob(item: unknown): EverywhereJob | undefined {
     receivedAt: item.receivedAt,
     ...(typeof item.endedAt === "number" ? { endedAt: item.endedAt } : {}),
     ...(typeof item.prUrl === "string" ? { prUrl: item.prUrl } : {}),
+    ...(threadUrl !== undefined ? { threadUrl } : {}),
     // A shared place's summary is never shown here, whatever an answer holds.
     ...(typeof item.summary === "string" && !item.shared ? { summary: item.summary } : {}),
   }
+}
+
+function readGithubThreadUrl(value: unknown, repository: string) {
+  if (typeof value !== "string" || value.length > Everywhere.LIMITS.urlChars) return undefined
+  const parts = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/([1-9][0-9]*)$/.exec(value)
+  if (!parts || parts[1]?.toLowerCase() !== repository.toLowerCase()) return undefined
+  const canonical = Everywhere.githubThreadUrl(parts[1], parts[2] === "pull" ? "pr" : "issue", Number(parts[3]))
+  return canonical === value ? canonical : undefined
 }
 
 /** The account's audit log (GET audit): ids and fixed codes only; an entry with any other field is skipped. */

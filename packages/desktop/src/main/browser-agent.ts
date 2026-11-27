@@ -1619,6 +1619,11 @@ const COMPUTED_STYLES_SCRIPT = `(() => {
 export async function runBrowserAgent(
   event: IpcMainInvokeEvent | undefined,
   input: BrowserAgentInput,
+  /**
+   * Aborted once the engine's call for this command has ended (browser-bridge.ts), as the user's Stop ends it. A command
+   * still waiting for its page then never runs.
+   */
+  gone?: AbortSignal,
 ): Promise<BrowserAutomationRun> {
   const contextId = input.contextId.trim()
   if (!contextId) throw new Error("The controlled browser needs an active Vector task context.")
@@ -1649,10 +1654,11 @@ export async function runBrowserAgent(
   const announced = !PANEL_COMMANDS.has(command) && command !== "closeBrowser"
   context.busy++
   if (announced) emitActivity(context)
-  // One command at a time on a page; the number of pages stays uncapped.
+  // One command at a time on a page; the number of pages stays uncapped. A command whose call ended while it waited is
+  // not run when its turn comes: what was asked for it was asked for a turn the user has since stopped.
   const report = immediate
     ? run()
-    : queueTurn(context, run, (reason) => {
+    : queueTurn(context, () => (gone?.aborted ? Promise.resolve(abandonedReport(command)) : run()), (reason) => {
         // The command given up may run on, but its hold on the browser ends with its turn, so the user's own clicks
         // count again.
         automation.end(Date.now())
@@ -1942,6 +1948,16 @@ function closedReport(command: string): BrowserAutomationRun {
     ok: false,
     status: 409,
     error: `The browser was closed before ${command || "this command"} finished.`,
+  }
+}
+
+// A command whose call ended before its turn came, so it never ran.
+function abandonedReport(command: string): BrowserAutomationRun {
+  return {
+    ...stoppedReport(),
+    ok: false,
+    status: 409,
+    error: `Vector did not run ${command || "this command"}: its call ended while it waited for the page.`,
   }
 }
 
