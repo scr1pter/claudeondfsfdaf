@@ -1,5 +1,7 @@
 import {
   LIMITS,
+  githubThreadUrl,
+  installationPlatform,
   isPlatform,
   type DeclineCode,
   type JobState,
@@ -10,14 +12,18 @@ import {
 import { sanitizeReply, type Ending } from "../../../packages/schema/src/everywhere-policy.js"
 import { requireTrustedJsonRequest } from "../abuse.js"
 import { requireAccountUser } from "../account.js"
+import type { RepoBinding } from "../cloud-agents-binding.js"
 import { ApiError, handleApiError, json, queryValue, readJson, type ApiRequest, type ApiResponse } from "../http.js"
+import { persistentStore } from "../persistent-store.js"
 import { codiumAccountAuthority } from "./adapters/account.js"
+import { createRepositoryPort } from "./adapters/cloud-agents.js"
 import { readAudit, type AuditEntry } from "./audit.js"
 import { checkAccount } from "./authority.js"
 import { platformOn, readConfig, type Env, type EverywhereConfig } from "./config.js"
 import { eraseInstallation, type InstallRevoker, type JobEraser } from "./erase.js"
 import {
   CODE_LINK_PLATFORMS,
+  addTrackerRepository,
   checkRepositories,
   createState,
   emailNotifier,
@@ -36,8 +42,10 @@ import {
   type InstallRecord,
   type Notifier,
   type OAuthExchanges,
+  type RepoMapping,
 } from "./identity.js"
-import { jobEraser, openSummary, readJobHistory, type JobRecord, type JobRoute } from "./jobs.js"
+import type { Ports } from "./ports.js"
+import { jobEraser, openReply, openSummary, readJobHistory, type JobRecord, type JobRoute } from "./jobs.js"
 import { KEEP_MS } from "./keys.js"
 import { platformExchanges } from "./oauth-exchanges.js"
 import { revokeSlack } from "./slack/install.js"
@@ -47,8 +55,8 @@ import { everywhereStore, type Store } from "./store.js"
 /*
  * The signed-in account's Vector everywhere routes on vectordev.ai (contract 3.8, 3.12): link codes, links,
  * installations, repository mappings, the OAuth finish, and two reads: the account's jobs of the last 30 days and its
- * audit log of the last 90 (E16), each capped at 100 and holding ids, fixed codes and times only (E18 for the jobs:
- * only the account's own, never the task, a device or a lease). The one free text either read answers is a job's
+ * audit log of the last 90 (E16), each capped at 100 and scoped to the account (E18). Job links come from a result or
+ * from a GitHub handoff with the same active repository binding generation. The one free text either read answers is a job's
  * `summary`: the sealed settle summary of a job in a private place (a Slack DM) that the signed-in account asked for and
  * whose post has not gone out, cleaned by sanitizeReply as posts are (`privateSummary`); a shared place's is never
  * answered. Whether it stays is the lead's 3.12/3.7 ruling (EV-23). Every route authenticates the browser session through
@@ -65,6 +73,7 @@ export type AccountApiDeps = {
   /** For `requireAccountUser`'s call to the account service and, with no `store`, the default store's calls. */
   readonly fetcher?: typeof fetch
   readonly now?: () => number
+  readonly repository?: NonNullable<Ports["repository"]>
   /**
    * Replaces the default exchanges, oauth-exchanges.ts `platformExchanges`: Slack's install (VE-11) and Linear's
    * install and sign-in link (VE-12), built per request for each platform in `config.platforms` (listed in
@@ -86,7 +95,7 @@ export const HISTORY_LIMIT = 100
 /** The most entries GET audit answers, newest first (E16). */
 export const AUDIT_PAGE = 100
 
-/** A job as the account's job list shows it: ids, fixed codes, times and the pull request link only. */
+/** A job as the account's job list shows it: ids, fixed codes, times and verified links. */
 export type AccountJob = {
   readonly jid: string
   readonly platform: PlatformId
@@ -103,6 +112,7 @@ export type AccountJob = {
   readonly receivedAt: number
   readonly endedAt?: number
   readonly prUrl?: string
+  readonly threadUrl?: string
   /** A private place's summary not yet posted, for the account that asked, cleaned as posts are (`privateSummary`). */
   readonly summary?: string
 }
@@ -159,6 +169,10 @@ function optionalText(value: unknown, field: string): string | undefined {
   return value === undefined ? undefined : text(value, field)
 }
 
+function mappingForAccount({ privateSetAt: _privateSetAt, ...mapping }: RepoMapping) {
+  return mapping
+}
+
 function requirePlatform(config: EverywhereConfig, platform: PlatformId) {
   if (!platformOn(config, platform)) throw notFound()
 }
@@ -192,6 +206,8 @@ const LINK_NOTE: Readonly<Record<string, string>> = {
 }
 
 export function createAccountApi(deps: AccountApiDeps = {}) {
+  const verifyRepository = deps.repository ?? createRepositoryPort()
+
   /**
    * POST {platform, installation?}: a link code for Slack or Jira (sent to the bot in a private place), or for Linear
    * the start of the sign-in that links (3.8). GitHub needs no link (4.1).
@@ -320,7 +336,8 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
 
   /**
    * GET ?installation=: the mappings of an installation the account connected. PUT {installation, place,
-   * repositories, private?}: sets a place's repositories. DELETE {installation, place}: removes one. Connector only.
+   * repositories, private?}: sets a place's repositories. PUT {installation, place, addRepository}: verifies and
+   * adds a Linear or Jira mapping entry. DELETE {installation, place}: removes a mapping. Connector only.
    */
   const repos = route(deps, (request, response) =>
     methods(request, response, {
@@ -332,11 +349,33 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
         const mappings = await listMappings(session.ctx.store, installation)
         await checkAccount(session.ctx, session.account)
         if ((await readInstallState(session.ctx.store, installation))?.raw !== snapshot.raw) throw notFound()
-        json(response, 200, { installation, mappings })
+        json(response, 200, { installation, mappings: mappings.map(mappingForAccount) })
       },
       PUT: async () => {
         const session = await begin(request, deps)
         const input = await body(request)
+        if (Object.hasOwn(input, "addRepository")) {
+          if (Object.keys(input).some((key) => key !== "addRepository" && key !== "installation" && key !== "place"))
+            throw new ApiError(400, "EVERYWHERE_INVALID", "Send the installation, place and one repository to add.")
+          const installation = text(input.installation, "installation")
+          const platform = installationPlatform(installation)
+          if (platform !== "linear" && platform !== "jira") throw notFound()
+          requirePlatform(session.config, platform)
+          const verdict = await addTrackerRepository(session.ctx, {
+            account: session.account,
+            installation,
+            place: text(input.place, "place"),
+            fullName: text(input.addRepository, "repository"),
+            verifyRepository,
+          })
+          if (!verdict.ok) {
+            if (verdict.code === "repository-unverified")
+              throw new ApiError(400, "EVERYWHERE_REPOSITORY_UNVERIFIED", "Choose a repository connected to your Vector account.")
+            throw notFound()
+          }
+          json(response, 200, { mapping: mappingForAccount(verdict.mapping) })
+          return
+        }
         const repositories = checkRepositories(input.repositories)
         if (!repositories)
           throw new ApiError(400, "EVERYWHERE_INVALID", "Name at most 20 repositories as owner/name, each once.")
@@ -350,7 +389,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
           ...(input.private !== undefined ? { private: input.private as boolean } : {}),
         })
         if (!verdict.ok) throw notFound()
-        json(response, 200, { mapping: verdict.mapping })
+        json(response, 200, { mapping: mappingForAccount(verdict.mapping) })
       },
       DELETE: async () => {
         const session = await begin(request, deps)
@@ -398,16 +437,25 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
           limit: HISTORY_LIMIT,
         })
         // One installation read per installation, however many of its jobs hold a summary.
-        const snapshots = new Map(
-          await Promise.all(
+        const [installs, githubBindings] = await Promise.all([
+          Promise.all(
             [...new Set(read.jobs.filter((job) => summaryHeld(session, job)).map((job) => job.installation))].map(
               async (installation) =>
                 [installation, await readInstallSnapshot(session.ctx.store, installation)] as const,
             ),
           ),
-        )
+          platformOn(session.config, "github") && read.jobs.some((job) => ownedGithubReference(session.account, job))
+            ? accountGithubBindings(session.account, deps.fetcher).catch(() => [])
+            : [],
+        ])
+        const snapshots = new Map(installs)
+        const bindings = new Map(githubBindings.map((binding) => [binding.repositoryId, binding]))
         const jobs = read.jobs.map((job) =>
-          accountJob(job, privateSummary(session, job, snapshots.get(job.installation))),
+          accountJob(
+            job,
+            privateSummary(session, job, snapshots.get(job.installation)),
+            boundGithubThread(session, job, bindings.get(String(job.repository.id))),
+          ),
         )
         // As GET repos: an account closed during the reads gets nothing.
         await checkAccount(session.ctx, session.account)
@@ -437,7 +485,7 @@ export function createAccountApi(deps: AccountApiDeps = {}) {
   return { link, links, installs, repos, oauthFinish, history, audit }
 }
 
-function accountJob(job: JobRecord, summary: string | undefined): AccountJob {
+function accountJob(job: JobRecord, summary: string | undefined, threadUrl: string | undefined): AccountJob {
   return {
     jid: job.jid,
     platform: job.platform,
@@ -453,8 +501,52 @@ function accountJob(job: JobRecord, summary: string | undefined): AccountJob {
     receivedAt: job.receivedAt,
     ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
     ...(job.result?.prUrl !== undefined ? { prUrl: job.result.prUrl } : {}),
+    ...(threadUrl !== undefined ? { threadUrl } : {}),
     ...(summary !== undefined ? { summary } : {}),
   }
+}
+
+/** Reuse the protected account's stored repo bindings. This read never contacts GitHub. */
+async function accountGithubBindings(account: string, fetcher: typeof fetch = fetch) {
+  const { bindingsForAccount } = await import("../cloud-agents-binding.js")
+  return bindingsForAccount(account, (command) => persistentStore(command, fetcher))
+}
+
+function ownedGithubReference(account: string, job: JobRecord) {
+  const reference = job.github
+  if (
+    job.platform !== "github" ||
+    job.requester.account !== account ||
+    reference?.actorId === undefined ||
+    reference.event === undefined ||
+    String(reference.actorId) !== job.requester.userId
+  )
+    return undefined
+  return reference
+}
+
+/** A stored handoff still owned by the same binding may expose its canonical issue or pull request page. */
+function boundGithubThread(session: Session, job: JobRecord, binding: RepoBinding | undefined) {
+  const reference = ownedGithubReference(session.account, job)
+  if (
+    !reference ||
+    !binding ||
+    binding.account !== session.account ||
+    binding.suspended !== undefined ||
+    binding.repository.toLowerCase() !== job.repository.fullName.toLowerCase() ||
+    binding.binder.githubId !== job.requester.userId ||
+    job.installation !== `github:${binding.installationId}`
+  )
+    return undefined
+  const generation = openReply(session.ctx, job)?.githubBindingGeneration
+  if (
+    typeof generation !== "number" ||
+    !Number.isSafeInteger(generation) ||
+    generation < 1 ||
+    generation !== binding.generation
+  )
+    return undefined
+  return githubThreadUrl(job.repository.fullName, reference.kind, reference.number)
 }
 
 /**

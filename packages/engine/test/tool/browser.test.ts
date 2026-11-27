@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { LayerNode } from "@vectordevai/core/effect/layer-node"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { Effect, Exit } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "@/config/config"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
-import { BrowserTool, describeSensitiveBrowserAction, isLocalUrl } from "../../src/tool/browser"
+import { BrowserTool, describeSensitiveBrowserAction, GUESTED, isLocalUrl, NOT_WEB } from "../../src/tool/browser"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
 import { FakeBridge } from "../lib/fake-bridge"
@@ -241,11 +242,23 @@ const showing =
     })
   }
 
-const run = (params: Tool.InferParameters<typeof BrowserTool>, extra?: Tool.Context["extra"]) =>
+// The sessions an invited guest has acted in, as FreeModelGuests marks them. Without it the tool is built with no guest
+// service, as the other cases build it.
+const guestedSessions = (marked: readonly string[]) =>
+  FreeModelGuests.Service.of({
+    mark: () => Effect.void,
+    marked: (sessionID) => Effect.succeed(sessionID !== undefined && marked.includes(sessionID)),
+  })
+
+const run = (
+  params: Tool.InferParameters<typeof BrowserTool>,
+  extra?: Tool.Context["extra"],
+  guests?: FreeModelGuests.Interface,
+) =>
   Effect.gen(function* () {
     asked.length = 0
     const from = bridge.calls().length
-    const browser = yield* BrowserTool
+    const browser = yield* guests ? BrowserTool.pipe(Effect.provideService(FreeModelGuests.Service, guests)) : BrowserTool
     const tool = yield* browser.init()
     const result = yield* tool.execute(params, {
       sessionID: SessionID.make("ses_browser"),
@@ -512,6 +525,72 @@ describe("browser tool", () => {
       expect((yield* run({ action: "hover", ref: "ref_1" })).asked).toEqual([])
       expect((yield* run({ action: "select_option", ref: "ref_1", values: ["a"] })).asked).toEqual([])
     }),
+  )
+
+  it.instance(
+    "in a session an invited guest has acted in, the browser reads, opens and drives nothing and asks nothing; close still closes it",
+    () =>
+      Effect.gen(function* () {
+        // The user's own browser, signed in to their mail.
+        bridge.answer(showing("https://mail.example.com/inbox", { ref_1: "Archive" }))
+        const guest = guestedSessions(["ses_browser"])
+        for (const params of [
+          { action: "read" },
+          { action: "observe" },
+          { action: "read_html" },
+          { action: "screenshot" },
+          { action: "list_tabs" },
+          { action: "current_url" },
+          { action: "open_url", url: "https://mail.example.com/settings" },
+          { action: "open_url", url: "http://localhost:3000/" },
+          { action: "open_tab", url: "https://mail.example.com/" },
+          { action: "click", ref: "ref_1" },
+          { action: "type", selector: "#q", text: "invoices" },
+          { action: "handoff", url: "https://mail.example.com/" },
+        ] as const) {
+          const refused = yield* run(params, READS_IMAGES, guest)
+          expect({ action: params.action, output: refused.result.output, sent: refused.sent }).toEqual({
+            action: params.action,
+            output: GUESTED,
+            sent: [],
+          })
+          expect(refused.asked).toEqual([])
+        }
+        const closed = yield* run({ action: "close" }, undefined, guest)
+        expect(closed.commands).toEqual(["closeBrowser"])
+        expect(closed.asked).toEqual([])
+        // A session no guest acted in browses as before.
+        const read = yield* run({ action: "read" }, undefined, guestedSessions(["ses_other"]))
+        expect(read.commands).toEqual(["inspectDom", "readPage"])
+        expect(read.result.output).not.toBe(GUESTED)
+      }),
+  )
+
+  it.instance(
+    "an address that is not http or https is refused before anything is asked or sent, not asked under origin null",
+    () =>
+      Effect.gen(function* () {
+        bridge.answer(showing("http://localhost:3000/"))
+        // Each has the origin "null", or does not parse at all: the desktop opens none of them.
+        for (const params of [
+          { action: "open_url", url: "file:///etc/passwd" },
+          { action: "open_url", url: "javascript:alert(document.cookie)" },
+          { action: "open_tab", url: "data:text/html,<h1>hi</h1>" },
+          { action: "open_url", url: "localhost:3000" },
+          { action: "open_url", url: "example.com/login" },
+        ] as const) {
+          const refused = yield* run(params)
+          expect({ url: params.url, output: refused.result.output, sent: refused.sent, asked: refused.asked }).toEqual(
+            { url: params.url, output: NOT_WEB, sent: [], asked: [] },
+          )
+          expect(refused.result.title).toBe("Not done")
+        }
+        // A full https address still asks for its origin and opens.
+        const opened = yield* run({ action: "open_url", url: "https://docs.example.com/guide" })
+        expect(opened.commands).toEqual(["openUrl"])
+        expect(opened.asked).toEqual(["browser_external"])
+        expect(asked[0]).toMatchObject({ patterns: ["https://docs.example.com"] })
+      }),
   )
 
   it.instance("fields a model left empty are absent, so the desktop sees no bad ref or tab (B15, B19)", () =>
