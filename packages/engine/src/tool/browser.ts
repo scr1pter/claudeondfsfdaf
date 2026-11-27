@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises"
 import { Effect, Option, Schema } from "effect"
+import { FreeModelGuests } from "@vectordevai/core/free-model-guests"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { WebFence } from "@vectordevai/core/research/fence"
 import { ResearchOutbound } from "@vectordevai/core/research/outbound"
@@ -267,6 +268,19 @@ export function isLocalUrl(rawUrl: string) {
   } catch {
     return false
   }
+}
+
+export const NOT_WEB =
+  "The browser opens only http and https addresses, written in full, such as https://example.com/. Nothing was opened or asked."
+
+// The desktop opens only http and https pages (desktop browser-agent.ts, safeUrl). Any other address is refused here,
+// before anything is asked: a file:, data: or javascript: address, or one with no scheme (localhost:3000), has the
+// origin "null", so its ask would offer to always allow every such address at once, and one that does not parse
+// (example.com) would end the call with an error.
+function webAddress(url: string) {
+  if (!URL.canParse(url)) return false
+  const { protocol } = new URL(url)
+  return protocol === "http:" || protocol === "https:"
 }
 
 function bridgeRequest(input: Record<string, unknown>, signal: AbortSignal) {
@@ -548,6 +562,8 @@ export const INSIDE =
 export const HANDOFF_QUESTION = "Sign in or get past the paywall yourself in Preview, then press Continue."
 export const CONTINUE = "Continue"
 export const NO_IMAGES = "This model does not read images, so no screenshot was taken."
+export const GUESTED =
+  "In a session an invited guest has acted in, Vector does not use the browser: it is the user's own, signed in to their sites, and what it shows would reach the transcript the guest sees. Use webfetch for a public page."
 
 export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
   "browser",
@@ -557,15 +573,30 @@ export const BrowserTool = Tool.define<typeof Parameters, Metadata, never>(
     const question = Option.getOrUndefined(yield* Effect.serviceOption(Question.Service))
     const research = Option.getOrUndefined(yield* Effect.serviceOption(ResearchRun.Service))
     const store = Option.getOrUndefined(yield* Effect.serviceOption(ResearchStore.Service))
+    // Present wherever the registry builds the tools (the terminal tool requires it there).
+    const guests = Option.getOrUndefined(yield* Effect.serviceOption(FreeModelGuests.Service))
     return {
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (input, ctx) =>
         Effect.gen(function* () {
           const params = normalize(input)
+          // The browser is the user's own: one profile for Preview and every session, which keeps the sign-ins a
+          // handoff or the user's own browsing leave there. In a session an invited guest has acted in, what it reads
+          // would reach the transcript the guest sees, and Full access would answer its asks alone, as the terminal
+          // tool keeps the user's terminals from such a session and the computer tool refuses it. Only close runs
+          // there: it reads nothing and stops what is open.
+          if (params.action !== "close" && guests && (yield* guests.marked(ctx.sessionID)))
+            return { title: "Not done", output: GUESTED, metadata: { url: "", action: params.action } }
           const lead = ctx.agent === ResearchRun.LEAD
           if (lead && !RESEARCH_ACTIONS.has(params.action))
             return { title: "Not done", output: RESEARCH_ONLY, metadata: { url: "", action: params.action } }
+          if (
+            (params.action === "open_url" || params.action === "open_tab" || params.action === "handoff") &&
+            params.url !== undefined &&
+            !webAddress(params.url)
+          )
+            return { title: "Not done", output: NOT_WEB, metadata: { url: "", action: params.action } }
           const model = ctx.extra?.model as Provider.Model | undefined
           if (params.action === "screenshot" && model?.capabilities.input.image !== true)
             return { title: "No screenshot", output: NO_IMAGES, metadata: { url: "", action: params.action } }

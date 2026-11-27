@@ -19,6 +19,7 @@ import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { useManagedPolicyFixture } from "../fixture/managed-policy"
 import { NetworkGuard } from "../../../core/test/lib/network-guard"
 import { LocalServers } from "../../../core/test/fixture/local-servers/serve"
+import bundled from "../../../core/src/local-mode/recommend-table.json"
 
 // The Local API over a real listener with an owner and an invited guest: every /local route is the owner's, a change
 // that loosens Vector Local needs `confirm` and writes nothing without it, a held change applies only as the owner saw
@@ -926,6 +927,37 @@ describe("the Local API", () => {
     expect(suggested.label).toContain("Check each model's licence")
     expect(suggested.hardware.summary).toStartWith("This computer has")
     expect(Object.keys(suggested.roles).sort()).toEqual(["agent", "judge", "research", "review", "small", "subagent"])
+  })
+
+  test("model suggestions come from the company's table, and one Vector cannot use falls back with a warning", async () => {
+    const managed = process.env.VECTOR_TEST_MANAGED_CONFIG_DIR!
+    // One tier from 0 GB, so whatever memory this computer has, the company's tier is the one suggested.
+    const tier = { id: "all", min_gb: 0, summary: "Our server.", roles: { agent: "glm-4.6" }, alternatives: [] }
+    const company = { ...bundled, label: "Company models. Check each model's licence.", tiers: [tier] }
+    const write = (recommend: unknown) =>
+      writeFileSync(path.join(managed, "vector.json"), JSON.stringify({ local: { recommend } }))
+    mkdirSync(managed, { recursive: true })
+    write(company)
+    const restore = useManagedPolicyFixture(managed)
+    try {
+      Config.refreshLocal()
+      const suggested = await json<{ label: string; tier: string; roles: Record<string, { key: string } | null> }>(
+        await send("GET", "/local/recommend"),
+      )
+      expect(suggested).toMatchObject({ label: "Company models. Check each model's licence.", tier: "all" })
+      expect(suggested.roles.agent?.key).toBe("glm-4.6")
+      // A tier naming a model the table lacks: the bundled examples, and the policy says why.
+      write({ ...company, tiers: [{ ...tier, roles: { agent: "missing" } }] })
+      Config.refreshLocal()
+      expect((await json<{ label: string }>(await send("GET", "/local/recommend"))).label).toBe(bundled.label)
+      expect(Config.local().warnings).toContain(
+        "Ignored local.recommend in your company's policy: a tier names a model the table does not have. Vector suggests models from its own examples.",
+      )
+    } finally {
+      rmSync(managed, { recursive: true, force: true })
+      restore()
+      Config.refreshLocal()
+    }
   })
 
   test("the owner's event stream hears when Vector Local changes", async () => {

@@ -806,6 +806,35 @@ describe("the agent browser's activity and lifetime", () => {
     }
   })
 
+  test("a command still waiting for its page when its call ended never runs; the one running finishes", async () => {
+    await run({ contextId: "ses_stopped", command: "openUrl", url: "http://localhost:3000/" })
+    const page = latest().webContents
+    // One command holds the page, and the next waits for its turn behind it.
+    const holding = run({ contextId: "ses_stopped", command: "wait", milliseconds: 100 })
+    const call = new AbortController()
+    const waiting = agent.runBrowserAgent(
+      undefined,
+      { contextId: "ses_stopped", command: "openUrl", url: "http://localhost:3000/next" },
+      call.signal,
+    )
+    // The engine's call ends while it waits, as the user's Stop ends it.
+    call.abort()
+    expect((await holding).ok).toBe(true)
+    const report = await waiting
+    expect(report.ok).toBe(false)
+    expect(report.error).toBe("Vector did not run openUrl: its call ended while it waited for the page.")
+    expect(page.history).toEqual(["http://localhost:3000/"])
+    // A call that has not ended runs as before.
+    const kept = new AbortController()
+    const opened = await agent.runBrowserAgent(
+      undefined,
+      { contextId: "ses_stopped", command: "openUrl", url: "http://localhost:3000/next" },
+      kept.signal,
+    )
+    expect(opened).toMatchObject({ ok: true, url: "http://localhost:3000/next" })
+    await run({ contextId: "ses_stopped", command: "closeBrowser" })
+  })
+
   test("a browser idle past IDLE_CLOSE_MS that no Preview shows is closed; one a Preview shows stays", async () => {
     await run({ contextId: "ses_idle", command: "openUrl", url: "http://localhost:3000/" })
     const { event } = panel()

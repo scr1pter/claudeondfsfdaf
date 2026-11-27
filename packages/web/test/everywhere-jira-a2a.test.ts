@@ -240,6 +240,40 @@ test("opaque repository input resumes the original own prompt and changed mappin
   }
 })
 
+test("a delayed repository prompt cannot overwrite a signed cancellation or restore its draft", async () => {
+  const f = await ready({ mapped: false })
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const key = everywhereKeys.repo(f.installation, "PROJ")
+  let reads = 0
+  const store: Store = async (command) => {
+    // After intake resolves the mapping and reads the prompt's existing options, the adapter checks the
+    // native task and reads current options again. Keep it there while CancelTask commits its terminal state.
+    if (command[0] === "GET" && command[1] === key && ++reads === 3) {
+      entered.resolve()
+      await release.promise
+    }
+    return f.store(command)
+  }
+  harness.mount({ "/a2a": createJiraRoutes({ ...f.deps, context: () => ({ ...f.context(), store }) }).a2a })
+  const sent = await f.send(native.message())
+  expect(sent.body.result.task.status.state).toBe("TASK_STATE_SUBMITTED")
+  const id = sent.body.result.task.id
+  try {
+    await entered.promise
+    const cancelled = await f.send({ jsonrpc: "2.0", id: randomUUID(), method: "CancelTask", params: { id } })
+    expect(cancelled.body.result.status.state).toBe("TASK_STATE_CANCELED")
+  } finally {
+    release.resolve()
+    await drainAfter()
+  }
+  const result = (await f.poll(id)).body.result
+  expect(result.status.state).toBe("TASK_STATE_CANCELED")
+  expect(result.status.message.parts[0].text).toBe("Cancelled at your request.")
+  expect(await f.store(["GET", everywhereKeys.jiraTaskDraft(id)])).toBeNull()
+  expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toEqual([])
+})
+
 test("one context has one active task; poll from a cold route works and unrelated identities cannot read it", async () => {
   const f = await ready()
   const answer = await f.send(native.message())

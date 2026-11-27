@@ -1,11 +1,13 @@
 import type { Config, LocalCheckResult, LocalStatus } from "@vectordevai/sdk/v2/client"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
+import { ServerConnection } from "@/context/server"
 import {
   LOCKED,
   NOT_ENCRYPTED,
   SERVER_KINDS,
   SHARED_MACHINE,
   WEB_ACCESS,
+  allowHosts,
   hostOf,
   list,
   sourceName,
@@ -29,6 +31,28 @@ export const SECTIONS = [
   { id: "log", title: "Network log" },
   { id: "check", title: "Run a check" },
 ] as const
+
+/**
+ * Which Vector the switch is for. The desktop app and Vector in a terminal outside it read different config folders
+ * and keep separate confirmed copies, so neither switch reaches the other; only the company's policy reaches both. The
+ * app's built-in terminal inherits the app's config folders, so a vector there reads this switch.
+ */
+export const SURFACE =
+  "This switch is for the desktop app. Vector in a terminal outside the app keeps its own setting: vector local on turns it on there. Your company's policy applies to both."
+
+/**
+ * The switch's note on which Vector it is for: only in the desktop app, reading the engine the app started itself (its
+ * built-in sidecar), which reads the app's own config folders. Any other engine's switch is that engine's own: a
+ * `vector serve` added by its loopback address reads the terminal's folders, a WSL engine reads the distro's, and a
+ * remote one is another computer's. In a browser there is no desktop app to tell apart. Where the sentence could be
+ * wrong, the card says nothing.
+ */
+export function surfaceNote(input: {
+  readonly desktop: boolean
+  readonly connection: ServerConnection.Any | undefined
+}) {
+  return input.desktop && input.connection && ServerConnection.builtin(input.connection) ? SURFACE : undefined
+}
 
 /** The switch: on or off, and whether the company decides. */
 export function switchView(status: Pick<LocalStatus, "policy" | "locked" | "agent">) {
@@ -122,16 +146,18 @@ const BY: Record<Policy["allow"][number]["added_by"], string> = {
   managed: "Set by your company",
 }
 
-/** The services the user or the company allowed, each with what it sends, its hosts, the reason, who and when. */
+/**
+ * The services the user or the company allowed, each with what it sends, where it may go, the reason, who and when.
+ * An entry with no hosts covers every host its source reaches, which `hosts` says.
+ */
 export function allowedRows(status: Pick<LocalStatus, "policy" | "locked" | "sources">) {
   return status.policy.allow.map((entry) => {
     const source = status.sources.find((item) => item.id === entry.source)
-    const hosts = entry.hosts?.length ? entry.hosts : (source?.hosts ?? [])
     return {
       source: entry.source,
       name: sourceName(entry.source, status.sources),
       sends: source?.sends ?? "Unknown to this version of Vector",
-      hosts: hosts.length ? list(hosts) : "The addresses set for it",
+      hosts: allowHosts(entry.hosts, source?.hosts ?? []),
       reason: entry.reason,
       by: BY[entry.added_by],
       when: entry.added_at ? new Date(entry.added_at).toLocaleDateString("en-US", { dateStyle: "medium" }) : "",

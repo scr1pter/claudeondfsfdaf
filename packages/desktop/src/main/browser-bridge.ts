@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { createServer, type Server } from "node:http"
+import { createServer, type Server, type ServerResponse } from "node:http"
 
 import { runBrowserAgent } from "./browser-agent"
 import { parseBrowserAgentInput, parseResearchBrowserInput } from "./browser-bridge-input"
@@ -16,12 +16,25 @@ let bridgeServer: Server | undefined
 let bridgeUrl = ""
 let bridgeToken = ""
 
+/**
+ * Aborted once the response closes before it was sent: the engine's call ended (its fetch is aborted when the user
+ * stops the turn), so nobody waits for this command any more. A response that was sent is no such end.
+ */
+export function callerGone(response: Pick<ServerResponse, "once" | "writableFinished">) {
+  const gone = new AbortController()
+  response.once("close", () => {
+    if (!response.writableFinished) gone.abort()
+  })
+  return gone.signal
+}
+
 export async function startBrowserBridge() {
   if (bridgeServer) return { url: bridgeUrl, token: bridgeToken }
 
   bridgeToken = randomUUID()
   bridgeServer = createServer(async (request, response) => {
     response.setHeader("content-type", "application/json; charset=utf-8")
+    const gone = callerGone(response)
     const research = request.url === "/research"
     if (request.method !== "POST" || (request.url !== "/command" && !research)) {
       response.statusCode = 404
@@ -52,7 +65,7 @@ export async function startBrowserBridge() {
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
       const result = research
         ? await runResearchBrowser(parseResearchBrowserInput(body))
-        : await runBrowserAgent(undefined, parseBrowserAgentInput(body))
+        : await runBrowserAgent(undefined, parseBrowserAgentInput(body), gone)
       response.statusCode = result.ok ? 200 : 409
       response.end(JSON.stringify(result))
     } catch (error) {
