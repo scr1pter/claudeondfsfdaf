@@ -2,6 +2,7 @@ import { MemoryRouter, Route } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import type { EverywherePreferenceWire } from "@vectordevai/core/everywhere/preferences"
 import { DialogProvider } from "@vectordevai/ui/context/dialog"
+import { createEffect, onMount } from "solid-js"
 import { render } from "solid-js/web"
 import { SettingsEverywhereV2 } from "../../src/components/settings-v2/everywhere"
 import { GlobalProvider } from "../../src/context/global"
@@ -10,7 +11,8 @@ import { PlatformProvider, type Platform } from "../../src/context/platform"
 import { ProjectTrustProvider } from "../../src/context/project-trust"
 import { ServerConnection, ServerProvider } from "../../src/context/server"
 import { ServerSDKProvider } from "../../src/context/server-sdk"
-import { ServerSyncProvider } from "../../src/context/server-sync"
+import { ServerSyncProvider, useServerSync } from "../../src/context/server-sync"
+import { afterPaint, launchScreen } from "../../src/features/launch/launch-bridge"
 import "../../src/index.css"
 
 const database = { writes: [] as EverywherePreferenceWire.Update[] }
@@ -50,6 +52,17 @@ const platform: Platform = {
 const sidecar = { type: "sidecar", variant: "base", http: { url: location.origin } } satisfies ServerConnection.Sidecar
 const key = ServerConnection.key(sidecar)
 
+function Fixture() {
+  const sync = useServerSync()
+  // Vite puts the launch screen over every page, and only NewLayout's LaunchReadyProbe lifts it. Send
+  // the same ready signals for this page: its shell painted, no persisted settings, the engine and bootstrap answered.
+  onMount(() => afterPaint(() => launchScreen.signal("shell")))
+  launchScreen.signal("settings")
+  createEffect(() => launchScreen.signal("engine", Boolean(sync().data.path.directory)))
+  createEffect(() => launchScreen.signal("data", sync().ready))
+  return <SettingsEverywhereV2 offered />
+}
+
 render(
   () => (
     <PlatformProvider value={platform}>
@@ -62,7 +75,7 @@ render(
                   <ServerSyncProvider>
                     <ProjectTrustProvider>
                       <MemoryRouter>
-                        <Route path="/*fixture" component={() => <SettingsEverywhereV2 offered />} />
+                        <Route path="/*fixture" component={Fixture} />
                       </MemoryRouter>
                     </ProjectTrustProvider>
                   </ServerSyncProvider>
