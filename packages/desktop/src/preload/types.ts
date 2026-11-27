@@ -1,5 +1,5 @@
 import type { GithubAgentsAPI } from "../../../app/src/features/github-agents/agents-model"
-import type { RemoteReviewAsk } from "../../../app/src/context/platform"
+import type { RemoteReviewAsk } from "../../../app/src/context/remote-review-ask"
 import type { VectorAccountPlatform } from "@vectordevai/app/vector-account"
 import type { DesktopMenuAction } from "@vectordevai/app/desktop-menu"
 import type { WslServersPlatform } from "@vectordevai/app/wsl/types"

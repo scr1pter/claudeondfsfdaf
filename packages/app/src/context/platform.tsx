@@ -11,6 +11,7 @@ import type { ReportsPlatform } from "../support-reports"
 import type { PhoneAlertEvent } from "./settings"
 import type { OpsMergeRequest, OpsRequest } from "../features/cloud/ops/ops-requests"
 import type { HostedRequest } from "../features/cloud/hosted/hosted-requests"
+import type { RemoteReviewAsk } from "./remote-review-ask"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -59,7 +60,7 @@ export type RemoteStatus = {
     | { state: "failed"; message: string }
 }
 
-export type RemoteReviewAsk = { runID: string; sessionID: string; directory: string }
+export type { RemoteReviewAsk }
 
 export type RemotePlatform = {
   status(): Promise<RemoteStatus>
