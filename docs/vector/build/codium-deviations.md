@@ -6486,9 +6486,16 @@ These are pointers only; nothing is fixed here.
 - B10 (For the lead): the privacy-draft note, B10-3 and the "memory files" count wording.
 - B09a and B09b (For the lead): Hands' second, helper-titled phone alert for a helper's ask
   (`packages/app/src/pages/layout/ask-notifications.ts:59-64`), and the `session-stop.test.ts` excess-field status.
-  27 Nov 2026: both closed on branch `helper-alert-dedupe` (backlog B09-hands-alert). `ask-notification-controller.ts`
-  skips Hands' phone push for a running helper (`helperOwnsAskPhoneAlert` in `helper-phone-alert.ts`), so the phone
-  gets one root-titled push from `createHelperPhoneAlerts`; forks and helpers that are not running keep Hands' push.
+  27 Nov 2026, branch `helper-alert-dedupe` (backlog B09-hands-alert): the duplicate is fixed, with known gaps below.
+  `ask-notification-controller.ts` skips Hands' phone push for a running helper (`helperOwnsAskPhoneAlert` in
+  `helper-phone-alert.ts`), so the phone gets one root-titled push from `createHelperPhoneAlerts`; forks and helpers
+  that are not running keep Hands' push. That push now opens `sessions`, not `approvals`, and arrives after the 3 s
+  settle (`SETTLE_MS`). A wait's push goes even while the conversation is open on this computer, as every ask's push
+  did; only an interruption skips a viewed conversation. Gaps, where the phone now gets no push for a helper's ask: the
+  wait's `since` (engine clock) is later than this app's clock or more than 5 minutes behind it, so a remote server
+  whose clock is off loses it; and a record still marked running whose background job is not (before restart recovery
+  settles it), since the engine then records no wait. Closing both means the ask controller keeps the push, titled with
+  the conversation; that is for the lead.
   `sessionStop` spreads the payload before the path's `sessionID`, and the excess-field case is pinned to 200 with the
   extras dropped. The spread order is defensive: the schema already drops extras, so no test can turn red on it.
   Refusing extras with 400 to match `additionalProperties: false` stays open for the lead. CI: pending, not pushed.

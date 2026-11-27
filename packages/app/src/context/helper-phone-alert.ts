@@ -51,8 +51,8 @@ const SETTLE_MS = 3_000
 /**
  * The paired phones' alerts for helpers (Track B B09), from the engine's `session.updated` events. Each fresh waiting or
  * interrupted state alerts once, titled with the conversation's session (never the helper's title, report, prompt or
- * command); a wait only when it still stands after a short settle. The conversation must be one the person can see, not
- * internal, and not the one being looked at.
+ * command); a wait only when it still stands after a short settle. The conversation must be one the person can see and
+ * not internal; an interruption also skips the conversation being looked at.
  */
 export function createHelperPhoneAlerts(input: {
   lookup(directory: string, sessionID: string): Promise<Session | undefined>
@@ -85,13 +85,10 @@ export function createHelperPhoneAlerts(input: {
     latest.delete(id)
     if (input.disposed()) return
     const session = await input.lookup(directory, notice.parent)
-    if (
-      input.disposed() ||
-      !session ||
-      !input.allowed(notice.parent, session) ||
-      input.viewed(directory, notice.parent)
-    )
-      return
+    if (input.disposed() || !session || !input.allowed(notice.parent, session)) return
+    // A wait is the only phone push for a helper's ask (ask-notification-controller.ts), so like every ask's push it goes
+    // whoever looks at the conversation here: the person may be driving it from the phone.
+    if (!notice.waiting && input.viewed(directory, notice.parent)) return
     await input.send({
       event: "needsYou",
       title: alertTitle(notice.label, session.title ?? undefined),

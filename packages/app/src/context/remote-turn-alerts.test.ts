@@ -38,7 +38,9 @@ const listed = {
 
 beforeEach(() => resetPhoneAlerts())
 
-function fixture(isPhoneTurn: (ids: string[]) => Promise<boolean>) {
+// `viewing` is the conversation open here, as the app checks it: the ask controller counts its helpers as viewed too
+// (ask-notifications.ts), and the helper path checks the conversation itself (notification.tsx).
+function fixture(isPhoneTurn: (ids: string[]) => Promise<boolean>, viewing?: string) {
   const sent: PhoneAlert[] = []
   const desktop: string[] = []
   const decisions: boolean[] = []
@@ -63,7 +65,7 @@ function fixture(isPhoneTurn: (ids: string[]) => Promise<boolean>) {
     sound: () => {},
     // Hands' own phone alert for an ask (its wording is Hands', pages/layout/ask-notifications.ts).
     phoneAlert: () => sendPhoneAlert(platform, choices, { event: "needsYou", title: "ask", route: "approvals" }),
-    viewed: () => false,
+    viewed: (session) => !!viewing && (session.id === viewing || session.parentID === viewing),
     toast: () => 1,
     dismissToast: () => {},
     now: () => NOW,
@@ -71,7 +73,7 @@ function fixture(isPhoneTurn: (ids: string[]) => Promise<boolean>) {
   const helpers = createHelperPhoneAlerts({
     lookup: async (_directory, id) => SESSIONS.find((session) => session.id === id),
     allowed: sessionNotificationAllowed,
-    viewed: () => false,
+    viewed: (_directory, id) => id === viewing,
     disposed: () => false,
     send: (alert) => sendPhoneAlert(platform, choices, alert),
     now: () => NOW,
@@ -120,6 +122,15 @@ describe("a phone's turn with every listener on", () => {
     // The phone gets one push for this one ask, from the helper path, titled with the conversation.
     expect(env.sent).toEqual([{ event: "needsYou", title: "A helper needs you: Fix the login", route: "sessions" }])
     expect(JSON.stringify(env.sent)).not.toContain(HELPER.title)
+  })
+
+  test("a helper's request in a phone's turn reaches the phone once while its conversation is open here", async () => {
+    // The desktop left open on the conversation while the person drives it from the phone: an ask's push never
+    // depended on who is looking here.
+    const env = fixture(async (ids) => ids.includes(ROOT.id), ROOT.id)
+    await env.ask(edit(), 2)
+    expect(env.decisions).toEqual([false])
+    expect(env.sent).toEqual([{ event: "needsYou", title: "A helper needs you: Fix the login", route: "sessions" }])
   })
 
   test("the same request outside a phone's turn is answered by auto-accept, and no one is alerted", async () => {
