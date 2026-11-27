@@ -17,7 +17,7 @@ These gates are in the code or with the lead, not yours. Check that each one is 
 - The desktop page cannot turn jobs on or allow a folder yet: Settings → Vector everywhere is read-only until the write path is built (vector-everywhere-deviations.md, "2026-11-20, EV-21", "Ruling on (a)").
 - The decisions are the ones you confirmed on 2026-11-11 (spec §10): Q5 (Slack reads a mention's thread once), Q13 (GitHub laptop-first only if @vector agrees) and Q14 (a platform goes live when its own steps are met).
 - The platform facts here were last read on 2026-11-12 (VE-11 to VE-13); re-read the current platform pages when you register.
-- There is no production repository port: no production lookup turns a mapped repository into a job (vector-everywhere-handoff.md, "No production `repository` port", EV-19). Every job asks for the repository instead.
+- Repository lookup requires the requester's verified GitHub binding. In a Slack channel, the connector or an eligible requester can map it with `@Vector repo owner/name`.
 - /everywhere is still a draft (PUB-8): installs, links, connect codes and mapping all happen on that page, so go-live waits for the 2.0.0 move (At 2.0.0).
 - Listing Codium's `everywhere` perk needs EV-21's four preconditions first (spec §10, "Codium listing", note of 2026-11-20).
 - The `help` text promises a route that is not built: `renderHelp` in `packages/schema/src/everywhere-policy.ts` says "(or in GitHub Actions)" for Slack and Linear. That wording changes before go-live (R-A4, R-C8).

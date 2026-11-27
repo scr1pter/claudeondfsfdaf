@@ -110,8 +110,9 @@ export type Where = typeof Where.Type
 export const Origin = Schema.Literals(["managed", "user", "environment"]).annotate({ identifier: "LocalOrigin" })
 export type Origin = typeof Origin.Type
 
-// A source the user allowed under Vector Local, with the reason they gave. `hosts` narrows it; without hosts the
-// source's own registry hosts apply.
+// A source the user allowed under Vector Local, with the reason they gave. `hosts` limits it to those hosts and the
+// names under them. Without hosts it covers every host the source's labelled requests go to: the registry's hosts are
+// the ones it usually reaches, not a limit (LocalPolicy.allowEntry).
 export const Allowed = Schema.Struct({
   source: Schema.String,
   hosts: optional(Schema.Array(Schema.String)),

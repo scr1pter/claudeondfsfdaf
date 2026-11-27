@@ -7,11 +7,11 @@ import { showToast } from "@/utils/toast"
 import {
   LOOSENING,
   allowChoices,
+  allowHosts,
   allowUpdate,
   changesText,
   defaultReason,
   identityChanged,
-  list,
   refusal,
   sourceName,
   type Refusal,
@@ -36,7 +36,8 @@ export function DialogAllowSource(props: {
   const [error, setError] = createSignal("")
   const [pending, setPending] = createSignal(false)
   const name = () => sourceName(props.source.id)
-  const hosts = () => (props.source.hosts.length ? list(props.source.hosts) : "The addresses set for it")
+  // Always allow adds an entry with no hosts, which covers every host the source reaches.
+  const hosts = () => allowHosts(undefined, props.source.hosts)
 
   const once = async () => {
     setPending(true)
