@@ -12,6 +12,7 @@ import type { ReportsPlatform } from "../support-reports"
 import type { PhoneAlertEvent } from "./settings"
 import type { OpsMergeRequest, OpsRequest } from "../features/cloud/ops/ops-requests"
 import type { HostedRequest } from "../features/cloud/hosted/hosted-requests"
+import type { RemoteReviewAsk } from "./remote-review-ask"
 
 type PickerPaths = string | string[] | null
 type OpenDirectoryPickerOptions = { title?: string; multiple?: boolean }
@@ -60,6 +61,8 @@ export type RemoteStatus = {
     | { state: "failed"; message: string }
 }
 
+export type { RemoteReviewAsk }
+
 export type RemotePlatform = {
   status(): Promise<RemoteStatus>
   setEnabled(enabled: boolean): Promise<RemoteStatus>
@@ -71,8 +74,8 @@ export type RemotePlatform = {
   unpair(device: string): Promise<RemoteStatus>
   /** "Disconnect all phones": a new identity on this computer, and every relay connection closed. */
   disconnectAll(): Promise<RemoteStatus & { killed: boolean }>
-  /** Whether a phone started the turn any of these sessions runs (auto-accept leaves those to a person, S6). */
-  isPhoneTurn(sessionIDs: string[]): Promise<boolean>
+  /** Whether a phone started a session's turn or the review that raised this ask. */
+  isPhoneTurn(sessionIDs: string[], review?: RemoteReviewAsk): Promise<boolean>
   onChange(callback: (status: RemoteStatus) => void): () => void
 }
 

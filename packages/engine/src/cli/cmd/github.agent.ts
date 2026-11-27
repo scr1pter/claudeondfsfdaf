@@ -785,6 +785,7 @@ async function work(start: Start, task: Task, deps: Deps): Promise<Result> {
     judge: evidence.judge,
     runUrl: start.runUrl,
     shareUrl: shared?.url,
+    checkFormat: "indented",
     trigger: start.route.kind === "dispatch" ? "Triggered by workflow_dispatch" : undefined,
   })
   return {

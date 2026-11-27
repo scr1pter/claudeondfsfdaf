@@ -488,7 +488,9 @@ export function registerIpcHandlers(deps: Deps) {
   handle("remote-disconnect-all", () => remote().disconnectAll())
   // Asked before the app's auto-accept answers a request: a turn a phone started is left to a person (S6). Until
   // Remote has started no phone can have started one.
-  handle("remote-phone-turn", (_event, sessionIDs: unknown) => remoteLink()?.isPhoneTurn(sessionIDs) ?? false)
+  handle("remote-phone-turn", (_event, sessionIDs: unknown, review?: unknown) =>
+    remoteLink()?.isPhoneTurn(sessionIDs, review) ?? false,
+  )
   handle(
     "phone-alert-send",
     (_event, alert: unknown) => remoteNotify()?.send(alert) ?? { sent: false, reason: "not-paired" as const },
