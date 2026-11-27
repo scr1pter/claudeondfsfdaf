@@ -1851,7 +1851,7 @@ It does not change the engine, the schema, the SDK, openapi.json, any generated 
 - **Held.**
   - Q1 and Q6. If Q6 moves review starts to VectorScope's route, `reviewStartRequest`'s path moves with the desktop entry.
   - Remote's outside security review, any real phone, relay or desktop run, a real WebAuthn tap, and `VECTOR_REMOTE_ENABLED`, which stays the owner's.
-  - *The browser spec is moved again (critique: CN-17 gave it to CN-18 by name, :1728 and :1742).* Extending `e2e/regression/remote-phone.spec.ts` would edit `e2e/fixtures/remote-phone.jsx`, which codium-finish rewrites (+198 lines at `bd3cc7ad`). A separate spec and fixture pair would copy that harness (the desktop's real link, the memory relay and Chromium's virtual authenticator) while it is being rewritten, and cannot run here (RULES-v2: no Playwright locally), so it would reach the PR unrun. It now belongs to this lane as a follow-up package once codium-finish's fixture lands in `release-finish` or `main`, recorded in the handoff's CW-23c line. The end-to-end cases in remote-phone-app.test.ts drive the same client against the real desktop link meanwhile.
+  - *The browser spec is moved again (critique: CN-17 gave it to CN-18 by name, :1728 and :1742).* Extending `e2e/regression/remote-phone.spec.ts` would edit `e2e/fixtures/remote-phone.jsx`, which codium-finish rewrites (+198 lines at `bd3cc7ad`). A separate spec and fixture pair would copy that harness (the desktop's real link, the memory relay and Chromium's virtual authenticator) while it is being rewritten, and cannot run here (RULES-v2: no Playwright locally), so it would reach the PR unrun. It now belongs to this lane as a follow-up package once codium-finish's fixture lands in `release-finish` or `main`, recorded in the handoff's CW-23c line. The end-to-end cases in remote-phone-app.test.ts drive the same client against the real desktop link meanwhile. (Update, 2026-11-27, entry "CW-23c: the browser spec covers the phone's connect card, a fix's question and connect off": done. PR #105 added the branch review start and cancel case, and branch `phone-connect-e2e` adds the card, the `connect_write` question and connect-off cases, and puts the spec on connect-app-validation.yml's main-push line. They passed locally in Chromium; no CI run id yet, since the branch is not pushed.)
   - The hold for a detached run's later questions (CN-17 Known limits, "Asks after detach are not held (for CN-18)"). It needs a desktop change (the run's end in `turns.observe`), so it stays open. The phone now lists such questions in the session page, but they can still be auto-accepted at the desktop as those of a desktop-started review.
   - `connect_cloud`'s presentation (CN-14).
 - **Known limits.**
@@ -2301,3 +2301,47 @@ Docs only. PR #38 merged as `7e440a27` on 16 Nov.
   takes the runtime flags as a fourth argument (default `{ client: "cli" }`). With the flag check removed (the reason
   kept), the first two fail. `test/connect/hands.test.ts` lists the new reason in `REASONS` (its typecheck requires
   every reason), 10 pass; `test/connect/place.test.ts` 9 pass. Hands stays off by default; the pilot stays off.
+
+## 2026-11-27 — CW-23c: the browser spec covers the phone's connect card, a fix's question and connect off
+
+- Closes the browser-spec part of CN-18's Held list (entry "CW-23c: the phone shows connect cards and runs, and
+  starts a review with a passkey (CN-18)", Held, now marked done there). PR #105 had already added "a paired phone
+  starts and cancels a connected branch review". This adds the three cases it left out to
+  `packages/app/e2e/regression/remote-phone.spec.ts`, on the same harness (the desktop's real link and remote-routes,
+  the memory relay and Chromium's virtual authenticator):
+  - "an agent's connected review shows on the phone as a card read from the engine's run, as text only": the
+    session's `connect` tool part keeps a saved copy that still says running, and the card shows the engine's run:
+    "Done · Blocking findings", "Code sent to: Your provider: anthropic", "7 open findings: 1 blocking, 5 concerns,
+    1 nit", the first five open finding lines by severity (a title holding `<b>` stays text), and "The other findings
+    are in Vector on your computer." The sixth open, fixed and dismissed findings are absent; the card has no button and
+    no fix, dismiss or worktree text; nothing marked PRIVATE (finding bodies and suggestions, the summary, the tool
+    input, the saved progress) reaches the phone. The runs list shows the same run with no Cancel.
+  - "a connected tool's fix asks on the phone with its change as text, and is allowed once with a passkey": a
+    `connect_write` ask in the hub's shape (engine connect/hub.ts `asker`: description, runID, member, diff, empty
+    `always`) shows in the session page's Connected tools section as the sentence and the patch in a `<pre>`, with
+    Allow once and Deny and no "always". Allow once raises the passkey's signCount, the fake engine hears exactly
+    `{reply: "once"}`, and the card goes.
+  - "with connected tools off the phone shows no card and no runs, and a forced start is refused": with the
+    capabilities read lacking `connections`, the same part is only its plain line ("Review with VectorScope ·
+    running"), there is no card, no Connected tools section and no review form. A review challenge sent straight
+    through the phone client (`remoteFixture.phone`) answers 403 `REMOTE_CONNECT_OFF`, and so does a runs read; the
+    fake engine receives no connect request.
+- Fixture (`packages/app/e2e/fixtures/remote-phone.jsx`): a new `card=1` page parameter adds the finished run
+  `cr_phone_card` to `GET /experimental/connect/runs` (only with `connect=1`) and answers
+  `GET /session/ses_1/message` with one assistant message holding a text part and the `connect` tool part. A new
+  `remoteFixture.askFix(id)` raises the `connect_write` ask. Both default off, so codium-remote-helpers.spec.ts and
+  the three earlier cases see the same engine. `pair()` in the spec now takes page parameters instead of a boolean.
+- Deviation: the plan asked to import the shapes from the unit tests. A browser fixture cannot import a `bun:test`
+  file, so the run and finding shapes are written in the fixture as phone/remote/model.test.ts builds them. A scratch
+  check decoded `cardRun` and the part's saved copy with the real `Connect.Run` schema (packages/schema/src/connect.ts)
+  before commit. It caught that model.test.ts's finding uses category `correctness` and bucket `owned`, which
+  `Connect.Category` and `Connect.Bucket` refuse; the fixture uses `bug` and `inline`. The phone's reader ignores both
+  fields, so model.test.ts is left as it is.
+- Workflow: connect-app-validation.yml's Playwright line now also runs `e2e/regression/remote-phone.spec.ts`.
+- Not here: streaming `connect.run.updated` (its own item); the cases use Refresh or a fresh read and never expect a
+  live run row change. PR #110's run-read route is not needed, since the card reads the runs list.
+- Evidence (local only, Chromium 1243 from the machine's preinstalled Playwright browsers through a scratch config
+  that sets `executablePath`; no CI run yet): before the fixture change the three new cases failed and the three
+  earlier ones passed; after it all six passed, and codium-remote-helpers.spec.ts passed 2 of 2. With
+  `SHOWN = 6` in phone/remote/model.ts and the desktop's connect-off check removed, the card case and the connect-off
+  case failed.
