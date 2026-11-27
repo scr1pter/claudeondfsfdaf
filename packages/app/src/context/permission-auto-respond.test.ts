@@ -4,6 +4,7 @@ import { base64Encode } from "@vectordevai/core/util/encode"
 import {
   autoRespondsPermission,
   isDirectoryAutoAccepting,
+  phoneReviewAsk,
   phoneTurnAllows,
   sessionLineage,
 } from "./permission-auto-respond"
@@ -226,5 +227,30 @@ describe("phone turns and auto-accept", () => {
     expect(source.match(/respondOnce\(/g)?.length).toBe(2)
     expect(source).toContain("phoneTurnAllows(")
     expect(source).toContain("if (held().has(permission.id)) return false")
+  })
+})
+
+// CW-23c: a review a phone started keeps running after its turn ends, so its Connect asks name their exact run.
+describe("detached phone review asks", () => {
+  const ask = { sessionID: "ses_1", permission: "connect", metadata: { runID: "cr_1" } }
+
+  test("a Connect ask names its run, session and directory; other asks name none", () => {
+    const review = { runID: "cr_1", sessionID: "ses_1", directory: "/repo" }
+    expect(phoneReviewAsk(ask, "/repo")).toEqual(review)
+    expect(phoneReviewAsk({ ...ask, permission: "connect_model" }, "/repo")).toEqual(review)
+    expect(phoneReviewAsk(ask)).toBeUndefined()
+    expect(phoneReviewAsk({ ...ask, permission: "bash" }, "/repo")).toBeUndefined()
+    expect(phoneReviewAsk({ ...ask, metadata: {} }, "/repo")).toBeUndefined()
+    expect(phoneReviewAsk({ ...ask, metadata: { runID: 7 } }, "/repo")).toBeUndefined()
+  })
+
+  test("the provider sends that identity with its phone-turn check, so a held review is not auto-accepted", async () => {
+    // The desktop holds the review's run, not its session, once the turn that started it is idle.
+    const isPhoneTurn = async (_ids: string[], review?: { runID: string }) => review?.runID === "cr_1"
+    expect(await phoneTurnAllows((ids) => isPhoneTurn(ids, phoneReviewAsk(ask, "/repo")), ["ses_1"])).toBe(false)
+    expect(await phoneTurnAllows((ids) => isPhoneTurn(ids, phoneReviewAsk(ask)), ["ses_1"])).toBe(true)
+    const source = await Bun.file(new URL("./permission.tsx", import.meta.url)).text()
+    expect(source).toContain("const review = phoneReviewAsk(permission, directory)")
+    expect(source).toContain("platform.remote!.isPhoneTurn(ids, review)")
   })
 })
