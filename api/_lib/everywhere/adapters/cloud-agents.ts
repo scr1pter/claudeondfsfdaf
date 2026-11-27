@@ -9,7 +9,7 @@ import {
 } from "../../../../packages/schema/src/everywhere.js"
 import type { SwitchState } from "../../../../packages/schema/src/everywhere-policy.js"
 import type { RepoBinding, WorkflowMode } from "../../cloud-agents-binding.js"
-import type { listCloudRuns, RunEnd, RunSettleListener, RunStartListener } from "../../cloud-agents-runs.js"
+import type { RunEnd, RunSettleListener, RunStartListener } from "../../cloud-agents-runs.js"
 import type { prepareCloudRun } from "../../cloud-agents-start.js"
 import type { GithubIdentity, GithubOidcPurpose } from "../../github-oidc.js"
 import { ApiError } from "../../http.js"
@@ -322,24 +322,20 @@ export function createRunHooks(deps: RunHooksDeps) {
 }
 
 /**
- * The cron's reader of how an overdue Actions run ended (3.6: "settled from `listCloudRuns`"): the sponsor's newest
- * 200 runs, which is all @vector keeps per account, and of those only the one with this rid. An ended run answers its
- * outcome; an open or unknown one answers undefined; a failed read, or one damaged record among the 200, rejects.
- * While the cloud-agents service is off its run state is not read (cloud-agents-run-registration.ts), so the answer is
- * undefined with no read, and the job fails at its due time.
+ * The cron reads the protected record for the overdue Actions run of this sponsor. A settled record supplies the
+ * outcome. An open or unknown record answers undefined. An unreadable record rejects and the grace period applies.
+ * While the cloud-agents service is off the cron skips the read and fails the job at its due time.
  */
 export function createActionsRunEnd(
   deps: {
-    readonly list?: typeof listCloudRuns
     readonly enabled?: () => boolean | Promise<boolean>
     readonly store?: typeof persistentStore
   } = {},
 ): ActionsRunEnd {
   return async (account, rid) => {
     if (!(await (deps.enabled ?? cloudAgentsOn)())) return undefined
-    const runs = await (deps.list ?? defaultList)(account, { limit: 200 }, deps.store ?? persistentStore)
-    // @vector's record holds an outcome only once the run ended (cloud-agents-runs.ts decodes them together).
-    const outcome = runs.find((entry) => entry.rid === rid)?.outcome
+    const { readCloudRunOutcome } = await import("../../cloud-agents-runs.js")
+    const outcome = await readCloudRunOutcome(account, rid, deps.store)
     return outcome && ACTIONS_OUTCOME[outcome]
   }
 }
@@ -390,11 +386,6 @@ const defaultApp: NonNullable<CloudPortsDeps["app"]> = {
 async function defaultPrepare(...input: Parameters<typeof prepareCloudRun>) {
   const { prepareCloudRun } = await import("../../cloud-agents-start.js")
   return prepareCloudRun(...input)
-}
-
-async function defaultList(...input: Parameters<typeof listCloudRuns>) {
-  const { listCloudRuns } = await import("../../cloud-agents-runs.js")
-  return listCloudRuns(...input)
 }
 
 async function cloudAgentsOn() {
