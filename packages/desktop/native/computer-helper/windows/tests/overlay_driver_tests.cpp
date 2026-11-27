@@ -394,10 +394,10 @@ size_t run_overlay_driver_tests() {
     const OverlayDriverUiaFailure traced{OverlayDriverLookup::first, OverlayDriverUiaCall::root, false,
       WindowsUiaExpiry::caller_wait, {}, OverlayDriverUiaRootAttempt::replacement,
       WindowsUiaRootWait{WindowsUiaRootProgress::dispatch_started, WindowsUiaCallerWait::pending}};
-    const OverlayDriverResult failure{false, false, L"native_failure", L"uia-root-element", L"core_failure:no_ui_tree", traced};
-    const auto detail = failure.wire().GetNamedObject(L"uia");
+    const OverlayDriverResult traced_failure{false, false, L"native_failure", L"uia-root-element", L"core_failure:no_ui_tree", traced};
+    const auto detail = traced_failure.wire().GetNamedObject(L"uia");
     require(detail.Size() == 8 && named(detail, L"rootProgress") == L"dispatch-started" && named(detail, L"callerWait") == L"pending" &&
-      failure.exit_code() == 1, "overlay-driver.root-wait-detail-reaches-the-failure-frame");
+      traced_failure.exit_code() == 1, "overlay-driver.root-wait-detail-reaches-the-failure-frame");
     const OverlayDriverResult wrong_stage{false, false, L"native_failure", L"uia-root-wrap", L"core_failure:no_ui_tree", traced};
     require(!wrong_stage.wire().HasKey(L"uia") && wrong_stage.exit_code() == 1,
       "overlay-driver.root-wait-detail-cannot-change-another-phase");
