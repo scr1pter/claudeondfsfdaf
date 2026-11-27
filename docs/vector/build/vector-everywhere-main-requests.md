@@ -176,5 +176,15 @@ lead to brief, not a request to main. The page needs nothing more from main.
   writes a formatter, a language server and a .vector folder into the
   checkout and shows none loaded after a reload. Residual: the owner can trust
   a job's checkout by hand in the app.
+  *Annotation 2026-11-27 (EV-RM2): residual closed.* `Config.approve` refuses
+  a folder inside `<data>/everywhere-worktree`, compared by real path, so POST
+  /config/trust answers 400 there and the folder stays untrusted. GET
+  /config/trust reports `approvable: false` there, and `vector trust approve`
+  prints "A Vector everywhere job's checkout is never trusted." Engine
+  test/everywhere/worktree.test.ts, "the owner cannot trust the job's checkout
+  by hand, but can still trust a project folder", and test/cli/trust.test.ts,
+  "the owner cannot approve trust in a Vector everywhere job's checkout", pin
+  it. The desktop's per-prompt recheck was not built: nothing can trust the
+  checkout now.
 
 See vector-everywhere-deviations.md, "2026-11-16, EV-16".

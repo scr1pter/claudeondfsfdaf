@@ -5,6 +5,7 @@ import yargs from "yargs"
 import { Effect } from "effect"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { Global } from "@vectordevai/core/global"
+import { createJobId } from "@vectordevai/schema/everywhere"
 import { formatApproved, formatPromptTrust, formatTrustStatus, TrustCommand, trustDecision } from "@/cli/cmd/trust"
 import { Config } from "@/config/config"
 import { PromptTrust } from "@/config/prompt-trust"
@@ -100,11 +101,11 @@ describe("vector trust and held prompt files", () => {
   }
 
   // The repository's trust and the prompt files held for it, read in a fresh instance as the commands read them.
-  const state = () =>
+  const state = (directory = repository.path) =>
     AppRuntime.runPromise(
       Effect.gen(function* () {
         const store = yield* InstanceStore.Service
-        const ctx = yield* store.load({ directory: repository.path })
+        const ctx = yield* store.load({ directory })
         return yield* Effect.gen(function* () {
           const config = yield* Config.Service
           return {
@@ -132,6 +133,21 @@ describe("vector trust and held prompt files", () => {
     expect(await run(["prompts", "approve"], false)).toBeUndefined()
     expect(await run(["approve"], false)).toBeUndefined()
     expect(await state()).toEqual({ trusted: true, held: [] })
+  }, 60_000)
+
+  // EV-RM2: a Vector everywhere job's checkout, where Worktree.createUnattended puts one, holds what the job wrote, so
+  // the owner cannot approve it either, and nothing is recorded.
+  test("the owner cannot approve trust in a Vector everywhere job's checkout", async () => {
+    const project = path.join(Global.Path.data, "everywhere-worktree", "trust-cli")
+    const checkout = path.join(project, createJobId(Date.now()))
+    await fs.mkdir(checkout, { recursive: true })
+    await fs.writeFile(path.join(checkout, "vector.json"), JSON.stringify({ formatter: false }))
+    process.chdir(checkout)
+    const refused = await run(["approve"], false)
+    process.chdir(repository.path)
+    expect(refused).toBe("A Vector everywhere job's checkout is never trusted.")
+    expect((await state(checkout)).trusted).toBe(false)
+    await fs.rm(project, { recursive: true, force: true })
   }, 60_000)
 
   test("a terminal is told at start that prompt files are held, and lists them", async () => {

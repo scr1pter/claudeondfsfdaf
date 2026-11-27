@@ -61,8 +61,11 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
         trusted: status.trusted,
         ignored: status.ignored,
         settings: status.settings,
-        // The same rule that refuses a guest's approval below, so the two cannot drift apart.
-        approvable: principal.kind === "owner" || !ServerAuth.isOwnerOnlyRoute("POST", "/config/trust"),
+        // The same rules that refuse an approval below: a guest's, and anyone's in a Vector everywhere job's checkout
+        // (Config.approve), so they cannot drift apart.
+        approvable:
+          !(yield* Config.jobCheckout()) &&
+          (principal.kind === "owner" || !ServerAuth.isOwnerOnlyRoute("POST", "/config/trust")),
       }
     })
 

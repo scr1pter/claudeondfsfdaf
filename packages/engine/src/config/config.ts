@@ -546,6 +546,29 @@ export type TrustStatus = WorkspaceTrust.Status & {
   settings: boolean
 }
 
+/** What a refused approval of a Vector everywhere job's checkout says. */
+export const JOB_CHECKOUT_REFUSAL = "A Vector everywhere job's checkout is never trusted."
+
+/**
+ * Whether this instance is in a Vector everywhere job's checkout, under <data>/everywhere-worktree where
+ * Worktree.createUnattended puts one. The job's tools write anything in that folder, so trusting it would load what the
+ * job wrote as the owner's own config: Config.approve refuses it, and GET /config/trust offers no approval there.
+ * Folders compare as Worktree compares them: real paths (so macOS's /var and /private/var agree), case folded on
+ * Windows, and the resolved path where there is no real path.
+ */
+export const jobCheckout = Effect.fnUntraced(function* () {
+  const ctx = yield* InstanceState.context
+  const root = yield* canonicalFolder(path.join(Global.Path.data, "everywhere-worktree"))
+  const folders = yield* Effect.forEach([ctx.directory, ctx.worktree], canonicalFolder)
+  return folders.some((folder) => FSUtil.contains(root, folder))
+})
+
+const canonicalFolder = (input: string) =>
+  Effect.try({ try: () => FSUtil.realpath(input), catch: () => undefined }).pipe(
+    Effect.orElseSucceed(() => path.resolve(input)),
+    Effect.map((real) => (process.platform === "win32" ? path.normalize(real).toLowerCase() : path.normalize(real))),
+  )
+
 // The permissions the user's own config sources declare, merged without any project file. Set only when a
 // trusted project grants something, because the merged config then lets a project allow replace a user deny.
 export type PermissionCeiling = {
@@ -2601,6 +2624,8 @@ const layer = Layer.effect(
     })
 
     const approve = Effect.fn("Config.approve")(function* () {
+      // A defect, which POST /config/trust answers with its bodiless 400; `vector trust approve` refuses first.
+      if (yield* jobCheckout()) return yield* Effect.die(new Error(JOB_CHECKOUT_REFUSAL))
       yield* InstanceState.useEffect(state, (s) =>
         Effect.promise(() => WorkspaceTrust.approve(Global.Path.state, s.trust)),
       )
