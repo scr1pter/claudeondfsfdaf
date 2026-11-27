@@ -245,7 +245,7 @@ test("a connected tool's fix asks on the phone with its change as text, and is a
   expect(after[0]!.signCount).toBeGreaterThan(credentials[0]!.signCount)
 })
 
-test("with connected tools off the phone shows no card and no runs, and a forced start is refused", async ({
+test("with connected tools off the phone shows no card and no runs, and a review sent straight through is refused", async ({
   page,
   baseURL,
 }) => {
@@ -253,17 +253,23 @@ test("with connected tools off the phone shows no card and no runs, and a forced
   await phone.getByRole("button", { name: "Open sessions" }).click()
   await phone.getByRole("button", { name: /^Fix the login/ }).click()
   await expect(phone.getByText("I asked VectorScope to review the login changes.")).toBeVisible()
-  // The agent's call is only its plain line: no card, no runs section, no review form.
   await expect(phone.getByText("Review with VectorScope · running", { exact: true })).toBeVisible()
+  await expect
+    .poll(async () => (await call(page, "engine")).some((item) => item.path === "/experimental/capabilities"))
+    .toBe(true)
+  // The same read again on the phone's one link answers after the page's own, so the page knows connected tools are
+  // off before the checks below look for what it must not show.
+  expect(await call(page, "phone", { method: "GET", path: "/experimental/capabilities", directory: "/repo" })).toEqual({
+    status: 200,
+    body: { backgroundSubagents: true, sessionStop: true },
+  })
+  // The agent's call is only its plain line: no card, no runs section, no review form.
   await expect(phone.locator(".phone-card")).toHaveCount(0)
   await expect(phone.getByText(/VectorScope review|Blocking findings|Code sent to/)).toHaveCount(0)
   await expect(phone.getByRole("region", { name: "Connected tools" })).toHaveCount(0)
   await expect(phone.getByRole("button", { name: "Review changes" })).toHaveCount(0)
-  await expect
-    .poll(async () => (await call(page, "engine")).some((item) => item.path === "/experimental/capabilities"))
-    .toBe(true)
 
-  // Sent straight through the client, a review start and a runs read are refused by the computer.
+  // Sent straight through the client, a review challenge and a runs read are refused by the computer.
   const start = await call(page, "phone", {
     method: "POST",
     path: "/remote/approval",
