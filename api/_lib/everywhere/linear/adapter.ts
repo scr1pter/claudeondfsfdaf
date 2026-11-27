@@ -231,8 +231,9 @@ export function createLinearAdapter(deps: LinearDeps): PlatformAdapter {
           const page = new URL(`https://${EVERYWHERE_PAGE}`)
           page.searchParams.set("job", view.jid)
           const links = [{ label: "Vector job", url: page.href }, ...(current.result?.prUrl ? [{ label: "Draft pull request", url: current.result.prUrl }] : [])]
+          const plan = current.state === "expired" ? linearPlan("waiting", "canceled") : linearPlan("pushing", "completed")
           if (linearObject((await call("session", { id: reference(view.reply).session,
-            input: { plan: linearPlan("pushing", "completed"), addedExternalUrls: links } })).agentSessionUpdate).success !== true) throw new LinearFailure(true)
+            input: { plan, addedExternalUrls: links } })).agentSessionUpdate).success !== true) throw new LinearFailure(true)
         }
         await activity(view, "resultActivityId", { type: current.outcome === "failed" || current.state === "failed" ? "error" : "response", body: result.text }, { final: true })
         if (result.privateText && openReply(ctx(), current)?.privateDelivered !== true) {
