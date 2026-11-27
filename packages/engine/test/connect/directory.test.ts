@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { spawn } from "node:child_process"
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Logger, Option, References, Schema } from "effect"
 import { AppNodeBuilder } from "@vectordevai/core/effect/app-node-builder"
 import { Database } from "@vectordevai/core/database/database"
 import { BackgroundJobTable } from "@vectordevai/core/background-job.sql"
@@ -1056,8 +1056,42 @@ it.instance(
       expect((yield* ConnectDirectory.load(f.scope, id))?.run).toEqual(terminal)
       expect(Exit.isFailure(yield* ConnectDirectory.write(token, pending).pipe(Effect.exit))).toBe(true)
       ConnectDirectory.retire(token)
-      expect(Exit.isFailure(yield* ConnectDirectory.write(token, terminal).pipe(Effect.exit))).toBe(true)
+      expect(yield* ConnectDirectory.write(token, terminal).pipe(Effect.flip)).toMatchObject({ phase: "authority" })
       expect((yield* ConnectDirectory.load(f.scope, id))?.run).toEqual(terminal)
+    }),
+  options,
+)
+
+it.instance(
+  "a receipt replacement failure retains only its phase and a bounded filesystem code",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      script.state = "unavailable"
+      const queued = yield* f.owner.directoryReview(reviewInput())
+      const done = yield* f.ended(queued.id)
+      const receipt = yield* ConnectDirectory.load(f.scope, queued.id)
+      if (!receipt) throw new Error("The actual directory receipt is missing")
+      const token = yield* ConnectDirectory.issue({ sessionID: receipt.anchor, ...f.scope })
+      const id = Connect.RunID.create()
+      const folder = path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope))
+      const blocked = path.join(folder, `${id}.json`)
+      yield* Effect.promise(async () => {
+        await fs.mkdir(blocked)
+        await fs.writeFile(path.join(blocked, "keep"), "fixture")
+      })
+      const messages: unknown[] = []
+      const logger = Logger.make(({ message }) => void messages.push(message))
+      const error = yield* ConnectDirectory.write(token, { ...done, id, request: { ...done.request, id } }).pipe(
+        Effect.flip,
+        Effect.provide(Logger.layer([logger])),
+        Effect.provideService(References.MinimumLogLevel, "Warn"),
+      )
+      expect(messages).toEqual([["Could not save directory review receipt", { phase: "rename", code: error.code }]])
+      expect(error).toMatchObject({ phase: "rename", message: "The directory review receipt could not be saved." })
+      expect(["EACCES", "EEXIST", "EISDIR", "ENOTEMPTY", "EPERM"]).toContain(error.code)
+      expect(JSON.stringify(error)).not.toContain(blocked)
+      expect((yield* Effect.promise(() => fs.readdir(folder))).filter((name) => name.endsWith(".tmp"))).toEqual([])
     }),
   options,
 )

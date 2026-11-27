@@ -34,8 +34,34 @@ export const Receipt = Schema.Struct({
   run: Connect.Run,
 })
 
+const WritePhase = Schema.Literals([
+  "authority",
+  "size",
+  "retired-before-write",
+  "mkdir",
+  "write",
+  "retired-before-rename",
+  "rename",
+])
+const FileErrorCode = Schema.Literals([
+  "EACCES",
+  "EBUSY",
+  "EEXIST",
+  "EIO",
+  "EISDIR",
+  "EMFILE",
+  "ENOENT",
+  "ENOSPC",
+  "ENOTDIR",
+  "ENOTEMPTY",
+  "EPERM",
+  "EROFS",
+])
+
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectDirectory.Error", {
   message: Schema.String,
+  phase: Schema.optional(WritePhase),
+  code: Schema.optional(FileErrorCode),
 }) {}
 
 // A client-editable session name or metadata is not permission to use a hidden parent. Only the owner service lends
@@ -229,7 +255,7 @@ export const prune = Effect.fn("ConnectDirectory.prune")(function* (
 })
 
 /** Storage's namespace and reader, with a narrow atomic writer: a half-written result must never become a verdict. */
-export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token, run: Connect.Run) {
+function* writeReceipt(token: Token, run: Connect.Run) {
   const binding = read(token)
   const writer = writers.get(token)
   if (
@@ -247,7 +273,10 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
     FileLock.key(run.request.directory) !== FileLock.key(binding.directory) ||
     (runs.has(token) && runs.get(token) !== run.id)
   )
-    return yield* new Error({ message: "The directory review receipt has no valid writer authority." })
+    return yield* new Error({
+      phase: "authority",
+      message: "The directory review receipt has no valid writer authority.",
+    })
   if (run.status === "done") writer.terminal = true
   runs.set(token, run.id)
   const value = JSON.stringify({
@@ -260,19 +289,24 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
     run,
   })
   if (Buffer.byteLength(value) > MAX_BYTES)
-    return yield* new Error({ message: "The directory review result exceeds its receipt limit." })
+    return yield* new Error({ phase: "size", message: "The directory review result exceeds its receipt limit." })
+  let phase: typeof WritePhase.Type = "retired-before-write"
   yield* Effect.tryPromise({
     try: () => {
       const pending = writer.tail.then(async () => {
         const active = () => read(token) === binding && current(binding) && !(writer.terminal && run.status !== "done")
         if (!active()) throw new Error({ message: "The receipt writer was retired." })
         const directory = folder(binding)
+        phase = "mkdir"
         await mkdir(directory, { recursive: true, mode: 0o700 })
         const target = path.join(directory, `${run.id}.json`)
         const temporary = `${target}.${randomUUID()}.tmp`
         try {
+          phase = "write"
           await writeFile(temporary, value, { mode: 0o600, flag: "wx" })
+          phase = "retired-before-rename"
           if (!active()) throw new Error({ message: "The receipt writer was retired." })
+          phase = "rename"
           await rename(temporary, target)
         } finally {
           await rm(temporary, { force: true }).catch(() => undefined)
@@ -284,7 +318,24 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
       )
       return pending
     },
-    catch: () => new Error({ message: "The directory review receipt could not be saved." }),
+    catch: (cause) => {
+      const code = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined
+      return new Error({
+        phase,
+        message: "The directory review receipt could not be saved.",
+        ...(Schema.is(FileErrorCode)(code) ? { code } : {}),
+      })
+    },
   })
   return hash(value)
-})
+}
+
+export const write = Effect.fn("ConnectDirectory.write")(writeReceipt, (effect, _token, run) =>
+  run.status === "done"
+    ? effect.pipe(
+        Effect.tapError(({ phase, code }) =>
+          Effect.logWarning("Could not save directory review receipt", { phase, code }),
+        ),
+      )
+    : effect,
+)
