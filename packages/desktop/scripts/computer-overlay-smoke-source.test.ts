@@ -170,15 +170,15 @@ describe("independent overlay source admission", () => {
       implementation.indexOf("note(WindowsUiaPhase::root_handle);"),
     )
     expect(root).toContain(
-      "FAILED(status)) {\n      if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));\n      note(WindowsUiaPhase::root_dispatch_returned);\n      unavailable();",
+      "FAILED(status)) {\n      if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));\n      note(windows_uia_root_dispatch_returned);\n      unavailable();",
     )
     expect(root.match(/ElementFromHandleBuildCache\(/g)).toHaveLength(1)
-    expect(root.indexOf("current_call()")).toBeLessThan(root.indexOf("note(WindowsUiaPhase::root_dispatch_started)"))
-    expect(root.indexOf("note(WindowsUiaPhase::root_dispatch_started)")).toBeLessThan(
+    expect(root.indexOf("current_call()")).toBeLessThan(root.indexOf("note(windows_uia_root_dispatch_started)"))
+    expect(root.indexOf("note(windows_uia_root_dispatch_started)")).toBeLessThan(
       root.indexOf("ElementFromHandleBuildCache("),
     )
     expect(root.indexOf("ElementFromHandleBuildCache(")).toBeLessThan(
-      root.indexOf("note(WindowsUiaPhase::root_dispatch_returned)"),
+      root.indexOf("note(windows_uia_root_dispatch_returned)"),
     )
     expect(root.match(/current_call\(\)/g)).toHaveLength(1)
     expect(implementation.match(/note_root_element_status\(/g)).toHaveLength(1)

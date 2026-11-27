@@ -24,9 +24,7 @@ enum class WindowsUiaPhase : uint8_t {
   security_classify, security_value_readonly, security_text_readonly, security_bounds, security_current, root_pid,
   hit_setup, hit_loop, hit_cycle, hit_pid, hit_equal, hit_depth, hit_children, hit_enqueue, hit_queue_limit, hit_ambiguous, hit_empty, hit_end, children_limit, children_first, children_loop, children_capacity, children_wrap, children_append, children_next, children_sibling_failed, children_compare, children_cycle, children_end, parent_read, parent_wrap,
   actor_current, actor_current_budget, actor_complete, actor_expired, actor_cancelled, actor_revoked,
-  actor_com_uninitialized, actor_com_cancellation_unavailable, actor_com_timer_unavailable, actor_com_expired,
-  // Internal checkpoints both report root_element to the existing failure and recovery paths.
-  root_dispatch_started, root_dispatch_returned
+  actor_com_uninitialized, actor_com_cancellation_unavailable, actor_com_timer_unavailable, actor_com_expired
 };
 inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
   L"none", L"root-current", L"actor-admission", L"actor-queued", L"actor-budget", L"prepare-desktop",
@@ -40,6 +38,9 @@ inline constexpr std::array<std::wstring_view, 93> windows_uia_phases{
   L"actor-current", L"actor-current-budget", L"actor-complete", L"actor-expired", L"actor-cancelled", L"actor-revoked",
   L"actor-com-uninitialized", L"actor-com-cancellation-unavailable", L"actor-com-timer-unavailable", L"actor-com-expired"
 };
+// Internal checkpoints occupy distinct values and both report root_element on the wire.
+inline constexpr auto windows_uia_root_dispatch_started = static_cast<WindowsUiaPhase>(windows_uia_phases.size());
+inline constexpr auto windows_uia_root_dispatch_returned = static_cast<WindowsUiaPhase>(windows_uia_phases.size() + 1);
 // Which side first saw an actor ticket's deadline pass, written only inside the first timeout snapshot:
 // a worker current_call() check, the worker's COM call budget after the body, or the caller's wait_until().
 // worker_current means the worker itself found the budget spent at a check under the sampled phase. Under
@@ -66,7 +67,7 @@ struct WindowsUiaDiagnostic {
   // Zero means unobserved; a failing HRESULT is never zero. Only failure_status() reads it.
   std::atomic<int32_t> root_element_status{0};
   static WindowsUiaPhase reported_phase(WindowsUiaPhase observed) noexcept {
-    if (observed == WindowsUiaPhase::root_dispatch_started || observed == WindowsUiaPhase::root_dispatch_returned)
+    if (observed == windows_uia_root_dispatch_started || observed == windows_uia_root_dispatch_returned)
       return WindowsUiaPhase::root_element;
     return observed;
   }
@@ -74,8 +75,8 @@ struct WindowsUiaDiagnostic {
   void note_timeout(WindowsUiaExpiry expiry, WindowsUiaCallerWait wait = WindowsUiaCallerWait::none) noexcept {
     const auto status = root_element_status.load(std::memory_order_relaxed);
     const auto current = phase.load(std::memory_order_relaxed);
-    const auto progress = current == WindowsUiaPhase::root_dispatch_returned ? WindowsUiaRootProgress::dispatch_returned
-      : current == WindowsUiaPhase::root_dispatch_started ? WindowsUiaRootProgress::dispatch_started
+    const auto progress = current == windows_uia_root_dispatch_returned ? WindowsUiaRootProgress::dispatch_returned
+      : current == windows_uia_root_dispatch_started ? WindowsUiaRootProgress::dispatch_started
       : WindowsUiaRootProgress::before_dispatch;
     uint64_t empty = 0;
     const auto observed = (uint64_t{static_cast<uint32_t>(status)} << 32) |

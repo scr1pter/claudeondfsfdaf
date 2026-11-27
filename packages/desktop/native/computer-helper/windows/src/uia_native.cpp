@@ -380,14 +380,14 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     winrt::com_ptr<IUIAutomationElement> root;
     note(WindowsUiaPhase::root_element); current_call();
     // Failure path only: keep the first failing status for the driver's closed bucket. The thrown code is unchanged.
-    note(WindowsUiaPhase::root_dispatch_started);
+    note(windows_uia_root_dispatch_started);
     const auto status = automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put());
     if (FAILED(status)) {
       if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));
-      note(WindowsUiaPhase::root_dispatch_returned);
+      note(windows_uia_root_dispatch_returned);
       unavailable();
     }
-    note(WindowsUiaPhase::root_dispatch_returned);
+    note(windows_uia_root_dispatch_returned);
     UIA_HWND handle = nullptr;
     note(WindowsUiaPhase::root_handle);
     if (!root || FAILED(root->get_CurrentNativeWindowHandle(&handle)) || reinterpret_cast<HWND>(handle) != window.surface) unavailable();

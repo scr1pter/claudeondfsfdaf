@@ -323,8 +323,8 @@ size_t run_overlay_driver_tests() {
     struct Case { WindowsUiaPhase phase; WindowsUiaRootProgress progress; };
     const Case cases[] = {
       {WindowsUiaPhase::root_element, WindowsUiaRootProgress::before_dispatch},
-      {WindowsUiaPhase::root_dispatch_started, WindowsUiaRootProgress::dispatch_started},
-      {WindowsUiaPhase::root_dispatch_returned, WindowsUiaRootProgress::dispatch_returned},
+      {windows_uia_root_dispatch_started, WindowsUiaRootProgress::dispatch_started},
+      {windows_uia_root_dispatch_returned, WindowsUiaRootProgress::dispatch_returned},
     };
     for (const auto& item : cases) {
       for (const auto wait : {WindowsUiaCallerWait::pending, WindowsUiaCallerWait::ready}) {
@@ -332,7 +332,7 @@ size_t run_overlay_driver_tests() {
         diagnostic.phase.store(item.phase);
         diagnostic.note_timeout(WindowsUiaExpiry::caller_wait, wait);
         const auto first = diagnostic.timeout_observation.load();
-        diagnostic.phase.store(WindowsUiaPhase::root_dispatch_returned);
+        diagnostic.phase.store(windows_uia_root_dispatch_returned);
         diagnostic.note_root_element_status(-1);
         diagnostic.note_timeout(WindowsUiaExpiry::caller_wait, WindowsUiaCallerWait::ready);
         const auto root_wait = diagnostic.failure_root_wait();
@@ -346,7 +346,7 @@ size_t run_overlay_driver_tests() {
     }
     for (const auto side : {WindowsUiaExpiry::worker_current, WindowsUiaExpiry::worker_budget}) {
       WindowsUiaDiagnostic diagnostic;
-      diagnostic.phase.store(WindowsUiaPhase::root_dispatch_started);
+      diagnostic.phase.store(windows_uia_root_dispatch_started);
       diagnostic.note_timeout(side);
       require(!diagnostic.failure_root_wait(), "overlay-driver.worker-expiry-cannot-report-caller-wait");
     }
@@ -433,7 +433,7 @@ size_t run_overlay_driver_tests() {
   });
   test([] {
     WindowsUiaDiagnostic first;
-    first.phase.store(WindowsUiaPhase::root_dispatch_returned);
+    first.phase.store(windows_uia_root_dispatch_returned);
     first.note_timeout(WindowsUiaExpiry::caller_wait, WindowsUiaCallerWait::ready);
     first.phase.store(WindowsUiaPhase::runtime_id);
     first.note_timeout(WindowsUiaExpiry::worker_current);
