@@ -95,6 +95,15 @@ const api: ElectronAPI = {
   phoneAlerts: {
     send: (alert) => ipcRenderer.invoke("phone-alert-send", alert),
   },
+  everywherePreferences: {
+    read: () => ipcRenderer.invoke("everywhere-preferences-read"),
+    update: (input) => ipcRenderer.invoke("everywhere-preferences-update", input),
+    onChange: (callback) => {
+      const handler = () => callback()
+      ipcRenderer.on("everywhere-preferences-changed", handler)
+      return () => ipcRenderer.removeListener("everywhere-preferences-changed", handler)
+    },
+  },
   vault: {
     status: () => ipcRenderer.invoke("vault-status"),
     configure: (input) => ipcRenderer.invoke("vault-configure", input),
