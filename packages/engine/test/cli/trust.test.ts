@@ -99,10 +99,11 @@ describe("vector trust and held prompt files", () => {
       .then(
         () => undefined,
         (error: unknown) => {
-          // FormatError sets the exit code a CliError carries, which would fail this test process.
+          // FormatError sets the exit code a CliError carries, which would fail this test process. Bun ignores
+          // `process.exitCode = undefined`, so an unset code is restored as 0.
           const exitCode = process.exitCode
           const formatted = FormatError(error)
-          process.exitCode = exitCode
+          process.exitCode = exitCode ?? 0
           return formatted ?? `Unexpected error: ${error instanceof Error ? error.message : String(error)}`
         },
       )
