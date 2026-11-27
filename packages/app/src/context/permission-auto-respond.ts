@@ -54,6 +54,20 @@ export function autoRespondsPermission(
 }
 
 /**
+ * The phone-started review a Connect ask may belong to: its run, the session asked and the directory. The desktop holds
+ * a detached review's asks by this exact identity after the turn that started it is over; other asks name none.
+ */
+export function phoneReviewAsk(
+  permission: { sessionID: string; permission?: string; metadata?: Record<string, unknown> },
+  directory?: string,
+) {
+  const runID = permission.metadata?.runID
+  if (!directory || typeof runID !== "string") return
+  if (permission.permission !== "connect" && permission.permission !== "connect_model") return
+  return { runID, sessionID: permission.sessionID, directory }
+}
+
+/**
  * Whether a turn a paired phone started leaves auto-accept free to answer (Vector Remote, WP A41, S6): a turn started
  * from the phone is never auto-approved, so a request in it, or in a subagent under it, waits for a person on the phone
  * or here. `isPhoneTurn` is the desktop's check (absent outside the desktop app, where no phone can start a turn); a

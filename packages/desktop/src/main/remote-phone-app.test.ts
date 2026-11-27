@@ -22,6 +22,20 @@ import { fromBase64url } from "./remote-crypto"
 
 const ORIGIN = "https://remote.vectordev.ai"
 const RELAY = "wss://relay.vectordev.ai/v1/connect"
+const DETACHED_REVIEW = {
+  id: "cr_02",
+  status: "running",
+  request: {
+    id: "cr_02",
+    to: "vectorscope",
+    action: "review",
+    background: true,
+    requester: { kind: "user", sessionID: "ses_1" },
+    directory: "/repo",
+    target: { kind: "uncommitted" },
+  },
+}
+const FINISHED_REVIEW = { ...DETACHED_REVIEW, status: "done", result: { state: "completed" } }
 
 async function until(condition: () => boolean | Promise<boolean>, ms = 3_000) {
   const end = Date.now() + ms
@@ -33,11 +47,11 @@ async function until(condition: () => boolean | Promise<boolean>, ms = 3_000) {
 
 function engine() {
   const requests: EngineRequest[] = []
-  const queue: DesktopEvent[] = []
+  const queue: (DesktopEvent | "disconnect")[] = []
   let wake: (() => void) | undefined
   const permissions: { id: string; sessionID: string; permission: string; patterns: string[] }[] = []
   // Whether connected tools are on, and the id of a `connect` question a review start raises and waits on.
-  const connect: { connections: boolean; ask?: string } = { connections: true }
+  const connect: { connections: boolean; ask?: string; review?: typeof DETACHED_REVIEW } = { connections: true }
   // Paths the engine answers only after this many milliseconds.
   const slow = new Map<string, number>()
   return {
@@ -45,7 +59,10 @@ function engine() {
     permissions,
     connect,
     slow,
-    push(event: DesktopEvent) {
+    get queuedEvents() {
+      return queue.length
+    },
+    push(event: DesktopEvent | "disconnect") {
       queue.push(event)
       wake?.()
     },
@@ -71,8 +88,10 @@ function engine() {
             permissions.push({ id: ask, sessionID: "ses_1", permission: "connect", patterns: ["vectorscope"] })
             await until(() => !permissions.some((item) => item.id === ask), 20_000)
           }
-          return { status: 200, body: { id: "cr_02", status: "running" } }
+          return { status: 200, body: connect.review ?? { id: "cr_02", status: "running" } }
         }
+        if (request.path === "/experimental/connect/runs/cr_02" && connect.review)
+          return { status: 200, body: connect.review }
         if (request.path.startsWith("/experimental/connect/runs/") && request.path.endsWith("/cancel"))
           return { status: 200, body: true }
         if (request.path.startsWith("/permission/") && request.path.endsWith("/reply")) {
@@ -84,8 +103,10 @@ function engine() {
         return { status: 200, body: { ok: true } }
       },
       async *events(signal: AbortSignal) {
+        yield { payload: { type: "server.connected" } }
         while (!signal.aborted) {
           const next = queue.shift()
+          if (next === "disconnect") return
           if (next) {
             yield next
             continue
@@ -553,6 +574,65 @@ describe("using a paired computer from the phone", () => {
     desktop.link.stop()
     mobile.remote.disconnect()
   })
+
+  test.each(["completion", "cancellation", "reconnect"])(
+    "a detached phone review keeps only its own asks held until %s (CW-23c)",
+    async (ending) => {
+      const { desktop, mobile, computerID } = await paired()
+      const scope = { runID: "cr_02", sessionID: "ses_1", directory: "/repo" }
+      // This takes the same optional ask identity the Desktop renderer sends for a Connect permission.
+      const held = (review = scope, sessionID = "ses_1") => desktop.link.isPhoneTurn([sessionID], review)
+      const finished = (directory: string, sessionID: string, run = FINISHED_REVIEW) =>
+        desktop.fake.push({ directory, payload: { type: "connect.run.updated", properties: { sessionID, run } } })
+      try {
+        desktop.fake.connect.review = DETACHED_REVIEW
+        expect(await mobile.remote.startReview(computerID, "/repo", "ses_1", { kind: "uncommitted" })).toMatchObject({
+          kind: "answered",
+          answer: { status: 200, body: DETACHED_REVIEW },
+        })
+        // The response can follow an idle event that the source did not see. Ordinary asks must still be free.
+        expect(desktop.link.isPhoneTurn(["ses_1"])).toBe(false)
+        desktop.fake.push({ directory: "/repo", payload: { type: "session.idle", properties: { sessionID: "ses_1" } } })
+        await until(() => desktop.fake.queuedEvents === 0)
+        expect(held()).toBe(true)
+        expect(held({ ...scope, directory: "/elsewhere" })).toBe(false)
+        expect(held({ ...scope, runID: "cr_different" })).toBe(false)
+        expect(held({ ...scope, sessionID: "ses_other" }, "ses_other")).toBe(false)
+
+        finished("/elsewhere", "ses_1")
+        finished("/repo", "ses_other")
+        finished("/repo", "ses_1", { ...FINISHED_REVIEW, id: "cr_other" })
+        // Wait for a later event to cross the same stream before checking that the malformed updates changed nothing.
+        desktop.fake.push({
+          directory: "/repo",
+          payload: { type: "session.status", properties: { sessionID: "ses_1", status: { type: "busy" } } },
+        })
+        await until(() => desktop.fake.queuedEvents === 0)
+        expect(held()).toBe(true)
+
+        if (ending === "cancellation") {
+          expect(
+            await mobile.remote.request(computerID, {
+              method: "POST",
+              path: "/experimental/connect/runs/cr_02/cancel",
+              directory: "/repo",
+              query: { sessionID: "ses_1" },
+            }),
+          ).toEqual({ status: 200, body: true })
+        } else if (ending === "reconnect") {
+          desktop.fake.connect.review = FINISHED_REVIEW
+          desktop.fake.push("disconnect")
+        } else {
+          mobile.remote.disconnect()
+          finished("/repo", "ses_1")
+        }
+        await until(() => !held())
+      } finally {
+        desktop.link.stop()
+        mobile.remote.disconnect()
+      }
+    },
+  )
 
   test("a review start held for a fresh tap starts on that tap; one the computer refuses asks for no passkey (CW-23c)", async () => {
     const { desktop, mobile, computerID } = await paired()
