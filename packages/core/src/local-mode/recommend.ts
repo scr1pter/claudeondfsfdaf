@@ -8,7 +8,8 @@ import bundled from "./recommend-table.json"
 // memory of a server a company runs), from a bundled table of dated examples, and which of the models a server
 // already has should fill each role. The table names model families and quantisations as examples, linking only to
 // the publisher's own repository or the Ollama library, and every place that shows it carries its label: "Examples,
-// October 2026. Check each model's licence." A company's managed file can replace the table (`local.recommend`).
+// October 2026. Check each model's licence." A company's managed file can replace the table (`local.recommend`); one
+// Vector cannot use is ignored, and the policy's warnings say why (`problem`).
 
 export const Role = Schema.Literals(["agent", "subagent", "judge", "review", "small", "research"])
 export type Role = typeof Role.Type
@@ -50,18 +51,45 @@ export type Table = typeof Table.Type
 const GB = 1024 ** 3
 
 /**
- * The table in effect: a company's override when it is a whole, consistent table (every model a tier names is in
- * it, and some tier starts at 0), else the bundled one.
+ * The table in effect: a company's override when Vector can use it (`problem` finds nothing wrong with it), else the
+ * bundled one.
  */
 export function table(override?: unknown): Table {
-  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(Table)(override))
-  if (decoded && consistent(decoded)) return decoded
-  return Schema.decodeUnknownSync(Table)(bundled)
+  const checked = override === undefined || override === null ? undefined : check(override)
+  return checked?.table ?? Schema.decodeUnknownSync(Table)(bundled)
 }
 
-function consistent(candidate: Table) {
-  const named = candidate.tiers.flatMap((tier) => [...Object.values(tier.roles), ...tier.alternatives])
-  return candidate.tiers.some((tier) => tier.min_gb === 0) && named.every((key) => key in candidate.models)
+/**
+ * Why Vector cannot use a company's table, or undefined when it can or there is none (undefined or null). A usable
+ * table decodes, has a tier that starts at 0 GB (so every amount of memory has one), names only models it has, gives
+ * each model a finite size and context, and links only to http or https addresses, since the CLI prints a model's
+ * first link as it is.
+ */
+export function problem(override: unknown): string | undefined {
+  if (override === undefined || override === null) return undefined
+  return check(override).problem
+}
+
+function check(override: unknown): { readonly table?: Table; readonly problem?: string } {
+  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(Table)(override))
+  if (!decoded) return { problem: "it is not a recommendation table" }
+  if (!decoded.tiers.some((tier) => tier.min_gb === 0)) return { problem: "no tier starts at 0 GB" }
+  const named = decoded.tiers.flatMap((tier) => [...Object.values(tier.roles), ...tier.alternatives])
+  if (!named.every((key) => Object.hasOwn(decoded.models, key)))
+    return { problem: "a tier names a model the table does not have" }
+  const models = Object.values(decoded.models)
+  // The Local API answers sizes as finite numbers, and JSON reads 1e400 as Infinity.
+  if (!models.every((entry) => Number.isFinite(entry.memory_gb) && Number.isFinite(entry.context)))
+    return { problem: "a model's memory_gb or context is not a finite number" }
+  if (!models.flatMap((entry) => entry.links).every(web))
+    return { problem: "a model's link is not an http or https address" }
+  return { table: decoded }
+}
+
+function web(link: string) {
+  if (!URL.canParse(link)) return false
+  const protocol = new URL(link).protocol
+  return protocol === "http:" || protocol === "https:"
 }
 
 export type Suggestion = Entry & { readonly key: string }
