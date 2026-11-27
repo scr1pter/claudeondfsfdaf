@@ -271,6 +271,13 @@ export function isIssueKey(value: unknown): value is string {
   return typeof value === "string" && ISSUE_KEY_PATTERN.test(value)
 }
 
+/** Places as the tracker events identify them, preserving the native identifier's case. */
+export function isTrackerPlace(platform: PlatformId, value: unknown): value is string {
+  if (typeof value !== "string" || value.trim() !== value) return false
+  if (platform === "linear") return INSTALLATION_PATTERNS.linear.test(`linear:${value}`)
+  return platform === "jira" && /^[A-Za-z][A-Za-z0-9_]{0,9}$/.test(value)
+}
+
 export function isBranch(value: unknown): value is string {
   return typeof value === "string" && BRANCH_PATTERN.test(value)
 }

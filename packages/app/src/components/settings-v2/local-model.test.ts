@@ -2,14 +2,17 @@ import { describe, expect, test } from "bun:test"
 import type { LocalStatus } from "@vectordevai/sdk/v2/client"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
+import { ServerConnection } from "@/context/server"
 import { AGENT, LOCKED, NOT_ENCRYPTED, SHARED_MACHINE } from "@/features/local/local-model"
 import {
   SECTIONS,
+  SURFACE,
   allowedRows,
   certificateLines,
   checkVerdict,
   heldText,
   serverRows,
+  surfaceNote,
   switchView,
   webChoices,
   webNote,
@@ -83,6 +86,44 @@ describe("the switch", () => {
     expect(switchView(status({ agent: true })).disabled).toBe(true)
     expect(switchView(status({ agent: true, policy: { enabled: false } })).disabled).toBe(false)
     expect(AGENT).toContain("nothing here can loosen Vector Local")
+  })
+})
+
+describe("which Vector the switch is for", () => {
+  const sidecar: ServerConnection.Any = { type: "sidecar", variant: "base", http: { url: "http://127.0.0.1:4096" } }
+  const loopback: ServerConnection.Any = { type: "http", http: { url: "http://127.0.0.1:4096" } }
+  const wsl: ServerConnection.Any = {
+    type: "sidecar",
+    variant: "wsl",
+    distro: "Ubuntu",
+    http: { url: "http://127.0.0.1:4097" },
+  }
+  const ssh: ServerConnection.Any = { type: "ssh", host: "build-box", http: { url: "http://127.0.0.1:4098" } }
+  const remote: ServerConnection.Any = { type: "http", http: { url: "http://192.168.1.20:4096" } }
+
+  test("the desktop app says its switch is its own, and how to turn it on in a terminal", () => {
+    expect(surfaceNote({ desktop: true, connection: sidecar })).toBe(SURFACE)
+    expect(SURFACE).toContain("vector local on")
+    // The app's built-in terminal reads the app's own setting, so only a terminal outside the app keeps its own.
+    expect(SURFACE).toContain("Vector in a terminal outside the app keeps its own setting")
+  })
+
+  test("a terminal's vector serve added by its loopback address is that terminal's switch, so it says nothing", () => {
+    // It counts as this computer's engine, yet it reads the terminal's config folders, not the app's.
+    expect(ServerConnection.local(loopback)).toBe(true)
+    expect(surfaceNote({ desktop: true, connection: loopback })).toBeUndefined()
+  })
+
+  test("a WSL engine, an SSH engine or another computer's engine says nothing about it", () => {
+    expect(surfaceNote({ desktop: true, connection: wsl })).toBeUndefined()
+    expect(surfaceNote({ desktop: true, connection: ssh })).toBeUndefined()
+    expect(surfaceNote({ desktop: true, connection: remote })).toBeUndefined()
+  })
+
+  test("a browser, or no engine chosen yet, says nothing about it", () => {
+    expect(surfaceNote({ desktop: false, connection: sidecar })).toBeUndefined()
+    expect(surfaceNote({ desktop: false, connection: loopback })).toBeUndefined()
+    expect(surfaceNote({ desktop: true, connection: undefined })).toBeUndefined()
   })
 })
 
@@ -189,7 +230,8 @@ describe("allowed services", () => {
     )
     expect(rows[0]).toMatchObject({
       name: "GitHub pull requests",
-      hosts: "github.com, api.github.com and vectordev.ai",
+      // No hosts in the entry: it covers every host GitHub's requests go to, not only the registry's.
+      hosts: "Any host it reaches, usually github.com, api.github.com and vectordev.ai",
       reason: "Our pull requests",
       by: "Added in the app",
       when: "Oct 21, 2026",

@@ -793,7 +793,17 @@ export function list(items: readonly string[], more = 0) {
   return `${all.slice(0, -1).join(", ")} and ${all.at(-1)}`
 }
 
-function lowerFirst(text: string) {
+/**
+ * Where an allowed source's requests may go. An entry's own hosts limit it to those (and the names under them).
+ * Without any it covers every host the source reaches: the registry's hosts are the usual ones, not a limit
+ * (LocalPolicy.allowEntry). A source whose address the user or company sets lists none.
+ */
+export function allowHosts(entry: readonly string[] | undefined, source: readonly string[]) {
+  if (entry?.length) return list(entry)
+  return source.length ? `Any host it reaches, usually ${list(source)}` : "The addresses set for it"
+}
+
+export function lowerFirst(text: string) {
   return text ? text[0]!.toLowerCase() + text.slice(1) : text
 }
 

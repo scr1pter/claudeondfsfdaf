@@ -19,7 +19,7 @@ function fixture() {
   const identity: GithubHandoffIdentity = { repositoryId: 101, repository: "acme/app", ownerId: 456, actorId: 42, runId: 1001, runAttempt: 1,
     eventName: "issue_comment", ref: "refs/heads/main" }
   const binding: GithubHandoffBinding = { account: f.account, githubId: 42, ownerId: 456, installationId: 77, laptopFirst: true, codiumMode: true,
-    workflowVersion: "fixture-v1", defaultRef: "refs/heads/main", repository: { id: 101, fullName: "acme/app", shared: false } }
+    generation: 11, workflowVersion: "fixture-v1", defaultRef: "refs/heads/main", repository: { id: 101, fullName: "acme/app", shared: false } }
   const token = randomBytes(32).toString("hex")
   const body = { kind: "issue", issue: 7, commentId: 99, thread: "acme/app#7", workflowVersion: "fixture-v1" }
   const deps = { config: () => ({ ...f.config, platforms: new Set(["github"] as const) }), context: f.context, ports: f.ports,
@@ -64,6 +64,16 @@ test("non-binders, reruns, dispatch and schedule calls hand back without an offe
   }
 })
 
+test("a binding without a positive generation hands back before an offer", async () => {
+  for (const generation of [0, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    const f = fixture()
+    f.binding.generation = generation
+    expect((await f.request()).body).toEqual({ handled: false })
+    expect(f.calls).toEqual([])
+    expect(f.fake.sorted(everywhereKeys.jobs(f.account))).toHaveLength(0)
+  }
+})
+
 test("only an accepted started report handles the binder's handoff, and a repeated run makes no second offer", async () => {
   const f = fixture()
   let offers = 0
@@ -78,7 +88,10 @@ test("only an accepted started report handles the binder's handoff, and a repeat
   const before = f.fake.clock.now
   const response = await f.request()
   expect(response.body).toMatchObject({ handled: true })
-  expect((await readJob(f.store, response.body.jid))?.github).toMatchObject({ actorId: 42, event: "issue_comment", commentId: 99 })
+  const job = await readJob(f.store, response.body.jid)
+  expect(job?.github).toMatchObject({ actorId: 42, event: "issue_comment", commentId: 99 })
+  expect(openReply(f.context(), job!)?.githubBindingGeneration).toBe(f.binding.generation)
+  expect(JSON.stringify(response.body)).not.toContain("githubBindingGeneration")
   expect(f.fake.clock.now - before).toBeLessThanOrEqual(20_000)
   expect((await f.request()).body).toEqual({ handled: false })
   expect(offers).toBe(1)

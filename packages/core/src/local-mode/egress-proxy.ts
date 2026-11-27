@@ -8,11 +8,12 @@ import { Egress } from "./egress"
 import { ForwardProxy } from "./forward-proxy"
 import { LocalPolicy } from "./policy"
 
-// Vector's loopback egress proxy for the research browsers (section 5.6a). Nothing starts it yet: phase W3 starts it
-// in desktop main, points each research partition at it with `session.setProxy`, and answers Electron's `login` for it
-// with the secret. Only a client that sends that per-launch secret may use it, since any program on this computer can
-// reach loopback, the ones the agent runs included (Web access None allows loopback). For each request a client with
-// the secret sends it, a CONNECT tunnel or an absolute http URL, the proxy:
+// Vector's loopback egress proxy for the research browsers (section 5.6a). Desktop main's `research-proxy.ts` starts
+// one for each research browser while it is open (`research-browser.ts`), points that browser's session at it with
+// `session.setProxy` with Chromium's loopback bypass removed, and answers Electron's `login` for it with the secret.
+// Only a client that sends that per-launch secret may use it, since any program on this computer can reach loopback,
+// the ones the agent runs included (Web access None allows loopback). For each request a client with the secret sends
+// it, a CONNECT tunnel or an absolute http URL, the proxy:
 // 1. decides it as a `research-browser` request under Vector Local, before any lookup, and logs it;
 // 2. refuses a host that is on this computer or the user's network by its name or address;
 // 3. resolves the name itself and refuses it when any address it gets is loopback, private, link-local, CGNAT, ULA,
@@ -22,8 +23,8 @@ import { LocalPolicy } from "./policy"
 // 6. connects to the address it checked, not the name, so a second answer from DNS (rebinding) cannot change where it
 //    goes. A tunnel carries the browser's own TLS, so the site's certificate is still checked against its name.
 // Steps 2 to 5 apply whether Vector Local is on or off. The secret is never passed on, and a site's 407 is answered as
-// 502. If the proxy cannot start, research browsers do not open. Phase W3 wires this one into desktop main and writes
-// no second proxy.
+// 502. If the proxy cannot start, research browsers do not open. research-proxy.ts wires this one; there is no second
+// proxy.
 
 export type Refusal = ForwardProxy.Refusal
 

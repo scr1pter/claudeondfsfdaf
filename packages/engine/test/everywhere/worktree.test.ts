@@ -90,6 +90,8 @@ const layer = LayerNode.compile(
 const it = testEffect(layer)
 
 const sha256 = (file: string) => readFile(file).then((bytes) => createHash("sha256").update(bytes).digest("hex"))
+const receiptRoot = path.join(Global.Path.state, "everywhere-worktree-reservations")
+const receiptFor = (jid: string) => path.join(receiptRoot, `${jid}.json`)
 const present = (file: string) =>
   lstat(file).then(
     () => true,
@@ -224,6 +226,18 @@ describe("Worktree.createUnattended", () => {
         const directory = FSUtil.realpath(path.join(f.root, input.jid))
         expect(result).toEqual({ directory, branch: input.branch, base: input.base })
         expect(result.base).toBe(f.base)
+        const receipt = receiptFor(input.jid)
+        expect(yield* Effect.promise(() => readFile(receipt, "utf8").then(JSON.parse))).toEqual({
+          version: 1,
+          jid: input.jid,
+          project: f.ctx.project.id,
+          branch: input.branch,
+          base: input.base,
+        })
+        if (process.platform !== "win32") {
+          expect((yield* Effect.promise(() => lstat(receiptRoot))).mode & 0o077).toBe(0)
+          expect((yield* Effect.promise(() => lstat(receipt))).mode & 0o077).toBe(0)
+        }
         expect(yield* Effect.promise(() => readFile(path.join(directory, "a.txt"), "utf8"))).toBe("base\n")
         expect(yield* git(directory, ["rev-parse", "HEAD"])).toBe(f.base)
         expect(yield* git(directory, ["symbolic-ref", "--short", "HEAD"])).toBe(input.branch)
@@ -295,6 +309,7 @@ describe("Worktree.createUnattended", () => {
         yield* git(f.ctx.directory, ["branch", branched.branch, f.base])
         expect(yield* refusal(branched)).toBe(RESERVED)
         expect(yield* Effect.promise(() => present(path.join(f.root, branched.jid)))).toBe(false)
+        expect(yield* Effect.promise(() => present(receiptFor(branched.jid)))).toBe(false)
 
         // An empty folder is already there.
         const folder = yield* job(f.base)
@@ -303,6 +318,7 @@ describe("Worktree.createUnattended", () => {
         )
         expect(yield* refusal(folder)).toBe(RESERVED)
         expect(readdirSync(path.join(f.root, folder.jid))).toEqual([])
+        expect(yield* Effect.promise(() => present(receiptFor(folder.jid)))).toBe(false)
         expect(
           (yield* Git.Service.use((service) =>
             service.run(["show-ref", "--verify", "--quiet", `refs/heads/${folder.branch}`], { cwd: f.ctx.directory }),
@@ -457,6 +473,7 @@ describe("Worktree.createUnattended", () => {
         const smudge = yield* job(base)
         expect(yield* refusal(smudge)).toBe(UNSAFE)
         expect(yield* Effect.promise(() => present(filter))).toBe(false)
+        expect(yield* Effect.promise(() => present(receiptFor(smudge.jid)))).toBe(false)
         yield* untouched(smudge)
         yield* git(f.ctx.directory, ["config", "--unset", "filter.mark.smudge"])
 
@@ -472,6 +489,52 @@ describe("Worktree.createUnattended", () => {
         const rewritten = yield* job(base)
         expect(yield* refusal(rewritten)).toBe(UNSAFE)
         yield* untouched(rewritten)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "rechecks config and checkout identity after reservation and stops before mutating Git",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture()
+        const recorder = yield* Recorder
+        const file = path.join(f.ctx.directory, ".git", "config")
+        const original = yield* Effect.promise(() => readFile(file, "utf8"))
+        const redirected = JSON.stringify(f.markers.replaceAll("\\", "/"))
+        for (const [change, reason] of [
+          ['[filter "late"]\n\tsmudge = cat\n', UNSAFE],
+          [`[core]\n\tworktree = ${redirected}\n`, OWN],
+        ] as const) {
+          const input = yield* job(f.base)
+          const receipt = receiptFor(input.jid)
+          recorder.calls.length = 0
+          recorder.before.push((call) => {
+            // The final read before the durable reservation, after the original config and checkout checks.
+            if (call.marked && call.args.includes(`refs/heads/${input.branch}`))
+              writeFileSync(file, `${original}\n${change}`)
+          })
+          const result = yield* refusal(input).pipe(
+            Effect.ensuring(
+              Effect.promise(async () => {
+                recorder.before.length = 0
+                await writeFile(file, original)
+              }),
+            ),
+          )
+          expect(result).toBe(reason)
+          expect(
+            recorder.calls.some(
+              (call) => call.marked && (call.args.includes("worktree") || call.args.includes("reset")),
+            ),
+          ).toBe(false)
+          expect(readdirSync(path.join(f.root, input.jid))).toEqual([])
+          expect(yield* Effect.promise(() => readFile(receipt, "utf8").then(JSON.parse))).toMatchObject({
+            version: 1,
+            jid: input.jid,
+            project: f.ctx.project.id,
+          })
+        }
       }),
     { git: true },
   )
@@ -537,7 +600,7 @@ describe("Worktree.createUnattended", () => {
   )
 
   it.instance(
-    "keeps the reservation when git fails after it, so the job id is never reused",
+    "keeps a reservation after git fails, even when the folder and branch are lost and the service restarts",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture()
@@ -570,6 +633,40 @@ describe("Worktree.createUnattended", () => {
           service.run(["show-ref", "--verify", "--quiet", `refs/heads/${input.branch}`], { cwd: f.ctx.directory }),
         )
         expect(ref.exitCode).toBe(1)
+
+        yield* Effect.promise(() => removeFolder(folder))
+        yield* git(f.ctx.directory, ["worktree", "prune", "--expire", "now"])
+        const receipt = receiptFor(input.jid)
+        expect(yield* refusal(input).pipe(Effect.provide(Layer.fresh(layer)))).toBe(RESERVED)
+        yield* untouched(input)
+        expect(yield* Effect.promise(() => readFile(receipt, "utf8").then(JSON.parse))).toEqual({
+          version: 1,
+          jid: input.jid,
+          project: f.ctx.project.id,
+          branch: input.branch,
+          base: input.base,
+        })
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "a partial receipt blocks the same job with a new base and leaves that receipt untouched",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture()
+        const input = yield* job(f.base, f.head)
+        const receipt = receiptFor(input.jid)
+        yield* Effect.promise(async () => {
+          await mkdir(receiptRoot, { mode: 0o700, recursive: true })
+          await writeFile(receipt, '{"version":', { flag: "wx", mode: 0o600 })
+        })
+        const replay = { ...input, base: f.head }
+        expect(yield* refusal(replay)).toBe(RESERVED)
+        yield* untouched(replay)
+        expect(yield* Effect.promise(() => readFile(receipt, "utf8"))).toBe('{"version":')
+        const independent = yield* job(f.head)
+        expect((yield* create(independent)).base).toBe(f.head)
       }),
     { git: true },
   )
@@ -586,15 +683,25 @@ describe("ordinary worktree mutations preserve unattended reservations", () => {
         const input = yield* job(f.base)
         const checkout = yield* create(input)
         const alias = path.join(f.markers, "checkout-alias")
+        const receiptAlias = path.join(f.markers, "receipt-alias")
         const service = yield* Worktree.Service
-        yield* Effect.promise(() => symlink(checkout.directory, alias, process.platform === "win32" ? "junction" : "dir"))
+        const linkType = process.platform === "win32" ? "junction" : "dir"
+        yield* Effect.promise(async () => {
+          await symlink(checkout.directory, alias, linkType)
+          await symlink(receiptRoot, receiptAlias, linkType)
+        })
 
-        for (const directory of [alias, f.root]) {
+        for (const directory of [alias, f.root, receiptAlias, Global.Path.state]) {
           const error = yield* Effect.flip(service.remove({ directory }))
           expect(error).toBeInstanceOf(Worktree.RemoveFailedError)
           expect(error.message).toBe("Cannot remove a Vector Everywhere worktree through this command.")
         }
 
+        const nearby = `${alias}-nearby`
+        yield* git(f.ctx.directory, ["worktree", "add", "--detach", "--", nearby, f.base])
+        expect(yield* service.remove({ directory: nearby })).toBe(true)
+        expect(yield* Effect.promise(() => present(nearby))).toBe(false)
+        expect(yield* Effect.promise(() => present(receiptFor(input.jid)))).toBe(true)
         expect(yield* git(checkout.directory, ["rev-parse", "HEAD"])).toBe(f.base)
         expect(yield* git(checkout.directory, ["symbolic-ref", "--short", "HEAD"])).toBe(input.branch)
       }),

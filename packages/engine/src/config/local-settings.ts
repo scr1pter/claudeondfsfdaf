@@ -9,6 +9,7 @@ import { EgressGuard } from "@vectordevai/core/local-mode/guard"
 import { LocalHardware } from "@vectordevai/core/local-mode/hardware"
 import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 import { LocalProbe } from "@vectordevai/core/local-mode/probe"
+import { LocalRecommend } from "@vectordevai/core/local-mode/recommend"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { ModelV2 } from "@vectordevai/core/model"
 import { PositiveInt } from "@vectordevai/core/schema"
@@ -185,6 +186,14 @@ export function status(policy: LocalMode.Policy = Config.local()): Status {
       ...(source.note ? { note: source.note } : {}),
     })),
   }
+}
+
+/**
+ * What to install for `usable` bytes of memory, from the company's table (`local.recommend` in its policy) when Vector
+ * can use it, else the bundled examples. GET /local/recommend and `vector local setup` both answer with it.
+ */
+export function recommendation(usable: number) {
+  return LocalRecommend.recommend({ usable, table: LocalRecommend.table(Config.localRecommend()) })
 }
 
 /** The local block keys a company lock keeps from the user: always the switch, and the keys `user_may` leaves out. */
