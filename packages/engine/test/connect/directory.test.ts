@@ -1112,14 +1112,22 @@ it.instance(
   options,
 )
 
-// Until the scope closes, a rename onto `target` is refused with `code`, as Node reports a system error, whenever
-// `refuse` says so. `refused` counts the refusals.
+// Until the scope closes, a rename onto `target` of a terminal receipt (its run is done) is refused with `code`, as Node
+// reports a system error, whenever `refuse` says so. A queued or running receipt still in the writer's queue renames as
+// usual, so a refusal can only meet the terminal save, whatever the timing. `refused` counts the refusals.
 const refuseRename = (target: string, code: string, refuse: () => Promise<boolean>) =>
   Effect.gen(function* () {
     const original = fs.rename
     const seen = { refused: 0 }
     const spy = spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(to) !== target || !(await refuse())) return original(from, to)
+      if (
+        String(to) !== target ||
+        !Schema.decodeUnknownOption(Schema.fromJsonString(ConnectDirectory.Receipt))(
+          await fs.readFile(from, "utf8"),
+        ).pipe(Option.exists((receipt) => receipt.run.status === "done")) ||
+        !(await refuse())
+      )
+        return original(from, to)
       seen.refused++
       throw Object.assign(new Error(`${code}: injected, rename '${String(from)}' -> '${target}'`), {
         code,
