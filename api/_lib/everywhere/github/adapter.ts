@@ -20,7 +20,7 @@ export type GithubHandoffIdentity = {
 }
 export type GithubHandoffBinding = {
   account: string; githubId: number; ownerId: number; installationId: number; laptopFirst: boolean; codiumMode: boolean
-  workflowVersion: string; defaultRef: string; repository: Repository
+  generation: number; workflowVersion: string; defaultRef: string; repository: Repository
 }
 
 export function createGithubAdapter(input: { readonly context: () => JobsContext; readonly status?: GithubStatusPort }): PlatformAdapter {
@@ -77,7 +77,7 @@ export function createGithubHandoff(deps: {
         !(GITHUB_EVENTS as readonly string[]).includes(identity.eventName)) return back()
       const binding = await deps.binding(identity.repositoryId)
       // The mint's route rules too (cloud-agents-api.ts): the owner the repository was bound under and its default ref.
-      if (!binding || !ACCOUNT_ID_PATTERN.test(binding.account) || binding.githubId !== identity.actorId || !positive(binding.installationId) ||
+      if (!binding || !ACCOUNT_ID_PATTERN.test(binding.account) || binding.githubId !== identity.actorId || !positive(binding.installationId) || !positive(binding.generation) ||
         !binding.laptopFirst || !binding.codiumMode || binding.repository.id !== identity.repositoryId ||
         binding.repository.fullName.toLowerCase() !== identity.repository.toLowerCase() || binding.ownerId !== identity.ownerId ||
         identity.ref !== binding.defaultRef) return back()
@@ -108,7 +108,7 @@ export function createGithubHandoff(deps: {
       if (decideRoute(facts).action !== "offer" || !(await countJob(ctx.store, subject, now())).admitted) return back()
       const created = await createJob(context(), { platform: "github", installation: trigger.installation, kind: "mention", sponsor: binding.account,
         requester: { userId: trigger.actor.userId, account: binding.account }, repository, shared: trigger.shared,
-        github: reference.value, task: "", context: [], reply: { ref } }, { jid: createJobId(now()) })
+        github: reference.value, task: "", context: [], reply: { ref, githubBindingGeneration: binding.generation } }, { jid: createJobId(now()) })
       if (!created.ok) return back()
       const offered = await offerJob(context(), created.job.jid)
       if (!offered.ok) { await finishGithubOffer(context(), created.job.jid); return back() }
