@@ -31,3 +31,13 @@ The review found nothing to fix in code. The stacking ruling records #123's curr
 ## 2026-11-26, finalize: no schedule in the entry
 
 The second review asked to drop the intro's deadline sentence that commit `3061460de` added. This repository is public and every push to main deploys the site, so a build note must not carry the owner's private schedule or business plans, and it must not read as a public ship date. The sentence is gone; the rest of the intro (Vector Everywhere stays behind `VECTOR_EVERYWHERE_ENABLED`, which stays off) is unchanged. Docs only, no code or test change.
+
+## 2026-11-27, finalize: later branch commits merged and checked
+
+The schedule sentence was already gone (commit `197a7168`), so the third review's one requested change needed no new edit. After that, the PR branch gained main merges, merges of #108's head `36bc669e` and #123's head `d757a4a5`, and `b1885c5c` ("fence GitHub history links to the original binding"). With `b1885c5c`, the account jobs read links a GitHub thread only when the job's recorded binding generation equals the active binding's. Before, it compared `boundAt` with the job time. The GitHub handoff now records that generation and refuses a binding without a positive one. This finalize fast-forwarded to that head and merged main (`6cb6020a`, #110) with no conflicts. No code or test change of its own.
+
+**Checks.** From web, one file at a time: `everywhere-identity` 41 pass, 4 skip; `everywhere-pages` 72 pass, 1 skip; `everywhere-github` 18 pass; `everywhere-cloud-adapter` 85 pass, 3 skip; `everywhere-docs` 17 pass. From the root `test` directory: `no-personal-paths.test.ts` 1 pass. Every skip is a `VECTOR_TEST_REDIS_URL` real-Redis block, which runs in CI's "Vector everywhere tests" job. Typechecks pass for web, schema and the hosted API (root `tsconfig.json`).
+
+**Mutation check on `b1885c5c`.** Without the `generation !== binding.generation` condition, the pages case "GitHub history links require the requester's current repository binding" fails (71 pass, 1 fail).
+
+**Stacking.** The ruling is unchanged: landing #157 also lands #108 and #123.
