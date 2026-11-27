@@ -214,6 +214,20 @@ describe("LocalPolicy.decide matrix", () => {
     ).toBe("block")
   })
 
+  // Lead ruling R1-0 (cl-vector-local): the registry's hosts are the ones a source usually reaches, not a limit, so an
+  // entry with no hosts covers a host the registry does not list, such as a GitHub Enterprise server. The app and the
+  // CLI say so (allowHosts).
+  test("an allow entry without hosts opens its source for any host it reaches", () => {
+    const allow = [{ source: "github", reason: "Pull requests", added_at: 1, added_by: "app" as const }]
+    const policy = LocalPolicy.resolve({ global: { enabled: true, allow } })
+    const url = "https://github.example.com/api/v3"
+    expect(LocalPolicy.decide(policy, { purpose: "integration", url, source: "github" })).toMatchObject({
+      decision: "allow",
+      rule: "allowed-source",
+    })
+    expect(LocalPolicy.decide(policy, { purpose: "integration", url, source: "gitlab" }).decision).toBe("block")
+  })
+
   test("a source the registry marks not allowable stays blocked whatever is allowed, unless the company lists its model server", () => {
     const allow = [{ source: "vector-free-models", reason: "Try it", added_at: 1, added_by: "app" as const }]
     const user = LocalPolicy.resolve({ global: { enabled: true, allow, endpoints: ["https://openrouter.ai"] } })
