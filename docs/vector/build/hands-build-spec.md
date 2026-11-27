@@ -195,7 +195,7 @@ The tool, the @Hands row and Settings follow one availability check. Each unavai
 | Session model is a free model labeled "May train on your prompts" | Blocked: "Vector Hands can't send your screen to a model that may train on it." [Switch model] |
 | Vector Local with Web access None | "Vector Local's Web access is None, and apps Vector Hands uses could reach the network without Vector seeing it, so Vector Hands is off. Change Web access in Vector Local to use it." |
 | Vector Local with any other web access | First use in each conversation adds to the app ask: "Vector Local can't see what this app sends." |
-| A guest is in the session tree | "Only the owner of this computer can let Vector use it." |
+| A guest is in the session tree | "A guest is in this conversation, and only the owner can let Vector Hands use their apps." (place-neutral since 2026-11-27, because the engine may run in a Vector cloud workspace; the desktop app's own copy is unchanged) |
 | Subagents, scheduled runs, background and parallel workspaces, swarm workers | Not offered this release. The model is told "Vector Hands is only available in a conversation you're in." |
 | Windows, Vector running as administrator | "Vector is running as administrator, so Vector Hands is off. Restart Vector normally to use it." |
 | Engine running inside WSL | "Vector Hands needs Vector's engine to run on Windows, not inside WSL." |
