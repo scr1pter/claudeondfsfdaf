@@ -218,6 +218,7 @@ export function createHandoffBinding(deps: Pick<CloudPortsDeps, "store"> = {}) {
       githubId: Number(binding.binder.githubId),
       ownerId: Number(binding.ownerId),
       installationId: Number(binding.installationId),
+      generation: binding.generation,
       laptopFirst: false,
       codiumMode: binding.workflowMode === "codium",
       workflowVersion: binding.workflowVersion,
