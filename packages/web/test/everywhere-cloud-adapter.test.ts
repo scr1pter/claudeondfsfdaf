@@ -809,7 +809,7 @@ describe("productionPorts", () => {
 /*
  * VE-30b (EV-30): the listeners on @vector's run hooks, registered through the real registry (cloud-agents-runs.ts
  * notifyRunStart and notifyRunSettle, with their 5 s budget) over the router fixture's store, and the cron's run read
- * through @vector's real listCloudRuns over a stub of @vector's store.
+ * through @vector's real readCloudRunOutcome over a stub of @vector's store.
  */
 
 /** The router fixture's Slack job, dispatched with its own ticket, and EV-30's listeners registered over its store. */
@@ -1093,7 +1093,7 @@ describe("the cron's run read (VE-30b)", () => {
 
   test("C1: an ended run answers its outcome; an open, unknown or other account's run none; a failed or damaged read rejects", async () => {
     const account = randomUUID()
-    const [ended, open, draft, other] = [runId(), runId(), runId(), runId()]
+    const [ended, open, draft, other, missing] = [runId(), runId(), runId(), runId(), runId()]
     const runs = [
       vectorRun({ account, rid: ended, outcome: "no-changes" }),
       vectorRun({ account, rid: open }),
@@ -1102,30 +1102,40 @@ describe("the cron's run read (VE-30b)", () => {
     ]
     const vector = vectorStore(() => runs)
     const read = createActionsRunEnd({ store: vector.store, enabled: () => true })
-    expect(await Promise.all([ended, open, draft, other, runId()].map((rid) => read(account, rid)))).toEqual([
+    expect(await Promise.all([ended, open, draft, other, missing].map((rid) => read(account, rid)))).toEqual([
       "no-changes",
       undefined,
       "failed",
       undefined,
       undefined,
     ])
-    // Each read is the newest 200 of the sponsor's runs, read only.
-    expect(vector.commands.filter((command) => command[0] === "ZREVRANGE")).toEqual(
-      Array.from({ length: 5 }, () => ["ZREVRANGE", `vector:cloud-agents:runs:${account}`, 0, 199]),
+    expect(await read(account, "unknown-run")).toBeUndefined()
+    // Each query reads only the protected run record. It never reads history, actor, or body keys.
+    expect(vector.commands).toEqual(
+      [ended, open, draft, other, missing].map((rid) => ["EVAL", expect.any(String), "1", `${VECTOR_RUN_KEY}${rid}`]),
     )
-    expect(vector.commands.every((command) => command[0] === "ZREVRANGE" || command[0] === "EVAL")).toBe(true)
     await expect(
       createActionsRunEnd({ store: vectorStore(() => "down").store, enabled: () => true })(account, ended),
     ).rejects.toMatchObject({
       code: "PERSISTENT_STORE_UNAVAILABLE",
     })
-    // One damaged neighbour among the 200 makes the whole read fail (EV-30, Left open).
-    const damaged = vectorStore(() => [...runs, vectorRun({ account, rid: runId(), with: { event: "push" } })])
+    const damaged = vectorStore(() => [vectorRun({ account, rid: ended, with: { generation: "0" } })])
     await expect(
       createActionsRunEnd({ store: damaged.store, enabled: () => true })(account, ended),
     ).rejects.toMatchObject({
       code: "PERSISTENT_STORE_UNAVAILABLE",
     })
+    // A hash stored under the wrong key cannot supply another run's outcome, even for the same sponsor.
+    const swapped = vectorRun({ account, rid: draft, outcome: "changes" })
+    await expect(
+      createActionsRunEnd({ store: async () => Object.entries(swapped).flat(), enabled: () => true })(account, ended),
+    ).rejects.toMatchObject({ code: "PERSISTENT_STORE_UNAVAILABLE" })
+    // A settled run that the sponsor's history index no longer lists still answers its own outcome.
+    const unlisted = vectorStore(() => [vectorRun({ account, rid: ended, outcome: "changes" })])
+    const history = async (command: readonly (string | number)[]) =>
+      command[0] === "ZREVRANGE" ? [] : unlisted.store(command)
+    expect(await createActionsRunEnd({ store: history, enabled: () => true })(account, ended)).toBe("changes")
+    expect(unlisted.commands).toEqual([["EVAL", expect.any(String), "1", `${VECTOR_RUN_KEY}${ended}`]])
   })
 
   test("C2: while the cloud-agents service is off nothing is read, by the default gate too", async () => {
@@ -1143,7 +1153,7 @@ describe("the cron's run read (VE-30b)", () => {
       for (const name of names) process.env[name] = "true"
       expect(cloudAgentsEnabled()).toBe(true)
       expect(await createActionsRunEnd({ store: vector.store })(account, rid)).toBe("changes")
-      expect(vector.commands.map((command) => command[0])).toEqual(["ZREVRANGE", "EVAL"])
+      expect(vector.commands).toEqual([["EVAL", expect.any(String), "1", `${VECTOR_RUN_KEY}${rid}`]])
     } finally {
       // C5 relies on this restore: it asserts that the service is off in this process.
       for (const name of names) delete process.env[name]
@@ -1152,14 +1162,22 @@ describe("the cron's run read (VE-30b)", () => {
   })
 
   /** A started Actions job of the router fixture, its run in @vector's stub store, and the cron over both. */
-  async function overdue(outcome: GithubAgents.Outcome | undefined, runEnd?: "default") {
+  async function overdue(
+    outcome: GithubAgents.Outcome | undefined,
+    options: {
+      runEnd?: "default"
+      records?: (account: string, rid: string) => readonly Record<string, string>[] | "down"
+    } = {},
+  ) {
     const f = routerFixture()
     const job = await f.create()
     const ticket = randomBytes(32).toString("hex")
     const rid = runId()
     expect((await dispatchJob(f.context(), job.jid, { ticketHash: ticket })).ok).toBe(true)
     expect((await startDispatched(f.context(), ticket, rid, job.jid)).ok).toBe(true)
-    const vector = vectorStore(() => [vectorRun({ account: f.account, rid, ...(outcome ? { outcome } : {}) })])
+    const vector = vectorStore(
+      () => options.records?.(f.account, rid) ?? [vectorRun({ account: f.account, rid, outcome })],
+    )
     const cronSecret = secret()
     harness.mount({
       "/sweep": createSweep({
@@ -1167,7 +1185,9 @@ describe("the cron's run read (VE-30b)", () => {
         context: f.context,
         platforms: () => ({ slack: f.adapter }),
         stopped: async () => false,
-        ...(runEnd === "default" ? {} : { runEnd: createActionsRunEnd({ store: vector.store, enabled: () => true }) }),
+        ...(options.runEnd === "default"
+          ? {}
+          : { runEnd: createActionsRunEnd({ store: vector.store, enabled: () => true }) }),
       }),
     })
     const sweep = async () => (await harness.call("GET", "/sweep", { token: cronSecret })).body
@@ -1185,11 +1205,11 @@ describe("the cron's run read (VE-30b)", () => {
     expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "settled", outcome: "changes" })
     expect(o.finishes()).toEqual([{ kind: "finish", value: { text: "Done in GitHub Actions." } }])
     expect(await o.sweep()).toEqual({ ended: 0, posted: 0 })
-    expect(o.vector.commands.map((command) => command[0])).toEqual(["ZREVRANGE", "EVAL"])
+    expect(o.vector.commands).toEqual([["EVAL", expect.any(String), "1", `${VECTOR_RUN_KEY}${o.rid}`]])
   })
 
-  test("C4: an open run is failed, and its post says it failed, not that it was cancelled", async () => {
-    const o = await overdue(undefined)
+  test.each(["open", "missing"])("C4: an Actions run fails at the deadline when it is %s", async (kind) => {
+    const o = await overdue(undefined, kind === "missing" ? { records: () => [] } : {})
     o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
     expect(await o.sweep()).toEqual({ ended: 1, posted: 1 })
     expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "failed", outcome: "failed" })
@@ -1198,38 +1218,39 @@ describe("the cron's run read (VE-30b)", () => {
 
   test("C5: the production cron's default reader reads nothing while the service is off, and fails the run at its due time", async () => {
     expect(cloudAgentsEnabled()).toBe(false)
-    const o = await overdue("changes", "default")
+    const o = await overdue("changes", { runEnd: "default" })
     o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
     expect(await o.sweep()).toEqual({ ended: 1, posted: 1 })
     expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "failed", outcome: "failed" })
     expect(guard.violations).toEqual([])
   })
 
-  test("C6: a damaged neighbouring record makes the cron wait, then fail the run at its due time plus the grace", async () => {
+  test("C6: the cron settles the exact run despite a damaged neighbouring record", async () => {
+    const o = await overdue("changes", {
+      records: (account, rid) => [
+        vectorRun({ account, rid, outcome: "changes" }),
+        vectorRun({ account, rid: runId(), with: { event: "push" } }),
+      ],
+    })
+    o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
+    expect(await o.sweep()).toEqual({ ended: 1, posted: 1 })
+    expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "settled", outcome: "changes" })
+    expect(o.vector.commands).toEqual([["EVAL", expect.any(String), "1", `${VECTOR_RUN_KEY}${o.rid}`]])
+  })
+
+  test.each(["damaged", "unavailable"])("C7: an unreadable exact run gets the full grace (%s)", async (kind) => {
     const errors = spyOn(console, "error").mockImplementation(() => {})
     try {
-      const o = await overdue("changes")
-      const damaged = vectorStore(() => [
-        vectorRun({ account: o.f.account, rid: o.rid, outcome: "changes" }),
-        vectorRun({ account: o.f.account, rid: runId(), with: { event: "push" } }),
-      ])
-      o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
-      const cronSecret = secret()
-      harness.mount({
-        "/sweep": createSweep({
-          config: () => ({ ...o.f.config, cronSecret }),
-          context: o.f.context,
-          platforms: () => ({ slack: o.f.adapter }),
-          stopped: async () => false,
-          runEnd: createActionsRunEnd({ store: damaged.store, enabled: () => true }),
-        }),
+      const o = await overdue("changes", {
+        records: (account, rid) =>
+          kind === "damaged" ? [vectorRun({ account, rid, with: { outcome: "changes" } })] : "down",
       })
-      const sweep = async () => (await harness.call("GET", "/sweep", { token: cronSecret })).body
-      expect(await sweep()).toEqual({ ended: 0, posted: 0 })
+      o.f.fake.clock.advance(ACTIONS_OVERDUE_MS)
+      expect(await o.sweep()).toEqual({ ended: 0, posted: 0 })
       o.f.fake.clock.advance(ACTIONS_CRON_GRACE_MS - 1)
-      expect(await sweep()).toEqual({ ended: 0, posted: 0 })
+      expect(await o.sweep()).toEqual({ ended: 0, posted: 0 })
       o.f.fake.clock.advance(1)
-      expect(await sweep()).toEqual({ ended: 1, posted: 1 })
+      expect(await o.sweep()).toEqual({ ended: 1, posted: 1 })
       expect(await readJob(o.f.store, o.job.jid)).toMatchObject({ state: "failed", outcome: "failed" })
       expect(
         errors.mock.calls.filter((call) => (call[1] as { step?: string } | undefined)?.step === "run-end"),
