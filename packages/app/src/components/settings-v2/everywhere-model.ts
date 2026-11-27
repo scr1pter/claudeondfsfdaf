@@ -311,6 +311,50 @@ export function everywhereJobs(sessions: readonly GlobalSession[]): EverywhereJo
     .slice(0, 20)
 }
 
+/** The status response lists active sessions. An absent job in a successful snapshot is idle. */
+export function continuationState(statuses: unknown, jobID: string, working: boolean) {
+  if (working) return "running"
+  if (!statuses || typeof statuses !== "object" || Array.isArray(statuses)) return "unavailable"
+  if (!Object.hasOwn(statuses, jobID)) return "ready"
+  const status = (statuses as Record<string, { type?: unknown } | undefined | null>)[jobID]
+  if (status?.type === "idle") return "ready"
+  if (status?.type === "busy" || status?.type === "retry") return "running"
+  return "unavailable"
+}
+
+export const JOB_UNCONFIRMED = "Vector could not confirm that this job has finished. Try again."
+export const CONTINUE_FAILED = "Vector could not start a new session in that folder."
+
+/**
+ * Continue a job in a new session: only after the Engine's status snapshot for the job's own folder shows it finished,
+ * and with the live busy check still applied. `current` turns false once the panel reads another Engine; from then on
+ * nothing is created, reported or opened.
+ */
+export async function continueEverywhereJob(input: {
+  job: string
+  working: () => boolean
+  current: () => boolean
+  status: () => Promise<unknown>
+  create: () => Promise<string | undefined>
+  open: (sessionID: string) => void
+  problem: (text: string) => void
+}) {
+  if (input.working()) return input.problem(JOB_RUNNING)
+  try {
+    const statuses = await input.status().catch(() => undefined)
+    if (!input.current()) return
+    const state = continuationState(statuses, input.job, input.working())
+    if (state === "running") return input.problem(JOB_RUNNING)
+    if (state === "unavailable") return input.problem(JOB_UNCONFIRMED)
+    const created = await input.create()
+    if (!input.current()) return
+    if (!created) return input.problem(CONTINUE_FAILED)
+    input.open(created)
+  } catch {
+    if (input.current()) input.problem(CONTINUE_FAILED)
+  }
+}
+
 /** The jobs page on vectordev.ai, linked only while the plan offers the perk (website rule). */
 export function jobsPage(offered: boolean) {
   return offered ? `https://${EVERYWHERE_PAGE}` : undefined
