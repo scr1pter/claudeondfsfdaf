@@ -7,7 +7,6 @@ import { Egress } from "@vectordevai/core/local-mode/egress"
 import { LocalDetect } from "@vectordevai/core/local-mode/detect"
 import { LocalHardware } from "@vectordevai/core/local-mode/hardware"
 import { LocalProbe } from "@vectordevai/core/local-mode/probe"
-import { LocalRecommend } from "@vectordevai/core/local-mode/recommend"
 import { LocalSources } from "@vectordevai/core/local-mode/sources"
 import { StartupHold } from "@vectordevai/core/startup-hold"
 import { GlobalBus } from "@/bus/global"
@@ -201,7 +200,7 @@ export const localHandlers = HttpApiBuilder.group(InstanceHttpApi, "local", (han
 
     const recommend = Effect.fn("LocalHttpApi.recommend")(function* () {
       const hardware = yield* Effect.promise(() => LocalHardware.read())
-      const suggested = LocalRecommend.recommend({ usable: hardware.usable })
+      const suggested = LocalSettings.recommendation(hardware.usable)
       return {
         hardware: {
           summary: LocalHardware.describe(hardware),

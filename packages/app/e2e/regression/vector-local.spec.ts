@@ -601,6 +601,7 @@ test("under a company lock the Allow dialog offers no Always allow, and the swit
   const allow = page.locator(".vector-local-allow-dialog")
   await expect(allow).toContainText("Allow GitHub pull requests?")
   await expect(allow).toContainText("github.com, api.github.com and vectordev.ai")
+  await expect(allow).toContainText("Any host it reaches")
   await expect(allow).toContainText("Set by your company. Ask your administrator to change it.")
   await expect(allow.getByRole("button", { name: "Always allow" })).toHaveCount(0)
   await expect(allow.getByRole("button", { name: "Allow once" })).toHaveCount(0)

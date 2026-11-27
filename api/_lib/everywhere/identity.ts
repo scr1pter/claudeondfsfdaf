@@ -5,6 +5,7 @@ import {
   installationPlatform,
   isPlatform,
   isRepositoryName,
+  isTrackerPlace,
   type PlatformId,
 } from "../../../packages/schema/src/everywhere.js"
 import { EVERYWHERE_PAGE, PLATFORM_NAMES } from "../../../packages/schema/src/everywhere-policy.js"
@@ -14,6 +15,7 @@ import { accountGuards, authorizedCommands, authorizedScript, authorityChanged, 
 import type { EverywhereConfig } from "./config.js"
 import { open, openJson, seal, sealJson, type DataKey } from "./crypto.js"
 import { platformFetch, readPlatformJson } from "./fetch.js"
+import type { Ports } from "./ports.js"
 import { KEEP_MS, USER_ID_PATTERNS, everywhereKeys, userIdValid } from "./keys.js"
 import { hmacSha256Hex, sha256Hex } from "./signature.js"
 import {
@@ -345,8 +347,10 @@ export type RepoMapping = {
   readonly repositories: readonly RepoRef[]
   /** The Vector account that set it. */
   readonly setBy: string
-  /** The connector marked this Linear team or Jira project private, so it is not a shared place (1). */
+  /** The connector's stored mark. Tracker routing still treats these places as shared. */
   readonly private: boolean
+  /** When the connector last explicitly set a tracker mark. Older marks have no timestamp. */
+  readonly privateSetAt?: number
   readonly setAt: number
 }
 
@@ -358,12 +362,13 @@ export const MAX_MAPPED_REPOSITORIES = 20
 /** `repo:<installation>:<place>` as stored: 3.13's fields, with `null` for a repository id not known yet. */
 function decodeMapping(place: string) {
   return (value: unknown): RepoMapping | undefined => {
-    if (!isRecord(value, ["repositoryIds", "fullNames", "setBy", "private", "setAt", "revision"])) return undefined
-    const { repositoryIds, fullNames, setBy, setAt } = value
+    if (!isRecord(value, ["repositoryIds", "fullNames", "setBy", "private", "privateSetAt", "setAt", "revision"])) return undefined
+    const { repositoryIds, fullNames, setBy, setAt, privateSetAt } = value
     if (!Array.isArray(repositoryIds) || !Array.isArray(fullNames) || repositoryIds.length !== fullNames.length)
       return undefined
     if (fullNames.length > MAX_MAPPED_REPOSITORIES || !isAccount(setBy) || !isTime(setAt)) return undefined
     if (typeof value.private !== "boolean") return undefined
+    if (privateSetAt !== undefined && !isTime(privateSetAt)) return undefined
     if (value.revision !== undefined && (typeof value.revision !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(value.revision))) return undefined
     const repositories: RepoRef[] = []
     for (let index = 0; index < fullNames.length; index++) {
@@ -373,7 +378,15 @@ function decodeMapping(place: string) {
       if (id !== null && !(typeof id === "number" && Number.isSafeInteger(id) && id > 0)) return undefined
       repositories.push(id === null ? { fullName } : { fullName, id })
     }
-    return { place, repositories, setBy: setBy.toLowerCase(), private: value.private, setAt, ...(value.revision ? { revision: value.revision as string } : {}) }
+    return {
+      place,
+      repositories,
+      setBy: setBy.toLowerCase(),
+      private: value.private,
+      ...(privateSetAt !== undefined ? { privateSetAt } : {}),
+      setAt,
+      ...(value.revision ? { revision: value.revision as string } : {}),
+    }
   }
 }
 
@@ -383,6 +396,7 @@ function encodeMapping(mapping: Omit<RepoMapping, "place">) {
     fullNames: mapping.repositories.map((repository) => repository.fullName),
     setBy: mapping.setBy,
     private: mapping.private,
+    ...(mapping.privateSetAt !== undefined ? { privateSetAt: mapping.privateSetAt } : {}),
     setAt: mapping.setAt,
     ...(mapping.revision ? { revision: mapping.revision } : {}),
   }
@@ -1299,7 +1313,7 @@ export async function setMapping(
   },
 ): Promise<MappingVerdict> {
   const account = accountId(input.account)
-  platformOf(input.installation)
+  const platform = platformOf(input.installation)
   const place = checkPlace(input.place)
   const repositories = checkRepositories(input.repositories)
   if (!repositories || repositories.some((repository) => repository.id === undefined)) invalid("Choose at most 20 repositories with their verified ids, each once.")
@@ -1309,15 +1323,77 @@ export async function setMapping(
   const previous = await getValue(ctx.store, everywhereKeys.repo(input.installation, place))
   const existing = decodeMapping(place)(parseStored(previous))
   if (previous !== undefined && !existing) throw storeUnavailable()
+  const privateSetAt = (platform === "linear" || platform === "jira") && input.private !== undefined
+    ? ctx.now
+    : existing?.privateSetAt
   const mapping: RepoMapping = {
     revision: randomBytes(16).toString("base64url"),
     place,
     repositories,
     setBy: account,
     private: input.private ?? existing?.private ?? false,
+    ...(privateSetAt !== undefined ? { privateSetAt } : {}),
     setAt: ctx.now,
   }
   await writeMapping(ctx, input.installation, mapping, install.raw, previous)
+  return { ok: true, mapping }
+}
+
+/** Add one verified repository to a tracker place using the connector's own binding. */
+export async function addTrackerRepository(
+  ctx: IdentityContext,
+  input: {
+    readonly account: string
+    readonly installation: string
+    readonly place: string
+    readonly fullName: string
+    readonly verifyRepository: NonNullable<Ports["repository"]>
+  },
+): Promise<MappingVerdict> {
+  const account = accountId(input.account)
+  const platform = platformOf(input.installation)
+  const { installation, place, fullName } = input
+  if (!isTrackerPlace(platform, place)) invalid("Enter the Linear team ID or Jira key.")
+  if (!isRepositoryName(fullName)) invalid("Name the repository as owner/name.")
+  const install = await readInstallSnapshot(ctx.store, installation)
+  if (!install) return { ok: false, code: "not-connected" }
+  if (install.record.connector !== account) return { ok: false, code: "not-connector" }
+  const previous = await readMappingSnapshot(ctx.store, installation, place)
+  const repositories = [...(previous?.record.repositories ?? [])]
+  const name = fullName.toLowerCase()
+  const namedIndex = repositories.findIndex((repo) => repo.fullName.toLowerCase() === name)
+  const id = repositories[namedIndex]?.id
+  await checkInstallAuthority(ctx, installation, install)
+
+  const verified = await input.verifyRepository({ account, fullName, id })
+  if (
+    !verified ||
+    !isRepositoryName(verified.fullName) ||
+    verified.fullName.toLowerCase() !== name ||
+    !Number.isSafeInteger(verified.id) ||
+    verified.id <= 0 ||
+    (id !== undefined && id !== verified.id)
+  )
+    return { ok: false, code: "repository-unverified" }
+  const index = namedIndex >= 0 ? namedIndex : repositories.findIndex((repo) => repo.id === verified.id)
+  const entry = { id: verified.id, fullName: verified.fullName }
+  if (index < 0) {
+    if (repositories.length >= MAX_MAPPED_REPOSITORIES) invalid("Choose at most 20 repositories for this place.")
+    repositories.push(entry)
+  } else {
+    repositories[index] = entry
+  }
+  const privateSetAt = previous?.record.privateSetAt
+  const mapping: RepoMapping = {
+    revision: randomBytes(16).toString("base64url"),
+    place,
+    repositories,
+    setBy: account,
+    private: previous?.record.private ?? false,
+    ...(privateSetAt !== undefined ? { privateSetAt } : {}),
+    setAt: ctx.now,
+  }
+  await writeMapping(ctx, installation, mapping, install.raw, previous?.raw)
   return { ok: true, mapping }
 }
 

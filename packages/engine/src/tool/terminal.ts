@@ -665,13 +665,22 @@ export const TerminalTool = Tool.define<
       }
     })
 
-    const reveal = Effect.fn("TerminalTool.reveal")(function* (params: Params, info: Pty.Info) {
+    // Shows a terminal. The keyboard moves only into a terminal the agent opened, where it asks the user to type what it
+    // must not (a password): the user's own terminals and another session's are shown, never focused, so the next
+    // keystrokes the user meant for somewhere else never reach a program another session's agent reads as its own.
+    const reveal = Effect.fn("TerminalTool.reveal")(function* (params: Params, ctx: Tool.Context, info: Pty.Info) {
       const pty = yield* Pty.Service
-      yield* pty.reveal(info.id, { focus: params.focus === true })
+      const focus = params.focus === true && own(info, ctx)
+      yield* pty.reveal(info.id, { focus })
       return {
         title: info.title,
         metadata: metadata(params, info),
-        output: `Asked Vector to show ${info.id} in the terminal panel. A client without a terminal panel shows nothing.`,
+        output: [
+          `Asked Vector to show ${info.id} in the terminal panel. A client without a terminal panel shows nothing.`,
+          ...(params.focus === true && !focus
+            ? ["The keyboard focus stays where it is: Vector moves it only into a terminal you opened."]
+            : []),
+        ].join(" "),
       }
     })
 
@@ -700,7 +709,7 @@ export const TerminalTool = Tool.define<
         return { title: params.action, metadata: { action: params.action, id: info.id }, output: GUESTED }
       if (params.action === "read") return yield* read(params, ctx, info)
       if (params.action === "wait") return yield* wait(params, ctx, info)
-      if (params.action === "reveal") return yield* reveal(params, info)
+      if (params.action === "reveal") return yield* reveal(params, ctx, info)
       if (params.action === "signal") return yield* signal(params, ctx, info)
       if (params.action === "resize" || params.action === "close" || params.action === "rename")
         return yield* change(params, ctx, info)
