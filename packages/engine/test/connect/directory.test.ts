@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn } from "bun:test"
 import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -1106,6 +1106,94 @@ it.instance(
       expect(done.result?.findings).toEqual([])
       expect(done.result?.cost).toEqual({ kind: "priced", usd: 0.12 })
       expect(done.result?.summary).toContain("receipt limits")
+      const next = yield* f.reload(queued.id, ask.sessionID)
+      expect((yield* f.owner.get(queued.id).pipe(Effect.provideService(InstanceRef, next))).result).toEqual(done.result)
+    }),
+  options,
+)
+
+// Until the scope closes, a rename onto `target` is refused with `code`, as Node reports a system error, whenever
+// `refuse` says so. `refused` counts the refusals.
+const refuseRename = (target: string, code: string, refuse: () => Promise<boolean>) =>
+  Effect.gen(function* () {
+    const original = fs.rename
+    const seen = { refused: 0 }
+    const spy = spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to) !== target || !(await refuse())) return original(from, to)
+      seen.refused++
+      throw Object.assign(new Error(`${code}: injected, rename '${String(from)}' -> '${target}'`), {
+        code,
+        syscall: "rename",
+        path: String(from),
+        dest: target,
+      })
+    })
+    yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()))
+    return seen
+  })
+
+it.instance(
+  "a terminal receipt whose rename meets an open reader keeps the clean result",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      script.gate = yield* Deferred.make<void>()
+      const queued = yield* f.owner.directoryReview(reviewInput())
+      yield* f.approve(queued.id)
+      yield* pollWithTimeout(
+        Effect.sync(() => (script.calls === 1 ? true : undefined)),
+        "The admitted directory worker did not start",
+      )
+      // A run list or the request ledger reads the receipt as the review ends. Windows refuses a rename over a file
+      // another handle has open until that handle closes; this reader closes right after the first refusal.
+      const target = path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${queued.id}.json`)
+      const reader = { handle: yield* Effect.promise(() => fs.open(target, "r")), open: true }
+      yield* Effect.addFinalizer(() => Effect.promise(() => reader.handle.close().catch(() => undefined)))
+      const seen = yield* refuseRename(target, "EPERM", async () => {
+        if (!reader.open) return false
+        reader.open = false
+        await reader.handle.close()
+        return true
+      })
+      yield* Deferred.succeed(script.gate, undefined)
+      const done = yield* f.ended(queued.id)
+      expect(seen.refused).toBe(1)
+      expect(done.result).toMatchObject({
+        state: "completed",
+        verdict: "clean",
+        summary: "The selected directory was reviewed.",
+      })
+      expect((yield* ConnectDirectory.load(f.scope, queued.id))?.run).toEqual(done)
+    }),
+  options,
+)
+
+it.instance(
+  "a terminal receipt the file system refuses is a persisted failure that does not blame its size",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      script.gate = yield* Deferred.make<void>()
+      const queued = yield* f.owner.directoryReview(reviewInput())
+      const ask = yield* f.approve(queued.id)
+      yield* pollWithTimeout(
+        Effect.sync(() => (script.calls === 1 ? true : undefined)),
+        "The admitted directory worker did not start",
+      )
+      // A refusal that does not clear by itself fails the clean result's save at once; the failure receipt then saves.
+      const target = path.join(Global.Path.data, "storage", ...ConnectDirectory.prefix(f.scope), `${queued.id}.json`)
+      const fault = { left: 1 }
+      const seen = yield* refuseRename(target, "EACCES", async () => fault.left-- > 0)
+      yield* Deferred.succeed(script.gate, undefined)
+      const done = yield* f.ended(queued.id)
+      expect(seen.refused).toBe(1)
+      expect(done.result).toMatchObject({
+        state: "failed",
+        verdict: "incomplete",
+        summary: "The directory review result could not be saved.",
+        findings: [],
+        cost: { kind: "priced", usd: 0.12 },
+      })
       const next = yield* f.reload(queued.id, ask.sessionID)
       expect((yield* f.owner.get(queued.id).pipe(Effect.provideService(InstanceRef, next))).result).toEqual(done.result)
     }),
