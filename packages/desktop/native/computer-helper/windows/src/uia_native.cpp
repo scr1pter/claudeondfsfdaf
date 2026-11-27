@@ -21,6 +21,7 @@
 
 namespace vector::computer {
 namespace {
+enum class RootLookup { cached, plain };
 uint64_t now_ms() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 [[noreturn]] void unavailable() { throw Failure{L"no_ui_tree", L"The native accessibility provider is unavailable."}; }
 void desktop_ready() {
@@ -369,7 +370,7 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     const std::wstring raw(name ? name : L"", count); const auto safe = sanitize_uia(raw);
     current_call(); return UiaName{safe, length <= 500 && safe == raw};
   }
-  UiaElement root(const WindowsWindow& window) {
+  UiaElement root(const WindowsWindow& window, RootLookup lookup = RootLookup::cached) {
     note(WindowsUiaPhase::root_availability); const auto actual = observe_windows_availability(WindowsAvailabilityBackend::system());
     require_windows_surface(actual, &window.owner.process.token);
     require_windows_surface(actual, &window.physical_owner.process.token);
@@ -381,7 +382,10 @@ class NativeUia final : public std::enable_shared_from_this<NativeUia> {
     note(WindowsUiaPhase::root_element); current_call();
     // Failure path only: keep the first failing status for the driver's closed bucket. The thrown code is unchanged.
     note(windows_uia_root_dispatch_started);
-    const auto status = automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put());
+    // The first Stop observation uses a live element. Security below refreshes its structural cache.
+    const auto status = lookup == RootLookup::plain
+      ? automation_->ElementFromHandle(window.surface, root.put())
+      : automation_->ElementFromHandleBuildCache(window.surface, structural_.get(), root.put());
     if (FAILED(status)) {
       if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));
       note(windows_uia_root_dispatch_returned);
@@ -649,12 +653,15 @@ void require_uia_mutation_gate(const std::function<bool()>& gate) {
 
 WindowsUiaBackend WindowsUiaBackend::system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic, WindowsUiaDeadline root_deadline) {
   const auto native = NativeUia::make(diagnostic); WindowsUiaBackend backend;
-  backend.root = [native, diagnostic, root_deadline](const auto& window) {
+  const auto observe_root = [native, diagnostic, root_deadline](const WindowsWindow& window, RootLookup lookup) {
     note_uia(diagnostic, WindowsUiaPhase::root_current);
     if ((root_deadline != WindowsUiaDeadline::max() && std::chrono::steady_clock::now() >= root_deadline) ||
         !windows_window_current(window)) unavailable();
-    return native->call([native, window] { return native->root(window); }, root_deadline);
+    return native->call([native, window, lookup] { return native->root(window, lookup); }, root_deadline);
   };
+  backend.root = [observe_root](const auto& window) { return observe_root(window, RootLookup::cached); };
+  if (root_deadline != WindowsUiaDeadline::max())
+    backend.first_stop_root = [observe_root](const auto& window) { return observe_root(window, RootLookup::plain); };
   backend.security = [native](const auto& element) { return native->call([native, element] { return native->security(element); }); };
   backend.name = [native](const auto& element) { return native->call([native, element] { return native->name(element); }); };
   backend.value = [native](const auto& element) { return native->call([native, element] { return native->value(element); }); };
@@ -690,7 +697,10 @@ UiaElement observe_first_uia_root(WindowsUiaBackend& backend, std::shared_ptr<Wi
       return std::chrono::steady_clock::now() < deadline && current() && std::chrono::steady_clock::now() < deadline;
     } catch (...) { return false; }
   };
-  try { return backend.root(window); }
+  const auto first_root = [&](const WindowsUiaBackend& actor) {
+    return actor.first_stop_root ? actor.first_stop_root(window) : actor.root(window);
+  };
+  try { return first_root(backend); }
   catch (const Failure& failure) {
     if (failure.code != L"no_ui_tree" || !diagnostic) throw;
     bool retired = false;
@@ -728,7 +738,7 @@ UiaElement observe_first_uia_root(WindowsUiaBackend& backend, std::shared_ptr<Wi
       diagnostic = std::move(replacement_diagnostic);
     };
     UiaElement root;
-    try { root = replacement.root(window); }
+    try { root = first_root(replacement); }
     catch (...) {
       if (!replacement_diagnostic->ticket_queued.load(std::memory_order_relaxed)) {
         discard();

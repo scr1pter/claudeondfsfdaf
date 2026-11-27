@@ -174,16 +174,42 @@ describe("independent overlay source admission", () => {
     expect(root).toContain(
       "FAILED(status)) {\n      if (actor_->diagnostic) actor_->diagnostic->note_root_element_status(static_cast<int32_t>(status));\n      note(windows_uia_root_dispatch_returned);\n      unavailable();",
     )
+    expect(root.match(/ElementFromHandle\(/g)).toHaveLength(1)
     expect(root.match(/ElementFromHandleBuildCache\(/g)).toHaveLength(1)
+    expect(root).toContain("const auto status = lookup == RootLookup::plain")
     expect(root.indexOf("current_call()")).toBeLessThan(root.indexOf("note(windows_uia_root_dispatch_started)"))
     expect(root.indexOf("note(windows_uia_root_dispatch_started)")).toBeLessThan(
-      root.indexOf("ElementFromHandleBuildCache("),
+      root.indexOf("ElementFromHandle("),
     )
     expect(root.indexOf("ElementFromHandleBuildCache(")).toBeLessThan(
       root.indexOf("note(windows_uia_root_dispatch_returned)"),
     )
     expect(root.match(/current_call\(\)/g)).toHaveLength(1)
     expect(implementation.match(/note_root_element_status\(/g)).toHaveLength(1)
+    const nativeRoot = implementation.slice(
+      implementation.indexOf("UiaElement root(const WindowsWindow& window"),
+      implementation.indexOf("UiaElement parent(const UiaElement& element)"),
+    )
+    expect(nativeRoot).toContain("RootLookup lookup = RootLookup::cached")
+    expect(nativeRoot).toContain(
+      "get_CurrentNativeWindowHandle(&handle)) || reinterpret_cast<HWND>(handle) != window.surface",
+    )
+    expect(nativeRoot).toContain("auto value = wrap(std::move(root)); const auto observed = security(value);")
+    expect(nativeRoot).toContain(
+      "observed.pid != window.owner.process.pid || GetWindowThreadProcessId(window.surface, &pid)",
+    )
+    expect(implementation).toContain("const auto id = runtime_id(element.get());")
+    expect(implementation).toContain("element->BuildUpdatedCache(structural_.get(), cached.put())")
+    expect(implementation).toContain(
+      "return native->call([native, window, lookup] { return native->root(window, lookup); }, root_deadline);",
+    )
+    expect(implementation).toContain("return observe_root(window, RootLookup::cached);")
+    expect(implementation).toContain("return observe_root(window, RootLookup::plain);")
+    expect(implementation).toContain(
+      "return actor.first_stop_root ? actor.first_stop_root(window) : actor.root(window);",
+    )
+    expect(implementation).toContain("try { return first_root(backend); }")
+    expect(implementation).toContain("try { root = first_root(replacement); }")
     expect(implementation).toContain(
       "note_uia(active_ticket->actor->diagnostic, WindowsUiaPhase::actor_expired, WindowsUiaExpiry::worker_current)",
     )

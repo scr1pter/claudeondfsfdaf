@@ -44,7 +44,7 @@ inline constexpr auto windows_uia_root_dispatch_returned = static_cast<WindowsUi
 // Which side first saw an actor ticket's deadline pass, written only inside the first timeout snapshot:
 // a worker current_call() check, the worker's COM call budget after the body, or the caller's wait_until().
 // worker_current means the worker itself found the budget spent at a check under the sampled phase. Under
-// root_element the only such check precedes ElementFromHandleBuildCache, so that call was never made.
+// root_element the only such check precedes the window-element lookup, so that call was never made.
 // caller_wait means the wait timed out or the caller saw readiness after the ticket deadline. The
 // dispatch checkpoint names the last worker observation, so dispatch_started alone cannot prove COM entry.
 enum class WindowsUiaExpiry : uint8_t { none, worker_current, worker_budget, caller_wait };
@@ -63,7 +63,7 @@ struct WindowsUiaDiagnostic {
   // has a distinct nonzero encoding), bits 16-23 the expiry side, bits 24-31 the root dispatch and caller
   // wait checkpoints, and bits 32-63 the root lookup HRESULT seen before the snapshot (zero if unobserved).
   std::atomic<uint64_t> timeout_observation{0};
-  // Failure-path only: the first failing ElementFromHandleBuildCache HRESULT, written by the worker.
+  // Failure-path only: the first failing window-element HRESULT, written by the worker.
   // Zero means unobserved; a failing HRESULT is never zero. Only failure_status() reads it.
   std::atomic<int32_t> root_element_status{0};
   static WindowsUiaPhase reported_phase(WindowsUiaPhase observed) noexcept {
@@ -212,6 +212,8 @@ struct WindowsUiaBackend {
   std::function<bool(const UiaObservation&, const UiaName&, std::wstring_view, const std::optional<std::wstring>&,
                      const std::function<bool()>& metadata_gate)> commit;
   std::function<std::optional<UiaMenuShortcut>(const UiaElement&, const UiaElement&)> menu_target;
+  // The bounded smoke Stop's first observation only. Refresh and generic callers use root.
+  std::function<UiaElement(const WindowsWindow&)> first_stop_root;
   static WindowsUiaBackend system(std::shared_ptr<WindowsUiaDiagnostic> diagnostic = {},
                                   WindowsUiaDeadline root_deadline = WindowsUiaDeadline::max());
 };

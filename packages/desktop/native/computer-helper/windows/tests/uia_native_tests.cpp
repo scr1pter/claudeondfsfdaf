@@ -141,6 +141,23 @@ size_t run_uia_native_tests() {
       "uia-native.first-root-success-keeps-initial-actor");
   });
   test([] {
+    for (const auto initial_succeeds : {false, true}) {
+      FirstRootFixture fixture;
+      fixture.first_succeeds = initial_succeeds;
+      fixture.backend.first_stop_root = fixture.backend.root;
+      fixture.second.backend.first_stop_root = fixture.second.backend.root;
+      size_t cached_calls = 0;
+      fixture.backend.root = [&](const auto&) { ++cached_calls; return fixture.first.root; };
+      fixture.second.backend.root = [&](const auto&) { ++cached_calls; return fixture.second.root; };
+      const auto expected = initial_succeeds ? fixture.first.root : fixture.second.root;
+      require(fixture.observe() == expected && cached_calls == 0 &&
+        fixture.first.roots == 1 && fixture.second.roots == (initial_succeeds ? 0u : 1u) &&
+        fixture.opened == (initial_succeeds ? 0u : 1u), "uia-native.first-stop-root-uses-only-the-plain-lookup-on-both-actors");
+      require(fixture.backend.root(fixture.first.window) == expected && cached_calls == 1,
+        "uia-native.adopted-stop-actor-keeps-its-normal-root-for-refresh");
+    }
+  });
+  test([] {
     for (const auto phase : {WindowsUiaPhase::security_cache, WindowsUiaPhase::root_current, WindowsUiaPhase::actor_admission}) {
       FirstRootFixture fixture; fixture.phase = phase;
       refusal([&] { fixture.observe(); });
