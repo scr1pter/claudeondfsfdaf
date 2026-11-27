@@ -39,8 +39,10 @@ import {
 //   (R-C2), and the plan allows it (the API and the relay decide that from the account's plan; nothing here grants
 //   anything, S1).
 // - A connection kept only for Vector everywhere's jobs sends no data frames and keeps the 25-s ping. It refreshes its
-//   ticket every 12 hours, inside the relay's computerTicketMaxAgeMs, and not when another computer's phone arrives. It
-//   hands each well-formed job offer frame (kind 0x02) to the subscriber, which verifies the signature (E9).
+//   ticket every 12 hours, inside the relay's computerTicketMaxAgeMs, and not when another computer's phone arrives. A
+//   refresh whose ticket request fails, or that the relay rejects or leaves unanswered, is tried again after 10
+//   minutes, doubling to at most 2 hours, and at most four times in 12 hours. It hands each well-formed job offer
+//   frame (kind 0x02) to the subscriber, which verifies the signature (E9).
 // - Each phone that connects opens its own encrypted channel (remote-crypto.ts). Requests go through the route
 //   allowlist (remote-routes.ts); permission answers need the phone's passkey (remote-passkey.ts).
 // - The engine's events are read and streamed only while a phone is attached and watching, at most four batches a
@@ -57,6 +59,13 @@ const REFRESH_MS = 4 * 60_000
 /** R-C2: a computer kept only for jobs refreshes twice inside the relay's computerTicketMaxAgeMs (24 h). */
 const JOBS_REFRESH_MS = 12 * 60 * 60_000
 const JOBS_REFRESH_MAX_RETRY_SECONDS = 60
+/** A failed jobs refresh is tried again after this, doubling with each failure in a row up to the most below. */
+const JOBS_REFRESH_RETRY_MS = 10 * 60_000
+const JOBS_REFRESH_RETRY_MAX_MS = 2 * 60 * 60_000
+/** Retries in any JOBS_REFRESH_MS: each refresh wakes the account's Durable Object. */
+const JOBS_REFRESH_RETRIES = 4
+/** A jobs refresh the relay has not answered `refreshed` by then counts as rejected: its notices can be dropped. */
+const REFRESHED_WAIT_MS = 30_000
 /** The relay's internalBodyBytes: it refuses a longer job offer, so a longer 0x02 frame is not one. */
 const OFFER_BYTES = 16 * 1024
 const OFFER_PREFIX = new TextEncoder().encode("vef1.")
@@ -162,7 +171,14 @@ export type LinkDependencies = {
   changed?: (status: RemoteStatus) => void
   log?: (message: string, meta?: Record<string, unknown>) => void
   now?: () => number
-  timing?: Partial<{ heartbeatMs: number; refreshMs: number; jobsRefreshMs: number; batchMs: number; retryMs: number }>
+  timing?: Partial<{
+    heartbeatMs: number
+    refreshMs: number
+    jobsRefreshMs: number
+    jobsRefreshRetryMs: number
+    batchMs: number
+    retryMs: number
+  }>
 }
 
 type Peer = { channel: Channel; watching: boolean; events: unknown[]; failures: number; hello: boolean }
@@ -173,6 +189,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     heartbeatMs: HEARTBEAT_MS,
     refreshMs: REFRESH_MS,
     jobsRefreshMs: JOBS_REFRESH_MS,
+    jobsRefreshRetryMs: JOBS_REFRESH_RETRY_MS,
     batchMs: BATCH_MS,
     retryMs: 1_000,
     ...deps.timing,
@@ -193,6 +210,11 @@ export function createRemoteLink(deps: LinkDependencies) {
     refresher?: ReturnType<typeof setInterval>
     jobsRefresher?: ReturnType<typeof setInterval>
     jobsRefreshRetry?: ReturnType<typeof setTimeout>
+    /** A jobs refresh sent and not yet answered: its wait for `refreshed`, and the jobs link it was sent on. */
+    refreshPending?: { timer: ReturnType<typeof setTimeout>; jobsLink: () => boolean }
+    /** Jobs refreshes failed in a row, and when each retry in the last JOBS_REFRESH_MS was scheduled. */
+    refreshFailures: number
+    refreshRetries: number[]
     flusher?: ReturnType<typeof setTimeout>
     retry?: ReturnType<typeof setTimeout>
     failures: number
@@ -213,6 +235,8 @@ export function createRemoteLink(deps: LinkDependencies) {
     attached: new Set(),
     peers: new Map(),
     failures: 0,
+    refreshFailures: 0,
+    refreshRetries: [],
     revokedOnce: false,
     watching: false,
     tokens: BURST,
@@ -536,6 +560,19 @@ export function createRemoteLink(deps: LinkDependencies) {
   }
 
   const control = async (message: ServerMessage) => {
+    if (message.t === "refreshed") {
+      clearJobsRefreshRetry()
+      state.refreshFailures = 0
+      return
+    }
+    // Only a refresh draws these notices on a jobs-only connection, which sends no data frames.
+    if (message.t === "error" && (message.code === "ticket-invalid" || message.code === "ticket-expired")) {
+      const pending = state.refreshPending
+      if (!pending) return
+      clearJobsRefreshRetry()
+      retryJobsRefresh(pending.jobsLink)
+      return
+    }
     if (message.t === "hello" || message.t === "peers") {
       state.viewers = message.viewers
       const phones = new Set(message.peers.filter((peer) => peer.role === "phone").map((peer) => peer.device))
@@ -560,10 +597,14 @@ export function createRemoteLink(deps: LinkDependencies) {
   // R-C2: a connection that jobs want and no phone's cadence covers refreshes every jobsRefreshMs instead (12 h), twice
   // inside the relay's computerTicketMaxAgeMs, because each refresh wakes the account's Durable Object and books up to
   // idleTailMs of awake time. Its ticket lapses in between, and the relay asks again only when its peers change, so a
-  // phone's cadence that takes over from the jobs cadence refreshes at once unless control() just did.
+  // phone's cadence that takes over from the jobs cadence refreshes at once unless control() just did. A jobs refresh
+  // that fails is tried again (refreshJobs) while the same jobs cadence owns the same socket; the phone's cadence taking
+  // over, the connection's teardown and a `refreshed` answer end that retry.
   const clearJobsRefreshRetry = () => {
     if (state.jobsRefreshRetry !== undefined) clearTimeout(state.jobsRefreshRetry)
+    if (state.refreshPending) clearTimeout(state.refreshPending.timer)
     state.jobsRefreshRetry = undefined
+    state.refreshPending = undefined
   }
 
   const syncRefresher = (refreshed = false) => {
@@ -575,7 +616,8 @@ export function createRemoteLink(deps: LinkDependencies) {
       clearInterval(state.refresher)
       state.refresher = undefined
     }
-    if (jobs && !state.jobsRefresher) state.jobsRefresher = setInterval(() => void refresh(true), timing.jobsRefreshMs)
+    if (jobs && !state.jobsRefresher)
+      state.jobsRefresher = setInterval(() => void refreshJobs(holdJobsLink()), timing.jobsRefreshMs)
     if (!jobs && state.jobsRefresher) {
       clearInterval(state.jobsRefresher)
       state.jobsRefresher = undefined
@@ -592,39 +634,78 @@ export function createRemoteLink(deps: LinkDependencies) {
     }
   }
 
-  const refresh = async (retryJobs = false, eligible?: () => boolean) => {
+  /**
+   * Mints a ticket and sends it in-band. A jobs refresh passes `jobsLink`, which must still hold after each wait, and is
+   * marked pending until the relay answers. The answer says what happened, so the jobs cadence can try again.
+   */
+  const refresh = async (jobsLink?: () => boolean) => {
+    const socket = state.socket
+    const identity = state.identity
+    if (!socket || !identity || jobsLink?.() === false) return "skipped"
+    const token = await ticketToken()
+    if (state.socket !== socket || socket.readyState !== 1 || jobsLink?.() === false) return "skipped"
+    const ticket = await mint(identity, token).catch(() => undefined)
+    if (state.socket !== socket || socket.readyState !== 1 || jobsLink?.() === false) return "skipped"
+    if (ticket && "ticket" in ticket) {
+      if (jobsLink) awaitRefreshed(jobsLink)
+      socket.send(JSON.stringify({ t: "refresh", ticket: ticket.ticket }))
+      return "sent"
+    }
+    return ticket ?? { refused: "unavailable" as const, retryMs: 10 * 60_000 }
+  }
+
+  // R-C2: the jobs cadence's refresh. A ticket request the API could not answer (`unavailable`), and a refresh the
+  // relay rejects or leaves unanswered, are tried again. Signed out, Vector Local and a plan without Remote are not:
+  // evaluate() and the connection's own paths handle those, with no more traffic to the account's Durable Object.
+  const refreshJobs = async (jobsLink: () => boolean) => {
+    const outcome = await refresh(jobsLink)
+    if (outcome === "skipped" || outcome === "sent") return
+    if (outcome.refused === "unavailable") retryJobsRefresh(jobsLink, outcome.refreshRetryMs)
+  }
+
+  /** The jobs link as it is now: true while the same jobs cadence owns the same open socket and identity. */
+  const holdJobsLink = () => {
     const socket = state.socket
     const identity = state.identity
     const jobsRefresher = state.jobsRefresher
-    if (!socket || !identity || eligible?.() === false) return
-    const token = await ticketToken()
-    if (state.socket !== socket || socket.readyState !== 1 || eligible?.() === false) return
-    const ticket = await mint(identity, token).catch(() => undefined)
-    if (eligible?.() === false) return
-    if (ticket && "ticket" in ticket && state.socket === socket && socket.readyState === 1) {
-      socket.send(JSON.stringify({ t: "refresh", ticket: ticket.ticket }))
-      return
-    }
-    if (
-      !retryJobs ||
-      jobsRefresher === undefined ||
-      !ticket ||
-      "ticket" in ticket ||
-      ticket.refreshRetryMs === undefined
-    )
-      return
-    const sameJobsLink = () =>
+    return () =>
+      socket !== undefined &&
+      jobsRefresher !== undefined &&
       state.socket === socket &&
       state.identity === identity &&
       socket.readyState === 1 &&
       state.jobsRefresher === jobsRefresher &&
       wanted() &&
       jobsWanted()
-    if (!sameJobsLink() || state.jobsRefreshRetry !== undefined) return
-    state.jobsRefreshRetry = setTimeout(() => {
-      state.jobsRefreshRetry = undefined
-      void refresh(false, sameJobsLink)
-    }, ticket.refreshRetryMs)
+  }
+
+  const awaitRefreshed = (jobsLink: () => boolean) => {
+    if (state.refreshPending) clearTimeout(state.refreshPending.timer)
+    state.refreshPending = {
+      jobsLink,
+      timer: setTimeout(() => {
+        state.refreshPending = undefined
+        retryJobsRefresh(jobsLink)
+      }, REFRESHED_WAIT_MS),
+    }
+  }
+
+  // One retry at a time, at most JOBS_REFRESH_RETRIES in any JOBS_REFRESH_MS. The API's pre-mint renewal names its own
+  // short delay (`soonMs`), taken only for the first failure in a row.
+  const retryJobsRefresh = (jobsLink: () => boolean, soonMs?: number) => {
+    if (!jobsLink() || state.jobsRefreshRetry !== undefined) return
+    state.refreshFailures += 1
+    state.refreshRetries = state.refreshRetries.filter((at) => now() - at < JOBS_REFRESH_MS)
+    if (state.refreshRetries.length >= JOBS_REFRESH_RETRIES) return
+    state.refreshRetries.push(now())
+    const backoff = Math.min(timing.jobsRefreshRetryMs * 2 ** (state.refreshFailures - 1), JOBS_REFRESH_RETRY_MAX_MS)
+    state.jobsRefreshRetry = setTimeout(
+      () => {
+        state.jobsRefreshRetry = undefined
+        void refreshJobs(jobsLink)
+      },
+      state.refreshFailures === 1 && soonMs ? soonMs : backoff,
+    )
   }
 
   type Minted =
@@ -836,6 +917,7 @@ export function createRemoteLink(deps: LinkDependencies) {
     if (state.refresher) clearInterval(state.refresher)
     if (state.jobsRefresher) clearInterval(state.jobsRefresher)
     clearJobsRefreshRetry()
+    state.refreshFailures = 0
     if (state.flusher) clearTimeout(state.flusher)
     state.heartbeat = undefined
     state.refresher = undefined
