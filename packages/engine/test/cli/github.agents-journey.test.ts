@@ -347,9 +347,10 @@ followUp(
       expect(JSON.stringify(opened.session)).not.toContain(CHANNEL.runToken)
       expect(one.pulls).toHaveLength(1)
       expect(one.pulls[0]).toMatchObject({ head: "vector/issue17-4242-1", draft: false })
-      // The check's evidence; its markup's escaping by the publisher (V21) is the lead's (deviations BT08a item 1).
-      expect(one.pulls[0]!.body).toContain("echo lint-run-one")
-      expect(one.pulls[0]!.body).toContain("(exit 0)")
+      // The published proof stays readable through the untrusted-bundle sanitizer.
+      expect(one.pulls[0]!.body).toContain("✅ echo lint-run-one (exit 0)")
+      expect(one.pulls[0]!.body).toContain("\n    lint-run-one\n")
+      expect(one.pulls[0]!.body).not.toContain("&lt;details&gt;")
       expect(yield* Effect.promise(() => git(repo.remote, ["show", "vector/issue17-4242-1:NOTES.md"]))).toBe(
         "Repository notes.",
       )

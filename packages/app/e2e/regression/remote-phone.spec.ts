@@ -13,6 +13,7 @@ type Fixture = {
   phones: () => string[]
   engine: () => { method: string; path: string; query: Record<string, string>; body?: unknown }[]
   phoneTurn: () => boolean
+  reviewHeld: () => boolean
 }
 
 async function authenticator(page: Page) {
@@ -136,13 +137,15 @@ test("a paired phone starts and cancels a connected branch review", async ({ pag
   ])
   const { credentials: after } = await cdp.send("WebAuthn.getCredentials", { authenticatorId })
   expect(after[0]!.signCount).toBeGreaterThan(credentials[0]!.signCount)
-  expect(await call(page, "phoneTurn")).toBe(true)
+  expect(await call(page, "phoneTurn")).toBe(false)
+  expect(await call(page, "reviewHeld")).toBe(true)
   await expect(connected.getByRole("button", { name: /fix|dismiss|worktree/i })).toHaveCount(0)
 
   const cancel = connected.getByRole("button", { name: "Cancel", exact: true })
   await cancel.click()
   await expect(connected.getByText("Cancelled", { exact: true })).toBeVisible()
   await expect(cancel).toHaveCount(0)
+  expect(await call(page, "reviewHeld")).toBe(false)
   expect((await engine()).filter(({ path }) => path.endsWith("/cancel"))).toEqual([
     {
       method: "POST",
