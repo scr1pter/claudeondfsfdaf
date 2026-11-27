@@ -1086,4 +1086,40 @@ describe("Vector's own code", () => {
     )
     expect(calls.flat()).toEqual([])
   })
+
+  // Under Bun, a library that sends through the undici package's fetch reaches Bun.fetch, which the guard cannot see.
+  // So every Octokit and GraphQL client Vector makes is handed a fetch of its own (githubFetch, which Vector Local
+  // labels, decides and logs), and none comes from @actions/github's getOctokit, which would send through undici.
+  test("gives every GitHub client a fetch Vector Local decides", async () => {
+    const root = path.join(import.meta.dir, "../../..")
+    const files = await Array.fromAsync(new Bun.Glob("*/src/**/*.{ts,tsx}").scan({ cwd: root }))
+    const found = await Promise.all(
+      files.map(async (file) => {
+        const text = await Bun.file(path.join(root, file)).text()
+        const clients = [...text.matchAll(/\bnew Octokit\s*\(|\bgraphql\.defaults\s*\(/g)].map((match) => {
+          // The call's arguments: from just after its "(" to the ")" that closes it.
+          const start = (match.index ?? 0) + match[0].length
+          const depth = { value: 1 }
+          const end = text
+            .slice(start)
+            .split("")
+            .findIndex((char) => {
+              depth.value += char === "(" ? 1 : char === ")" ? -1 : 0
+              return depth.value === 0
+            })
+          return text.slice(start, end < 0 ? undefined : start + end)
+        })
+        return {
+          clients: clients.length,
+          missing: [
+            ...clients.filter((options) => !/\bfetch\s*:/.test(options)).map(() => file),
+            ...(/\bgetOctokit\s*\(/.test(text) ? [file] : []),
+          ],
+        }
+      }),
+    )
+    expect(found.flatMap((item) => item.missing)).toEqual([])
+    // Eight today, in packages/engine/src/cli/cmd/github.*.ts: a glob that found none would pass the check above.
+    expect(found.reduce((sum, item) => sum + item.clients, 0)).toBeGreaterThanOrEqual(7)
+  })
 })

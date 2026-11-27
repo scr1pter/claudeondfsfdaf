@@ -17,10 +17,10 @@ These gates are in the code or with the lead, not yours. Check that each one is 
 - The desktop page cannot turn jobs on or allow a folder yet: Settings → Vector everywhere is read-only until the write path is built (vector-everywhere-deviations.md, "2026-11-20, EV-21", "Ruling on (a)").
 - The decisions are the ones you confirmed on 2026-11-11 (spec §10): Q5 (Slack reads a mention's thread once), Q13 (GitHub laptop-first only if @vector agrees) and Q14 (a platform goes live when its own steps are met).
 - The platform facts here were last read on 2026-11-12 (VE-11 to VE-13); re-read the current platform pages when you register.
-- There is no production repository port: no production lookup turns a mapped repository into a job (vector-everywhere-handoff.md, "No production `repository` port", EV-19). Every job asks for the repository instead.
+- Repository lookup requires the requester's verified GitHub binding.
 - /everywhere is still a draft (PUB-8): installs, links, connect codes and mapping all happen on that page, so go-live waits for the 2.0.0 move (At 2.0.0).
 - Listing Codium's `everywhere` perk needs EV-21's four preconditions first (spec §10, "Codium listing", note of 2026-11-20).
-- Linear teams and Jira keys cannot be mapped yet: no account route turns owner/name into a verified repository id (vector-everywhere-handoff.md, "Linear teams and Jira keys cannot be mapped", EV-22).
+- Once /everywhere is published, the connector can enter a Jira project key and the GitHub repository's `owner/name`, then choose **Add repository**. Use the project key as it appears in Jira. Adding a repository requires the connector's verified GitHub binding.
 - Summaries are held: Linear and Jira post only the outcome and the pull request link, and the private result surface (`privateResult`) is not built, so a summary reaches no one. The lead rules on EV-23 (c) before Linear or Jira goes live.
 - A lost compare-and-set on Jira's `laptop` write fails the task (vector-everywhere-handoff.md, "Left open by the repairs", EV-20): fixed before Jira's laptop route goes live.
 

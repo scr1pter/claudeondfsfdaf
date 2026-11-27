@@ -2,10 +2,12 @@ export * as ConnectDirectory from "./directory"
 
 import { createHash, randomUUID } from "node:crypto"
 import { constants, statSync } from "node:fs"
-import { lstat, mkdir, open, readdir, rename, rm, writeFile } from "node:fs/promises"
+import fs from "node:fs/promises"
 import path from "node:path"
+import { setTimeout } from "node:timers/promises"
 import { Effect, Option, Schema } from "effect"
 import { Global } from "@vectordevai/core/global"
+import { LockFs } from "@vectordevai/core/util/lock-fs"
 import { Connect } from "@vectordevai/schema/connect"
 import { SessionID } from "@/session/schema"
 import { FileLock } from "@/tool/file-lock"
@@ -36,6 +38,8 @@ export const Receipt = Schema.Struct({
 
 export class Error extends Schema.TaggedErrorClass<Error>()("ConnectDirectory.Error", {
   message: Schema.String,
+  // Set only when the run is too large for a receipt; every other refusal is about authority or the file system.
+  oversized: Schema.optional(Schema.Boolean),
 }) {}
 
 // A client-editable session name or metadata is not permission to use a hidden parent. Only the owner service lends
@@ -106,10 +110,10 @@ const missing = (cause: unknown) =>
 // A bounded receipt read: null when there is no file, undefined for a non-file, an oversized file or bad JSON.
 const bounded = (target: string) =>
   Effect.tryPromise(async () => {
-    const leaf = await lstat(target).catch((cause: unknown) => (missing(cause) ? null : Promise.reject(cause)))
+    const leaf = await fs.lstat(target).catch((cause: unknown) => (missing(cause) ? null : Promise.reject(cause)))
     if (leaf === null) return null
     if (!leaf.isFile()) return undefined
-    const file = await open(target, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
+    const file = await fs.open(target, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
     try {
       const info = await file.stat()
       if (!info.isFile()) return undefined
@@ -174,7 +178,7 @@ export const settled = Effect.fn("ConnectDirectory.settled")(function* (
   const raw = yield* bounded(path.join(directory, `${run.runID}.json`))
   if (raw === null) {
     // Without the folder there is no evidence the receipt ever existed here: another data root, or a tampered tree.
-    const present = yield* Effect.tryPromise(() => lstat(directory)).pipe(
+    const present = yield* Effect.tryPromise(() => fs.lstat(directory)).pipe(
       Effect.map((info) => info.isDirectory()),
       Effect.orElseSucceed(() => false),
     )
@@ -200,7 +204,7 @@ export const settled = Effect.fn("ConnectDirectory.settled")(function* (
 })
 
 export const list = (input: { readonly projectID: string; readonly directory: string }, limit: number) =>
-  Effect.tryPromise(() => readdir(folder(input))).pipe(
+  Effect.tryPromise(() => fs.readdir(folder(input))).pipe(
     Effect.orElseSucceed(() => []),
     Effect.map((names) =>
       names
@@ -222,7 +226,7 @@ export const prune = Effect.fn("ConnectDirectory.prune")(function* (
     const receipt = yield* load(input, id)
     if (!receipt || receipt.run.status !== "done") continue
     if (++completed <= keep) continue
-    yield* Effect.tryPromise(() => rm(path.join(folder(input), `${id}.json`), { force: true })).pipe(
+    yield* Effect.tryPromise(() => fs.rm(path.join(folder(input), `${id}.json`), { force: true })).pipe(
       Effect.orElseSucceed(() => undefined),
     )
   }
@@ -260,22 +264,21 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
     run,
   })
   if (Buffer.byteLength(value) > MAX_BYTES)
-    return yield* new Error({ message: "The directory review result exceeds its receipt limit." })
+    return yield* new Error({ message: "The directory review result exceeds its receipt limit.", oversized: true })
   yield* Effect.tryPromise({
     try: () => {
       const pending = writer.tail.then(async () => {
         const active = () => read(token) === binding && current(binding) && !(writer.terminal && run.status !== "done")
         if (!active()) throw new Error({ message: "The receipt writer was retired." })
         const directory = folder(binding)
-        await mkdir(directory, { recursive: true, mode: 0o700 })
+        await fs.mkdir(directory, { recursive: true, mode: 0o700 })
         const target = path.join(directory, `${run.id}.json`)
         const temporary = `${target}.${randomUUID()}.tmp`
         try {
-          await writeFile(temporary, value, { mode: 0o600, flag: "wx" })
-          if (!active()) throw new Error({ message: "The receipt writer was retired." })
-          await rename(temporary, target)
+          await fs.writeFile(temporary, value, { mode: 0o600, flag: "wx" })
+          await replace(temporary, target, active)
         } finally {
-          await rm(temporary, { force: true }).catch(() => undefined)
+          await fs.rm(temporary, { force: true }).catch(() => undefined)
         }
       })
       writer.tail = pending.then(
@@ -284,7 +287,30 @@ export const write = Effect.fn("ConnectDirectory.write")(function* (token: Token
       )
       return pending
     },
-    catch: () => new Error({ message: "The directory review receipt could not be saved." }),
+    catch: (cause) =>
+      new Error({ message: `The directory review receipt could not be saved: ${LockFs.describe(cause)}` }),
   })
   return hash(value)
 })
+
+/**
+ * Windows refuses to rename over a receipt another handle has open, and the refusal clears once that handle closes.
+ * This module's own reads hold a receipt open while a run list, the request ledger or a prune reads it, and so may
+ * another process or a virus scan. Engine (windows) run 45924630534 saved a refused review as failed when its rename
+ * met a run list's read. An error LockFs counts as transient is retried for its short window, as the lock files are,
+ * with the writer's authority checked again before each try; any other error is reported at once.
+ */
+async function replace(
+  temporary: string,
+  target: string,
+  active: () => boolean,
+  start = performance.now(),
+  delay = LockFs.TRANSIENT_BASE_DELAY_MS,
+): Promise<void> {
+  if (!active()) throw new Error({ message: "The receipt writer was retired." })
+  return fs.rename(temporary, target).catch(async (cause: unknown) => {
+    if (!LockFs.isTransient(cause) || performance.now() - start >= LockFs.TRANSIENT_WINDOW_MS) throw cause
+    await setTimeout(delay)
+    return replace(temporary, target, active, start, LockFs.nextDelay(delay))
+  })
+}
