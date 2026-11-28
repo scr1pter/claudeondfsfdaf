@@ -1287,4 +1287,33 @@ describe("POST /experimental/worktree/unattended (EV-13)", () => {
     expect(await present(marker)).toBe(false)
     await read(checkout, "/vcs")
   }, 30_000)
+
+  // EV-RM2: nor can the owner trust the job's checkout by hand. The app's Repository trust and the TUI's /trust both
+  // send POST /config/trust; it answers 400 and leaves the folder untrusted, and GET /config/trust offers no approval
+  // there. An ordinary project folder is still trusted as before.
+  test("the owner cannot trust the job's checkout by hand, but can still trust a project folder", async () => {
+    const f = await repository(true)
+    await allow([f.repo])
+    await open(f.repo)
+    const created = await post(f.input)
+    expect(created.status).toBe(200)
+    const checkout = created.body.directory as string
+    const at = (directory: string) => ({ ...owner, "x-vector-directory": directory })
+
+    expect((await call("/config/trust", { method: "POST", headers: at(checkout) })).status).toBe(400)
+    const status = await call("/config/trust", { headers: at(checkout) })
+    expect(status.status).toBe(200)
+    expect(status.body).toMatchObject({ trusted: false, ignored: true, settings: true, approvable: false })
+    // As above: let the instance's git lookup in the checkout finish before the folder is removed.
+    expect((await call("/vcs", { headers: at(checkout) })).status).toBe(200)
+
+    const other = await repository(false)
+    expect((await call("/config/trust", { headers: at(other.repo) })).body).toMatchObject({
+      trusted: false,
+      approvable: true,
+    })
+    const trusted = await call("/config/trust", { method: "POST", headers: at(other.repo) })
+    expect(trusted.status).toBe(200)
+    expect(trusted.body).toMatchObject({ trusted: true, approvable: true })
+  }, 30_000)
 })

@@ -61,6 +61,8 @@ export const TrustCommand = effectCmd({
 
     const { Config } = yield* Effect.promise(() => import("@/config/config"))
     const config = yield* Config.Service
+    // Config.approve refuses it too, with a defect; this says why.
+    if (decision.approve && (yield* Config.jobCheckout())) return yield* fail(Config.JOB_CHECKOUT_REFUSAL)
     if (decision.approve) yield* config.approve()
 
     UI.println(formatTrustStatus(yield* config.trust(), decision.approve, Flag.VECTOR_PURE))

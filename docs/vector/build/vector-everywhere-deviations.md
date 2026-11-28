@@ -1961,7 +1961,7 @@ A job on this computer now goes:
 - Company rules: a managed config's permission rules are not seen unless the key is locked, for the editing ids (pre-existing) and now for `bash`; nor are the engine's `VECTOR_PERMISSION` environment rules. Under a lock on `agent`, `mode` or `default_agent` the editing ids copy the user's own default agent's rules, not the company's (the shell is off then). The engine's own read defaults (asks for `.env` and `.ssh` files) are outranked by the session's `read` allow (pre-existing since VE-08).
 - The `testing` milestone (§3.5 step 7) is not built.
 - The macOS and Windows shell (not built; EV-16).
-- The owner can still trust a job's checkout by hand in the app. The adapter then refuses new checkouts for that folder only if the engine reports it trusted.
+- The owner can still trust a job's checkout by hand in the app. The adapter then refuses new checkouts for that folder only if the engine reports it trusted. *Closed 2026-11-27 (EV-RM2):* the engine refuses that approval; see "2026-11-27, EV-RM2" below.
 
 ### Mutations
 
@@ -4914,3 +4914,33 @@ the unrouted drafts.
 - **Owner action left.** At the 2.0.0 move, set Slack's direct install URL and the Linear directory link to
   `https://vectordev.ai/everywhere?install=slack` and `https://vectordev.ai/everywhere?install=linear`. Until then
   no platform sends a person to the new entry.
+
+## 2026-11-27, EV-RM2: the owner cannot trust a job's checkout by hand
+
+- **What was wrong.** The engine never trusted a Vector everywhere job's checkout on its own, but `Config.approve`
+  had no check, so the owner could trust one by hand (Repository trust in the app, /trust in the TUI, or `vector trust
+  approve`). The checkout's own config, written by the job, would then load with the owner's permissions.
+- **Change.** `Config.jobCheckout()` (engine config.ts) says whether the instance's folder or worktree is inside
+  `<data>/everywhere-worktree`, compared as Worktree compares folders: real paths, case folded on Windows.
+  `Config.approve` dies there, which POST /config/trust already answers with its bodiless 400, so there is no new error
+  schema and no SDK regeneration. GET /config/trust returns `approvable: false` there, by the same check. `vector trust
+  approve` refuses first with "A Vector everywhere job's checkout is never trusted." (`Config.JOB_CHECKOUT_REFUSAL`).
+- **Tests.** Engine test/everywhere/worktree.test.ts, "the owner cannot trust the job's checkout by hand, but can still
+  trust a project folder": a real unattended checkout answers 400 to POST /config/trust, stays untrusted and reports
+  `approvable: false`, while another project folder reports `approvable: true` and is trusted. Engine
+  test/cli/trust.test.ts, "the owner cannot approve trust in a Vector everywhere job's checkout". Both were red before
+  the change (200 instead of 400; the CLI approved and printed "Status: trusted") and are green after it.
+- **Not built.** The plan's optional step 3, a desktop recheck of GET /config/trust before each runner prompt: with the
+  engine refusing every approval, nothing can make the checkout trusted between prompts.
+- **Left open.** The app reads `approvable: false` with `ignored: true` and `settings: true` as an invited guest's
+  view, in two places. The Repository trust page (project-trust-model.ts) says only "the person who invited you" can
+  trust it. The session header's ProjectTrustPrompt (session-header.tsx, project-trust-prompt.tsx through
+  `projectTrustHostDecides`) shows the owner a toast, "Only the host can trust this repository", saying Vector ignores
+  the settings "until the person who invited you trusts it", when they open a session in the job's checkout. No approval
+  is offered in either place, which is right, but the words are wrong for the owner. Fixing them needs the status to
+  say why it is not approvable (an API field and a regenerated SDK) or the app to recognise the folder, so both places
+  are left for the app lane. The flow is behind `VECTOR_EVERYWHERE_ENABLED`, which is off. The TUI's /trust does not
+  read `approvable`; it asks, then shows the 400 as "Could not trust this repository". The engine refusal keeps it
+  safe; its words need a decision on what the TUI says, which also covers an invited guest.
+- **CLI test.** The CLI test's harness resolves to what the real CLI prints (src/index.ts through `FormatError`), so
+  it checks that `vector trust approve` prints the refusal itself, not "Unexpected error" and the defect's message.

@@ -5,7 +5,9 @@ import yargs from "yargs"
 import { Effect } from "effect"
 import { ChildEnvironment } from "@vectordevai/core/child-environment"
 import { Global } from "@vectordevai/core/global"
+import { createJobId } from "@vectordevai/schema/everywhere"
 import { formatApproved, formatPromptTrust, formatTrustStatus, TrustCommand, trustDecision } from "@/cli/cmd/trust"
+import { FormatError } from "@/cli/error"
 import { Config } from "@/config/config"
 import { PromptTrust } from "@/config/prompt-trust"
 import { AppRuntime } from "../../src/effect/app-runtime"
@@ -81,7 +83,8 @@ describe("vector trust and held prompt files", () => {
     await repository[Symbol.asyncDispose]()
   })
 
-  // `vector trust …` in this process, as an agent (marked) or as the owner. Resolves to the failure's message, if any.
+  // `vector trust …` in this process, as an agent (marked) or as the owner. Resolves to what the real CLI prints for a
+  // failure, if any (src/index.ts): FormatError's text, or "Unexpected error" and the message when it has none.
   const run = async (args: readonly string[], marked: boolean) => {
     if (marked) process.env[ChildEnvironment.AGENT_MARKER] = "ses_agent"
     if (!marked) delete process.env[ChildEnvironment.AGENT_MARKER]
@@ -95,16 +98,23 @@ describe("vector trust and held prompt files", () => {
       .parseAsync()
       .then(
         () => undefined,
-        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        (error: unknown) => {
+          // FormatError sets the exit code a CliError carries, which would fail this test process. Bun ignores
+          // `process.exitCode = undefined`, so an unset code is restored as 0.
+          const exitCode = process.exitCode
+          const formatted = FormatError(error)
+          process.exitCode = exitCode ?? 0
+          return formatted ?? `Unexpected error: ${error instanceof Error ? error.message : String(error)}`
+        },
       )
   }
 
   // The repository's trust and the prompt files held for it, read in a fresh instance as the commands read them.
-  const state = () =>
+  const state = (directory = repository.path) =>
     AppRuntime.runPromise(
       Effect.gen(function* () {
         const store = yield* InstanceStore.Service
-        const ctx = yield* store.load({ directory: repository.path })
+        const ctx = yield* store.load({ directory })
         return yield* Effect.gen(function* () {
           const config = yield* Config.Service
           return {
@@ -132,6 +142,25 @@ describe("vector trust and held prompt files", () => {
     expect(await run(["prompts", "approve"], false)).toBeUndefined()
     expect(await run(["approve"], false)).toBeUndefined()
     expect(await state()).toEqual({ trusted: true, held: [] })
+  }, 60_000)
+
+  // EV-RM2: a Vector everywhere job's checkout, where Worktree.createUnattended puts one, holds what the job wrote, so
+  // the owner cannot approve it either, and nothing is recorded.
+  test("the owner cannot approve trust in a Vector everywhere job's checkout", async () => {
+    const project = path.join(Global.Path.data, "everywhere-worktree", "trust-cli")
+    const checkout = path.join(project, createJobId(Date.now()))
+    await fs.mkdir(checkout, { recursive: true })
+    await fs.writeFile(path.join(checkout, "vector.json"), JSON.stringify({ formatter: false }))
+    try {
+      process.chdir(checkout)
+      const refused = await run(["approve"], false)
+      process.chdir(repository.path)
+      expect(refused).toBe("A Vector everywhere job's checkout is never trusted.")
+      expect((await state(checkout)).trusted).toBe(false)
+    } finally {
+      process.chdir(repository.path)
+      await fs.rm(project, { recursive: true, force: true })
+    }
   }, 60_000)
 
   test("a terminal is told at start that prompt files are held, and lists them", async () => {
