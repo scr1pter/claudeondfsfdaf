@@ -233,3 +233,30 @@ test("callback takes the OAuth code the landing page and finishOAuth take: 1 to 
   expect(OAUTH_CODE.source).toBe(OAUTH_CODE_PATTERN.source)
   expect(OAUTH_CODE.flags).toBe(OAUTH_CODE_PATTERN.flags)
 })
+
+test("a cancelled or refused sign-in lands on a fixed notice without the state, the platform's text or a platform call", async () => {
+  const f = await linearFixture(native)
+  harness.mount({ "/oauth": linearOAuthCallback(() => f.config) })
+  const answer = (query: string) => fetch(`${harness.origin}/oauth?${query}`, { redirect: "manual" })
+  const details = new URLSearchParams({ state: "generated-state-123456789", error_description: "provider explanation" })
+  for (const [error, shown] of [["access_denied", "access_denied"], ["unauthorized_client", "other"]]) {
+    const response = await answer(`error=${error}&${details}`)
+    expect(response.status).toBe(303)
+    expect(response.headers.get("location")).toBe(`/everywhere#platform=linear&error=${shown}`)
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+    expect(response.headers.get("cache-control")).toBe("no-store")
+  }
+  for (const query of ["", "error=access_denied&code=generated&state=generated-state-123456789", "error=access%2Fdenied"])
+    expect((await answer(query)).status).toBe(400)
+  expect(native.calls).toHaveLength(0)
+})
+
+test("a code without a state Vector issued is never exchanged: the person starts the install again on /everywhere", async () => {
+  const f = await linearFixture(native)
+  harness.mount({ "/oauth": linearOAuthCallback(() => f.config) })
+  const response = await fetch(`${harness.origin}/oauth?code=directory-code`, { redirect: "manual" })
+  expect(response.status).toBe(303)
+  expect(response.headers.get("location")).toBe("/everywhere?install=linear")
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+  expect(native.calls).toHaveLength(0)
+})

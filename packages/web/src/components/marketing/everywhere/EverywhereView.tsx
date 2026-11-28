@@ -154,7 +154,7 @@ function Gate(props: {
       <section className="acct-section">
         {note}
         <p>{props.signIn}</p>
-        <a className="acct-button" href={signInPath(props.pathname, props.focus)}>
+        <a className="acct-button" href={signInPath(props.pathname, props.focus, state.install)}>
           {EVERYWHERE_COPY.signInButton}
         </a>
       </section>

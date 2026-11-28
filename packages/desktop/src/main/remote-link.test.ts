@@ -570,6 +570,231 @@ describe("jobs (R-C2)", () => {
     }
   })
 
+  const minute = 60_000
+  const hour = 60 * minute
+  const refreshTexts = (relay: MemoryRelay) => relay.texts.filter((text) => text.includes('"refresh"'))
+  /** A computer on the memory relay that only jobs want, online under fake timers with the app's own timing. */
+  async function onlineForJobs(
+    reply?: (attempt: number) => Response | undefined,
+    timing: LinkDependencies["timing"] = {},
+  ) {
+    const relay = createMemoryRelay()
+    const env = jobsComputer(relay, timing, reply)
+    env.jobs.want = false
+    await env.link.setEnabled(true)
+    env.jobs.want = true
+    jest.useFakeTimers()
+    await env.link.jobsChanged()
+    await turns(() => env.link.status().state === "online")
+    return { relay, env }
+  }
+  async function advance(ms: number) {
+    jest.advanceTimersByTime(ms)
+    await flush()
+  }
+  const failed = () => Response.json({ error: { code: "INTERNAL" } }, { status: 500 })
+
+  test("a ticket request that fails at the 12-hour refresh is tried again 10 minutes later, and its refresh goes", async () => {
+    const { relay, env } = await onlineForJobs((attempt) => (attempt === 2 ? failed() : undefined))
+    try {
+      await advance(12 * hour)
+      expect(env.attempts).toHaveLength(2)
+      expect(refreshTexts(relay)).toHaveLength(0)
+      await advance(10 * minute - 1)
+      expect(env.attempts).toHaveLength(2)
+      await advance(1)
+      expect(env.attempts).toHaveLength(3)
+      expect(env.attempts[2]! - env.attempts[1]!).toBe(10 * minute)
+      expect(refreshTexts(relay).map((text) => JSON.parse(text))).toEqual([
+        { t: "refresh", ticket: ticketFor("computer", env.stored.value!.device) },
+      ])
+      // The relay answered `refreshed`: nothing more until the next 12-hour refresh.
+      await advance(11 * hour)
+      expect(env.attempts).toHaveLength(3)
+      expect(env.sockets()).toBe(1)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test("a refresh the relay answers with ticket-invalid is minted and sent again", async () => {
+    const { relay, env } = await onlineForJobs((attempt) =>
+      attempt === 2 ? Response.json({ ticket: "vt1.computer.forged", url: RELAY, protocol: "vector.v1" }) : undefined,
+    )
+    try {
+      await advance(12 * hour)
+      expect(env.attempts).toHaveLength(2)
+      expect(refreshTexts(relay)).toHaveLength(1)
+      await advance(10 * minute)
+      expect(env.attempts).toHaveLength(3)
+      expect(refreshTexts(relay).map((text) => JSON.parse(text).ticket)).toEqual([
+        "vt1.computer.forged",
+        ticketFor("computer", env.stored.value!.device),
+      ])
+      await advance(11 * hour)
+      expect(env.attempts).toHaveLength(3)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test("a refresh the relay answers with refreshed is not tried again", async () => {
+    const { relay, env } = await onlineForJobs()
+    try {
+      await advance(12 * hour)
+      expect(env.attempts).toHaveLength(2)
+      expect(refreshTexts(relay)).toHaveLength(1)
+      await advance(11 * hour)
+      expect(env.attempts).toHaveLength(2)
+      expect(refreshTexts(relay)).toHaveLength(1)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test.each([
+    { name: "a sign-in the API refuses (401)", reply: () => Response.json({}, { status: 401 }) },
+    { name: "a plan without Remote (403)", reply: () => Response.json({}, { status: 403 }) },
+    {
+      name: "Vector Local blocking the request",
+      reply: () => {
+        throw Object.assign(new Error("blocked"), { name: "EgressBlocked" })
+      },
+    },
+  ])("a refresh refused for $name is not tried again", async ({ reply }) => {
+    const { relay, env } = await onlineForJobs((attempt) => (attempt === 2 ? reply() : undefined))
+    try {
+      await advance(12 * hour)
+      expect(env.attempts).toHaveLength(2)
+      await advance(11 * hour)
+      expect(env.attempts).toHaveLength(2)
+      expect(refreshTexts(relay)).toHaveLength(0)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test("over a simulated day with a ticket request that keeps failing, at most four retries go in 12 hours", async () => {
+    const { relay, env } = await onlineForJobs((attempt) => (attempt > 1 ? failed() : undefined))
+    try {
+      const start = env.attempts[0]!
+      // Ten-minute steps, so each retry's request reads the clock at the minute it was due.
+      for (let step = 0; step < 24 * 6; step++) await advance(10 * minute)
+      const cap = 4
+      expect(env.attempts.map((at) => (at - start) / minute)).toEqual([0, 720, 730, 750, 790, 870, 1440])
+      expect(env.attempts.length - 1).toBe(2 + cap)
+      expect(refreshTexts(relay)).toHaveLength(0)
+      expect(env.sockets()).toBe(1)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test("a refresh with no answer from the relay within 30 seconds is tried again", async () => {
+    const jobs = { want: false }
+    const env = setup({ jobs: { want: () => jobs.want, offer: () => {} }, timing: {} })
+    const refreshes = () =>
+      env
+        .socket()
+        .texts()
+        .filter((text) => text.includes('"refresh"')).length
+    await env.link.setEnabled(true)
+    jobs.want = true
+    jest.useFakeTimers()
+    try {
+      await env.link.jobsChanged()
+      await turns(() => env.sockets.length === 1)
+      env.socket().open(env.stored.value!.device)
+      await turns(() => env.link.status().state === "online")
+      await advance(12 * hour)
+      expect(env.tickets()).toBe(2)
+      expect(refreshes()).toBe(1)
+      // The relay's notice, at most one a second, can be dropped: no `refreshed` in 30 s counts as a rejection.
+      await advance(30_000 + 10 * minute - 1)
+      expect(env.tickets()).toBe(2)
+      await advance(1)
+      expect(env.tickets()).toBe(3)
+      expect(refreshes()).toBe(2)
+      env.socket().server({ t: "refreshed", exp: 0 })
+      await advance(11 * hour)
+      expect(env.tickets()).toBe(3)
+      expect(refreshes()).toBe(2)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
+  test.each(["ticket-invalid", "ticket-expired"])(
+    "a refresh the relay rejects with %s is tried again without waiting for the 30 seconds",
+    async (code) => {
+      const jobs = { want: false }
+      const env = setup({ jobs: { want: () => jobs.want, offer: () => {} }, timing: {} })
+      await env.link.setEnabled(true)
+      jobs.want = true
+      jest.useFakeTimers()
+      try {
+        await env.link.jobsChanged()
+        await turns(() => env.sockets.length === 1)
+        env.socket().open(env.stored.value!.device)
+        await turns(() => env.link.status().state === "online")
+        await advance(12 * hour)
+        expect(env.tickets()).toBe(2)
+        env.socket().server({ t: "error", code })
+        await advance(10 * minute)
+        expect(env.tickets()).toBe(3)
+      } finally {
+        env.link.stop()
+        jest.useRealTimers()
+      }
+    },
+  )
+
+  test.each([
+    { name: "the link's teardown", end: "teardown" },
+    { name: "a phone's cadence taking over", end: "phone" },
+  ])("a waiting retry ends with $name", async ({ end }) => {
+    // The phone's cadence is a day here, and its first refresh fails too, so no `refreshed` answer ends the retry.
+    const { relay, env } = await onlineForJobs((attempt) => (attempt === 2 || attempt === 3 ? failed() : undefined), {
+      refreshMs: 24 * hour,
+    })
+    try {
+      // A phone of the account, there for another computer, is attached all along.
+      relay.socket(RELAY, ["vector.v1", ticketFor("phone", "PHONE_OF_ANOTHER_MAC_A")])
+      await turns(() => env.link.status().viewers === 1)
+      await advance(12 * hour)
+      expect(env.attempts).toHaveLength(2)
+      if (end === "teardown") {
+        env.jobs.want = false
+        await env.link.jobsChanged()
+        expect(env.link.status().state).toBe("ready")
+      }
+      // A pairing opens: the attached phone's cadence takes over and refreshes at once, with no jobs retry after it.
+      if (end === "phone") {
+        await env.link.startPairing()
+        await flush()
+        expect(env.attempts).toHaveLength(3)
+      }
+      const attempts = env.attempts.length
+      // Past the 15-s request timeout, so only the link's own timers are left.
+      await advance(minute)
+      const timers = jest.getTimerCount()
+      await advance(10 * minute)
+      expect(env.attempts).toHaveLength(attempts)
+      expect(refreshTexts(relay)).toHaveLength(0)
+      // No retry timer is left: none at all after teardown, and only the ping and the phone's cadence after a takeover.
+      expect(timers).toBe(end === "phone" ? 2 : 0)
+    } finally {
+      env.link.stop()
+      jest.useRealTimers()
+    }
+  })
+
   test("a pending token lookup cannot mint a retry after Remote is disabled", async () => {
     const relay = createMemoryRelay()
     let tokenReads = 0
