@@ -1,6 +1,44 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { LocalPolicy } from "@vectordevai/core/local-mode/policy"
 
-import { githubErrorMessage, parseGithubRemote, pickBaseRemote, readTail } from "./github-api"
+import { githubErrorMessage, githubJson, parseGithubRemote, pickBaseRemote, readTail } from "./github-api"
+
+test("the Desktop GitHub client honors its named Vector Local allowance", async () => {
+  const requests: Request[] = []
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push(new Request(input, init))
+        return Response.json({ id: 42 })
+      },
+      { preconnect: () => undefined },
+    ),
+  )
+  const access = { token: "fixture-token", source: "vector" as const }
+  const previous = Egress.policy()
+  try {
+    Egress.configure(LocalPolicy.resolve({ global: { enabled: true } }))
+    await expect(githubJson(access, "/repositories/42")).rejects.toThrow("Vector Local blocked")
+    expect(requests).toEqual([])
+
+    Egress.configure(
+      LocalPolicy.resolve({
+        global: {
+          enabled: true,
+          allow: [{ source: "github", reason: "Fixture", added_at: 1, added_by: "app" }],
+        },
+      }),
+    )
+    expect(await githubJson(access, "/repositories/42")).toEqual({ id: 42 })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.headers.get("authorization")).toBe("Bearer fixture-token")
+    expect(Egress.events().at(-1)).toMatchObject({ source: "github", purpose: "integration", decision: "allow" })
+  } finally {
+    Egress.configure(previous)
+    fetch.mockRestore()
+  }
+})
 
 describe("parseGithubRemote", () => {
   test("reads every remote spelling git accepts for github.com", () => {

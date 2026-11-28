@@ -95,7 +95,22 @@ export function createJiraAdapter(deps: JiraDeps) {
       if (!view.job) return
       const current = await readJob(ctx().store, view.jid)
       if (!current || TERMINAL_STATES.has(current.state)) return
-      await persist(view, (record) => JIRA_TERMINAL.has(record.state) ? record : ({ ...record, jid: view.jid, state: jiraJobState(current), code: undefined, resultEnc: undefined }), { clearDraft: true })
+      const state = jiraJobState(current)
+      const { task, snapshot, account, linkRaw } = await assertTask(view)
+      const record = { ...task.record, ...(account ? { account } : {}) }
+      // The runner can start between reading the job above and reading its Jira task.
+      if (record.jid === view.jid && record.state === "WORKING" && state === "SUBMITTED") return
+      const next = JIRA_TERMINAL.has(record.state)
+        ? record
+        : { ...record, jid: view.jid, state, code: undefined, resultEnc: undefined }
+      const written = await writeJiraTask(ctx(), next, { expected: task, installationRaw: snapshot.raw, linkRaw, clearDraft: true })
+      if (written === "written") return
+      if (written === "changed") {
+        // Accept a lost write only when current authority still ties the task to this job and its progress is recorded.
+        const fresh = (await assertTask(view)).task.record
+        if (fresh.jid === view.jid && (fresh.state === state || fresh.state === "WORKING" || JIRA_TERMINAL.has(fresh.state))) return
+      }
+      throw new JiraFailure()
     },
     finish: async (view, result) => {
       if (!view.job) throw new JiraFailure()

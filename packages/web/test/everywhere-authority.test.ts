@@ -6,7 +6,7 @@ import { captureControl } from "../../../api/_lib/everywhere/control"
 import { createJobEvents } from "../../../api/_lib/everywhere/events"
 import { claimDelivery } from "../../../api/_lib/everywhere/dedupe"
 import { eraseEverywhereAccount, eraseInstallation } from "../../../api/_lib/everywhere/erase"
-import { createState, findLink, linkBySignIn, installationAuthority, issueLinkCode, readInstallSnapshot, readInstallState, readLinkSnapshot, recordInstall, redeemLinkCode, removeMapping, setMapping, setMappingByWord, unlink } from "../../../api/_lib/everywhere/identity"
+import { checkInstallAuthority, createState, findLink, linkBySignIn, installationAuthority, issueLinkCode, readInstallSnapshot, readInstallState, readLinkSnapshot, recordInstall, redeemLinkCode, removeMapping, setMapping, setMappingByWord, unlink } from "../../../api/_lib/everywhere/identity"
 import { createIntake } from "../../../api/_lib/everywhere/intake"
 import { createJob, jobEraser, offerJob, openReply, readJob, readJobBody, recordSeen, sweepAccount, CREATE_JOB_SCRIPT } from "../../../api/_lib/everywhere/jobs"
 import { everywhereKeys } from "../../../api/_lib/everywhere/keys"
@@ -59,6 +59,63 @@ test("missing account authority and any upstream tombstone bytes fail before dur
   f.fake.send(["SET", `vector:codium:test:tombstone:${f.account}`, "malformed-is-still-deleting"])
   await expect(recordInstall(f.context(), input)).rejects.toMatchObject({ code: "EVERYWHERE_AUTHORITY_CHANGED" })
   expect(await getValue(f.store, everywhereKeys.install(f.trigger.installation))).toBeUndefined()
+})
+
+test("the read-only installation authority check sees changes to each guard at the store boundary", async () => {
+  const f = await ready()
+  const installation = f.trigger.installation
+  const store = testEverywhereStore(f.fake.fetch)
+  const context = { ...f.context(), store }
+  const snapshot = (await readInstallSnapshot(store, installation))!
+  const before = state(f)
+  await checkInstallAuthority(context, installation, snapshot)
+  expect(state(f)).toBe(before)
+
+  const install = everywhereKeys.install(installation)
+  const hold = everywhereKeys.installHold(installation, installationAuthority(snapshot))
+  const closed = everywhereKeys.accountClosed(f.account)
+  const { tombstoneKey } = (await testAccountAuthority(f.account))!
+  for (const [key, value] of [
+    [install, `${snapshot.raw} `],
+    [hold, "held"],
+    [closed, "closed"],
+    [tombstoneKey, "deleting"],
+  ] as const) {
+    const concurrent: Store = async (command) => {
+      if (command[0] === "EVAL") f.fake.send(["SET", key, value])
+      return store(command)
+    }
+    await expect(checkInstallAuthority({ ...context, store: concurrent }, installation, snapshot))
+      .rejects.toMatchObject({ code: "EVERYWHERE_AUTHORITY_CHANGED" })
+    f.fake.send(key === install ? ["SET", key, snapshot.raw] : ["DEL", key])
+  }
+
+  f.fake.send(["SADD", tombstoneKey, "unexpected-type"])
+  await expect(checkInstallAuthority(context, installation, snapshot)).rejects.toMatchObject({ code: "PERSISTENT_STORE_UNAVAILABLE" })
+})
+
+test("the read-only installation authority check requires the fixed success reply", async () => {
+  const f = await ready()
+  const installation = f.trigger.installation
+  const store = testEverywhereStore(f.fake.fetch)
+  const context = { ...f.context(), store }
+  const snapshot = (await readInstallSnapshot(store, installation))!
+  for (const reply of [null, true, 1, ["current"], "current ", { current: true }]) {
+    const malformed: Store = async (command) => command[0] === "EVAL" ? reply : store(command)
+    await expect(checkInstallAuthority({ ...context, store: malformed }, installation, snapshot))
+      .rejects.toMatchObject({ code: "PERSISTENT_STORE_UNAVAILABLE" })
+  }
+
+  const unavailable: Store = async (command) => {
+    if (command[0] !== "EVAL") return store(command)
+    f.fake.down = true
+    try {
+      return await store(command)
+    } finally {
+      f.fake.down = false
+    }
+  }
+  await expect(checkInstallAuthority({ ...context, store: unavailable }, installation, snapshot)).rejects.toMatchObject({ code: "PERSISTENT_STORE_UNAVAILABLE" })
 })
 
 test("the account tombstone is checked inside Lua after a slow authority lookup", async () => {
