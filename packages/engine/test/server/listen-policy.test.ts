@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { randomUUID } from "node:crypto"
+import { rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { Option } from "effect"
 import { allowedHost, assertListenSecurity, guardedHostname } from "../../src/server/listen-policy"
 import { Server } from "../../src/server/server"
@@ -88,6 +92,34 @@ describe("server bind security", () => {
     } finally {
       if (previous === undefined) delete process.env.VECTOR_SERVER_PASSWORD
       else process.env.VECTOR_SERVER_PASSWORD = previous
+    }
+  })
+
+  test("only a password-protected loopback listener opens the private Everywhere preferences channel", async () => {
+    const previous = process.env.VECTOR_SERVER_PASSWORD
+    const everywherePreferencesPath = path.join(os.tmpdir(), `everywhere-preferences-${randomUUID()}.json`)
+    const opened = async (options: { hostname: string; trustedNetwork?: boolean }) => {
+      const listener = await Server.listen({ ...options, port: 0, everywherePreferencesPath })
+      try {
+        return await listener.everywherePreferences?.({ version: 1, kind: "read" })
+      } finally {
+        await listener.stop(true)
+      }
+    }
+    try {
+      delete process.env.VECTOR_SERVER_PASSWORD
+      expect(await opened({ hostname: "127.0.0.1" })).toBeUndefined()
+      process.env.VECTOR_SERVER_PASSWORD = "sidecar-secret"
+      expect(await opened({ hostname: "0.0.0.0", trustedNetwork: true })).toBeUndefined()
+      expect(await opened({ hostname: "127.0.0.1" })).toMatchObject({
+        version: 1,
+        kind: "ready",
+        snapshot: { revision: 0 },
+      })
+    } finally {
+      if (previous === undefined) delete process.env.VECTOR_SERVER_PASSWORD
+      else process.env.VECTOR_SERVER_PASSWORD = previous
+      await rm(everywherePreferencesPath, { force: true })
     }
   })
 

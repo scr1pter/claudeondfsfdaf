@@ -270,6 +270,7 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     vectorAccount: window.api.vectorAccount,
     reports: window.api.reports,
     remote: window.api.remote,
+    everywherePreferences: window.api.everywherePreferences,
     vault: window.api.vault,
     ops: window.api.ops,
     hosted: window.api.hosted,

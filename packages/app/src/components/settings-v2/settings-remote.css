@@ -82,3 +82,30 @@
   font-size: 13px;
   font-weight: 540;
 }
+
+.settings-everywhere-fields {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-everywhere-fields label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-everywhere-fields input:not([type="checkbox"]) {
+  max-width: 100%;
+  padding: 5px 8px;
+  color: var(--settings-text);
+  border: 1px solid var(--settings-line-strong, var(--vx-line-strong));
+  border-radius: 6px;
+}
+
+.settings-everywhere-fields button[type="submit"] {
+  justify-self: start;
+}
