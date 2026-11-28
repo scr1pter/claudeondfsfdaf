@@ -4,9 +4,10 @@ import { deviceBytes, toBase64url } from "./remote-crypto"
 // Test fixture (WP A42): an in-memory Remote relay that the real desktop link (remote-link.ts) and the real phone
 // client (packages/app/src/phone/remote/client.ts) both connect to. It behaves as packages/relay does on the wire: the
 // handshake's `hello` with the other side's online devices and the viewer count, `peers` when they change (with
-// `refresh` when a phone arrives), `ping`/`pong`, and data frames passed on byte for byte with the target's id swapped
-// for the sender's. A ticket here is `vt1.<role>.<device>`, minted by the tests' fake API. Everything any side sent is
-// kept, so a test can check the relay never saw plaintext. `offer` sends a job offer frame (R-C1) to every computer.
+// `refresh` when a phone arrives), `ping`/`pong`, `refreshed` or `ticket-invalid` for a refresh, and data frames passed
+// on byte for byte with the target's id swapped for the sender's. A ticket here is `vt1.<role>.<device>`, minted by the
+// tests' fake API. Everything any side sent is kept, so a test can check the relay never saw plaintext. `offer` sends a
+// job offer frame (R-C1) to every computer.
 
 export type RelaySocket = {
   readyState: number
@@ -91,6 +92,15 @@ export function createMemoryRelay() {
           if (typeof data === "string") {
             texts.push(data)
             if (data === HEARTBEAT.request) queueMicrotask(() => socket.onmessage?.({ data: HEARTBEAT.response }))
+            // A refresh with this connection's own ticket is `refreshed`; any other ticket gets a `ticket-invalid`
+            // notice, as the relay answers.
+            if (data.startsWith('{"t":"refresh"'))
+              deliver(
+                connection,
+                (JSON.parse(data) as { ticket?: unknown }).ticket === ticketFor(connection.role, connection.device)
+                  ? { t: "refreshed", exp: 0 }
+                  : { t: "error", code: "ticket-invalid" },
+              )
             return
           }
           const bytes = new Uint8Array(data)

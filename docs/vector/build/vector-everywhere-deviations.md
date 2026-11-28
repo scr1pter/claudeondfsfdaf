@@ -960,7 +960,7 @@ It matches EV-06's "The offer frame", with one stated substitution:
 - **(d2) The relay re-checks a job-only computer only at its 12-hour refresh** (review round one, recorded; no code). The relay checks standing and revocation (`standing(claims)`, `applyPlan`) and the kill flag when a computer connects or refreshes (account-relay.ts:198-202, :391-394), and the API checks the plan when it mints a ticket. Before, only a phone's connection refreshed, every 4 minutes. So a job-only computer whose account loses Remote, or whose plan drops its computer places, stays connected until its next refresh, up to 12 hours. When the API refuses that refresh's mint, `refresh()` sends nothing, and the relay closes the computer `TICKET_EXPIRED` on a wake more than `computerTicketMaxAgeMs` after its last ticket expired, as it closes today's idle computer with a phone paired and none attached. This is not a security break: the API's perk, plan and switch checks gate every offer before `job-offer` is called (EV-09), the relay sends no offer while the kill flag is set or the account is suspended, the account's `kill` ("Disconnect all") still closes the socket at once, and the desktop verifies every offer (E9).
 - **(e) The form check is the relay's, on bytes, with local constants** (critique, minor, both points taken). `OFFER_BYTES` and `JOBS_REFRESH_MS` are written in remote-link.ts rather than imported from `@vectordevai/relay/limits`, which no bundled desktop file imports today and whose header keeps §4.2's server-only values. The test file (not bundled) pins both against `RELAY_LIMITS`: the longest offer the relay forwards (`internalBodyBytes` bytes) arrives and one byte more is dropped, and over the simulated day the first refresh lands at `computerTicketMaxAgeMs / 2` and no ticket gap reaches `computerTicketMaxAgeMs`. The check replaces EV-06's `fromUtf8` (not exported, and it strips a BOM) with the stricter byte check above; schema's `OFFER_PATTERN` and the signature stay the subscriber's.
 - **(f) Hand-off, not await, with a fixed log line.** `offered()` calls `offer()` in a microtask and never waits for it, because the runner's `offer()` resolves only when its whole job ends. A synchronous throw or a rejection is caught and logged as "remote: a job offer was not taken", with no offer text, error text or meta, and never reaches the connection or onData's "remote: frame failed".
-- **(g) Refresh failures** (critique, minor, recorded; no code). A failed mint is skipped (`refresh()` sends nothing), and so is a refresh the relay rejects (`ticket-invalid` or `ticket-expired` notices are ignored by control(), as today). One failure is covered by the next refresh, 12 hours later and still inside the 24-hour window. Two in a row let the relay close the computer `TICKET_EXPIRED` on its next wake, which may be an offer's own (`internal()` runs `sweep(now)` before `jobOffer`, account-relay.ts:674), so that offer is lost for this computer; the link then reconnects with backoff, and EV-21's pending call on reconnect picks up waiting jobs. No retry timer is added.
+- **(g) Refresh failures** (critique, minor, recorded; no code). A failed mint is skipped (`refresh()` sends nothing), and so is a refresh the relay rejects (`ticket-invalid` or `ticket-expired` notices are ignored by control(), as today). One failure is covered by the next refresh, 12 hours later and still inside the 24-hour window. Two in a row let the relay close the computer `TICKET_EXPIRED` on its next wake, which may be an offer's own (`internal()` runs `sweep(now)` before `jobOffer`, account-relay.ts:674), so that offer is lost for this computer; the link then reconnects with backoff, and EV-21's pending call on reconnect picks up waiting jobs. No retry timer is added. *2026-11-27 (link-refresh-retry):* superseded: a failed or rejected jobs refresh is now retried with a backoff and a cap; see "2026-11-27, link-refresh-retry".
 - **(h) `want()` must be synchronous; one that throws counts as false** (the second half from review round one). It is read inside `wanted()`, `jobsOnly()` and `syncRefresher()`, which also run in `closed()` and `control()`, so a throw would break reconnects and the phone's cadence, not only jobs. `jobsWanted()` (:636-644) catches it and answers false. That closes a job-only connection and leaves the phone path as it is without jobs (E10's fail-closed rule; pinned by J12). It is the one try/catch this package adds, at the boundary where the link calls code it does not own on every connection decision.
 - **(i) The simulated day uses Bun's fake timers, stepped** (critique, major, taken). `jest.advanceTimersByTime` is synchronous, so a refresh's API call (after `await deps.token()`) runs only after the advance returns. The test therefore advances 24 one-hour steps and drains microtasks after each, so each mint reads the fake clock at the hour it was made; it asserts the first refresh lands in [12 h, 12 h + one step), 3,456 pings (`86_400_000 / heartbeatEveryMs`) and one or two refreshes. The second 12-hour tick falls exactly on the 24-hour boundary and is counted; a cadence shorter than 12 hours would make three. The identity is made under real timers first; under fake timers the test waits only on microtask turns (`turns()`, `flush()`), never on `until()`.
 - **(j) At most eight offers in flight** (critique, minor, first recorded with no limit; review round one, now a cap). The relay caps the API's job-offer calls at 30 an hour per account, but a compromised relay (E9's threat) could send any number of well-formed frames, each starting one signature verification. `offered()` (:742-762) now counts the offers handed to the subscriber and not yet settled (`state.offering`, released in a `finally` whether `offer()` resolves, rejects or throws) and drops a frame while eight are unsettled. A serial chain is still not used: it would hold the second job until the first ends, because the runner's `offer()` runs the job. Eight is above what the runner can hold. Its `offer()` stays unsettled for a running job's whole length, and it runs at most `COMPUTER_CAPS.atOnce.max` (3, packages/schema/src/everywhere.ts:396) jobs, so at least five places stay free for verifications and declines, which settle at once. A genuine offer is dropped only while eight are unsettled, that is under a flood; the router then waits out its 20 s, as for a computer that is not there. This answers the first critique's objection (a cap would count running jobs and swallow the decline the router waits for) in every case short of a flood. The count belongs to the link, not the connection: offers still settling keep their places across a reconnect, because the runner owns them, not the socket. A dropped frame is not logged, so a flood does not flood the log. There is no dedupe by text: the runner's `active.has(jid)` and the verifier's replay ledger (`useOnce`) already refuse a replay, and J7 hands the same text three times on purpose. **For EV-21:** if replays of one genuine offer should not each reach `useOnce`, drop a text already in flight before verifying.
@@ -2899,6 +2899,7 @@ The OAuth callbacks, every other route and api/ file, src/pages, the prune scrip
 - **The OAuth code limits differ** (review round one, finding 5): the Slack callback (api/_lib/everywhere/slack/install.ts:56) redirects codes of up to 2,048 characters, but identity.ts `OAUTH_CODE` and the landing's `OAUTH_CODE_PATTERN` (everywhere-model.ts:56) take at most 1,024, as the Linear callback does, so a Slack code of 1,025 to 2,048 characters lands and reads as `invalid-return` instead of a server problem. The callback and identity should use one limit, so a callback never redirects a code the landing refuses. Not changed here: the callbacks are outside this package.
 - **An ended job's sealed summary outlives its installation** (E13, for the lead): `eraseInstallationJobs` could clear `summaryEnc` on the installation's ended jobs; the history index has them.
 - **Cancelled and directory OAuth returns** (for the lead and the owner): `?error=access_denied&state=…` gets a blank 400 from both callbacks rather than a landing with a fixed problem, and spec §3.8's directory install (sign in first, then finish) is not built: a signed-out landing drops the return. Both matter for the listings (L2 Slack, L3 Linear).
+  *2026-11-27 (EV-23):* closed in code; see "2026-11-27, EV-23: cancelled sign-ins and directory installs". Registering the direct install URLs stays with the owner.
 - **The lane's path filter** (vector-everywhere.yml, FIT-4, review-fixes) does not cover packages/web/src/drafts/everywhere*.
 - **`?job=` is dropped by the sign-in round trip** (`signInPath` keeps the path only), and the desktop's link has none yet.
 - **No platform thread links**; the link page also reads each installation's repositories; the fragment stays in the address bar until the page's script runs.
@@ -4813,6 +4814,106 @@ body's `prUrl`, SETTLE_RECORDED's committed reply, the listeners and the release
 entries above, and no existing spec text changed meaning. vector-everywhere-spec.md §11 has a dated status line. Not
 forwarded here: `ChatContext.outside`, `taskPart`'s new parameter and the two import paths named in EV-28's list for
 vector-at-mention.yml, which are code facts the @vector lane can read from source.
+
+## 2026-11-27, link-refresh-retry: a failed jobs refresh is tried again (EV-11)
+
+Closes the handoff's "Two failed refreshes in a row on a job-only link" and supersedes EV-11 (g). Built on main
+`e522aa5b0`, which holds #138's one-shot `MODEL_PLAN_RENEWING` retry and #143's sign-out checks.
+
+- **What was wrong.** On a connection kept only for jobs, only a 503 `MODEL_PLAN_RENEWING` mint got a retry. Any other
+  failed mint, and any refresh the relay rejected, waited for the next 12-hour refresh. Two in a row let the relay close
+  the computer `TICKET_EXPIRED`, which can cost an offer.
+- **Change (packages/desktop/src/main/remote-link.ts).**
+  - `refresh(jobsLink?)` now answers `sent`, `skipped` or the mint's refusal. The jobs cadence calls the new
+    `refreshJobs(holdJobsLink())`; `holdJobsLink` holds the socket, identity and jobs cadence of the moment, and the
+    refresh, its wait and any retry go on only while all three are the same, the socket is open and jobs and Remote
+    are still wanted. A jobs refresh that changes owner mid-way (a phone's cadence taking over) is skipped.
+  - A refusal `unavailable` (the API unreachable, a 5xx, an unreadable or odd ticket, or a thrown mint) schedules one
+    retry. `signed-out`, `local-off` and `not-in-plan` (401, 402, 403, EgressBlocked) are not retried: `evaluate()` and
+    the existing paths handle them, so no more traffic reaches the account's Durable Object.
+  - A sent jobs refresh is marked pending (`state.refreshPending`). `{t:"refreshed"}` clears the mark, the failure
+    count and any waiting retry. `{t:"error", code:"ticket-invalid"|"ticket-expired"}` while the mark is set counts as
+    a rejection, and so does no `refreshed` within 30 s (`REFRESHED_WAIT_MS`), because the relay sends at most one
+    notice a second and can drop one.
+  - The delay is `timing.jobsRefreshRetryMs` (10 minutes), doubled with each failure in a row and capped at 2 hours.
+    The renewal's own short delay (at most 60 s) is kept, for the first failure in a row only. At most four retries are
+    scheduled in any 12 hours (`JOBS_REFRESH_RETRIES`). The first day with a mint that keeps failing costs the two
+    cadence refreshes and four retries; once a failure lasts past the first window, up to eight retries a day can go.
+  - `clearJobsRefreshRetry()` also clears the pending wait; it runs in `teardown()` (which also resets the failure
+    count), when the phone's cadence takes over in `syncRefresher`, and on `refreshed`. The retry window is kept
+    across reconnects. The header comment and the comment above `syncRefresher` say this.
+- **Fixture.** remote-relay.fixture.ts answers a refresh as the relay does: `refreshed` for the connection's own ticket,
+  a `ticket-invalid` notice for any other. remote-phone-app.test.ts (22 pass) and everywhere-wiring.test.ts (31 pass)
+  are unaffected; the phone client ignores both messages.
+- **Tests (remote-link.test.ts, "jobs (R-C2)").** Twelve new tests (eight cases, three of them table-driven), with
+  the app's own timing under fake timers: a 500 at
+  the 12-hour refresh is retried 10 minutes later and its refresh goes; a forged ticket the relay answers
+  `ticket-invalid` is minted and sent again; `refreshed` leaves no retry; 401, 403 and EgressBlocked are not retried;
+  over a day with a mint that keeps failing the requests come at 0, 12 h, then 10, 30, 70 and 150 minutes later, and
+  24 h (two cadence refreshes plus four retries); a refresh with no answer is retried 30 s plus 10 minutes later
+  (FakeSocket harness); a `ticket-invalid` or `ticket-expired` notice to a pending refresh is retried 10 minutes
+  later, without the 30-s wait (FakeSocket harness); and teardown or a phone's cadence taking over leaves no retry timer. The day test with
+  successful refreshes still allows at most two refreshes.
+  - Red on main's remote-link.ts: 4 fail (the 500 retry, `ticket-invalid`, the day with failing mints, the
+    unanswered refresh), 49 pass, before the `ticket-expired` case was added. Green: 55 pass. The `refreshed`, 401/403/EgressBlocked and teardown/takeover cases
+    pass on main too, because main never retries; they pin the new code. Mutations, each red: `refreshed` not
+    clearing (5 fail), no cap (1), retrying any refusal (3), teardown not clearing (1), takeover not clearing (1), the
+    short delay on every failure (1, the existing "plan still renewing" case), no doubling (1), ignoring
+    `ticket-invalid` (1), ignoring `ticket-expired` (1).
+- **Risk.** Each retry wakes the account's Durable Object; the cap bounds that at four more refreshes in 12 hours. The
+  Everywhere flag stays off, and remote-runtime.ts passes no `jobs`, so production behaviour does not change.
+
+## 2026-11-27, EV-23: cancelled sign-ins and directory installs
+
+Closes EV-23's "Cancelled and directory OAuth returns". PR #135 built the cancel half and was closed unmerged; its
+callback was reused here with the changes listed below. All of it sits behind VECTOR_EVERYWHERE_ENABLED (off) and in
+the unrouted drafts.
+
+- **What was wrong.** When a person cancelled at Slack or Linear, the platform returned
+  `?error=access_denied&state=…` and both callbacks answered a blank 400. Spec §3.8's install that starts in a
+  platform's directory (sign in first, then finish) was not built: `signInPath` dropped any intent, and a code with
+  no state got a blank 400.
+- **Callbacks.** `slackOAuthCallback` and `linearOAuthCallback` both return `oauthCallback(platform, config)` from the
+  new api/_lib/everywhere/oauth-callback.ts. It checks the method and the platform switch first, as before. A repeated
+  `code`, `state` or `error` answers 400. With an `error` and no `code`, and the error a short token
+  (`/^[a-z_]{1,64}$/`), it answers 303 to `/everywhere#platform=<p>&error=access_denied`; any other token gives
+  `error=other`. It never reads `error_description` or `error_uri`, and never puts the state in the address. A code
+  with a state works as before (`OAUTH_CODE`, the stored state shape). A code with no state, or an empty one, answers
+  303 to `/everywhere?install=<p>`: the code is dropped and never exchanged. Every redirect sets
+  `referrer-policy: no-referrer` and `cache-control: no-store`, and none makes a platform call or reads the store.
+- **Landing.** `readOAuthReturn` also accepts exactly `platform` (Slack or Linear) and `error=access_denied`, and
+  answers `{ platform, cancelled: true }`. `error=other`, a repeated key or an extra key reads as `invalid-return`.
+  `takeOAuthReturn` also strips a fragment that names `error`. `finishOAuth` turns a cancellation into the failed
+  landing `cancelled` ("You cancelled the sign-in. Start again from Connect or Link when you are ready.") and sends
+  nothing. The server's state was not used, and it expires after its 10 minutes.
+- **Directory install.** `/everywhere?install=slack|linear` is the documented direct install entry.
+  `takeInstallIntent` removes every `install` key from the address with `history.replaceState` before anything
+  starts, keeping the other query keys and the fragment, and answers the platform only for exactly one `slack` or
+  `linear`. The model's `installOnReady` holds it, and `startInstall`'s route runs once, after the lists have loaded
+  for a signed-in account (also after Try again, when the first load failed); signed out, refused or off it never
+  runs. Signed out, the state's `install` puts it in the
+  sign-in link: `signInPath(pathname, focus, install)` keeps only `job` and `install`, only on /everywhere, and its
+  same-origin check is unchanged, so no code, state or fragment reaches /login. `signInAgain` keeps it too.
+  EverywhereAccount.tsx drops the intent when the page also opened with an OAuth return, so a finishing return is not
+  cut short by a new install.
+- **Different from the plan or PR #135.** (a) The cancel redirect does not require a state: a cancel from a directory
+  install has none, and the notice is fixed text. PR #135 answered 400 without one. (b) Other error tokens map to
+  `error=other`, as the plan says, where PR #135 answered 400. (c) The page shows `error=other` as `invalid-return`
+  rather than a new problem, as the plan's `"invalid"` answer implies. (d) The plan's optional shared code limit was
+  already done by `40a6ee70c`.
+- **Tests.** everywhere-slack-oauth.test.ts and everywhere-linear-oauth.test.ts: `access_denied` with a state, an
+  `error_description` and an `error_uri` gives 303 to the fixed fragment with no-store and no-referrer; other tokens
+  give `error=other`; no parameters, a code with an error, a repeated key, an upper-case or over-long token, or a slash
+  give 400; a stateless code gives 303 to `/everywhere?install=<p>`; `native.calls` stays empty. everywhere-pages.test.ts:
+  a new describe, "cancelled sign-ins and directory installs" (the cancel through the real callback for each platform,
+  with the store untouched by the callback, no oauth-finish POST, the cancelled notice rendered and the state still
+  stored; `signInPath` with `install`; `takeInstallIntent`; the intent starting once and never while signed out or
+  off), plus eight malformed error fragments and one cancelled read in the existing landing case. Red first: against
+  main's callbacks the two new cases in each oauth file fail (400 for 303); against main's model with only a stub
+  `takeInstallIntent`, six pages cases fail. All pass with the change (7, 18 and 73 pass).
+- **Owner action left.** At the 2.0.0 move, set Slack's direct install URL and the Linear directory link to
+  `https://vectordev.ai/everywhere?install=slack` and `https://vectordev.ai/everywhere?install=linear`. Until then
+  no platform sends a person to the new entry.
 
 ## 2026-11-27, EV-RM2: the owner cannot trust a job's checkout by hand
 
