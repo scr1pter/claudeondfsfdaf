@@ -1,6 +1,7 @@
-import { ApiError, queryValue, redirect, requireMethod, type ApiRequest, type ApiResponse } from "../../http.js"
-import { platformOn, readConfig, type EverywhereConfig, type SlackConfig } from "../config.js"
-import { installToken, OAUTH, OAUTH_CODE, type InstallRecord, type OAuthExchange } from "../identity.js"
+import { ApiError } from "../../http.js"
+import { readConfig, type EverywhereConfig, type SlackConfig } from "../config.js"
+import { installToken, OAUTH, type InstallRecord, type OAuthExchange } from "../identity.js"
+import { oauthCallback } from "../oauth-callback.js"
 import type { DataKey } from "../crypto.js"
 import { createSlackClient } from "./client.js"
 import { slackId, slackObject } from "./verify.js"
@@ -47,16 +48,5 @@ export async function revokeSlack(installation: string, record: InstallRecord, k
 
 /** The callback carries no account authority. Exchange only after a signed-in bearer POST with the original state. */
 export function slackOAuthCallback(config: () => EverywhereConfig = readConfig) {
-  return async (request: ApiRequest, response: ApiResponse) => {
-    try {
-      requireMethod(request, "GET")
-      if (!platformOn(config(), "slack")) { response.statusCode = 404; response.end(); return }
-      const code = queryValue(request, "code")
-      const state = queryValue(request, "state")
-      if (!code || !OAUTH_CODE.test(code) || !state || !/^[A-Za-z0-9_-]{16,128}$/.test(state)) { response.statusCode = 400; response.end(); return }
-      response.setHeader("referrer-policy", "no-referrer")
-      // The fixed same-origin landing page reads the fragment and submits through the authenticated account API.
-      redirect(response, 303, `/everywhere#${new URLSearchParams({ platform: "slack", code, state })}`)
-    } catch { response.statusCode = 400; response.end() }
-  }
+  return oauthCallback("slack", config)
 }

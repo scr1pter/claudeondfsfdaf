@@ -90,6 +90,7 @@ import {
   readMappings,
   readOAuthReturn,
   signInPath,
+  takeInstallIntent,
   takeOAuthReturn,
   type EverywhereAccountModel,
   type EverywhereAuth,
@@ -1827,6 +1828,14 @@ describe("the OAuth landing (PUB-8)", () => {
       `platform=slack&code=&state=${STATE}`,
       `platform=slack&code=${"c".repeat(1025)}&state=${STATE}`,
       "code=only",
+      "platform=linear&error=other",
+      "platform=linear&error=server_error",
+      "platform=linear&error=access_denied&error=access_denied",
+      "platform=linear&error=access_denied&error_description=provider-details",
+      `platform=linear&error=access_denied&state=${STATE}`,
+      `platform=linear&code=A&state=${STATE}&error=access_denied`,
+      "platform=jira&error=access_denied",
+      "error=access_denied",
     ]
     for (const hash of malformed) {
       const page = standIn(`/everywhere#${hash}`)
@@ -1834,7 +1843,10 @@ describe("the OAuth landing (PUB-8)", () => {
       // Stripped all the same: a malformed code never stays in the address bar either.
       expect(page.replaced).toEqual(["/everywhere"])
     }
-    expect(readOAuthReturn(`#platform=slack&code=${"c".repeat(1024)}&state=${STATE}`)?.code).toHaveLength(1024)
+    expect(readOAuthReturn(`#platform=slack&code=${"c".repeat(1024)}&state=${STATE}`)).toMatchObject({
+      code: "c".repeat(1024),
+    })
+    expect(readOAuthReturn("#platform=slack&error=access_denied")).toEqual({ platform: "slack", cancelled: true })
     expect(readOAuthReturn(`platform=slack&code=x&state=${STATE}`)).toEqual({
       platform: "slack",
       code: "x",
@@ -2124,6 +2136,139 @@ describe("the OAuth landing (PUB-8)", () => {
     expect(b.model.state().landing).toEqual({ kind: "failed", problem: "expired-state" })
     await b.model.setSession(as(aliceRefreshed))
     expect(finishes(b.calls)).toHaveLength(1)
+  })
+})
+
+// EV-23: a person who cancels at Slack or Linear, and an install that starts in a platform's directory (spec 3.8).
+describe("cancelled sign-ins and directory installs", () => {
+  test.each(["slack", "linear"] as const)(
+    "a cancelled %s sign-in returns to a fixed notice without using the state or exchanging a code",
+    async (platform) => {
+      const exchanged: string[] = []
+      const refuse = (input: RequestInfo | URL) => {
+        exchanged.push(String(input))
+        throw new Error("A cancellation must not contact the platform")
+      }
+      mountNative(Object.assign(async (input: RequestInfo | URL) => refuse(input), { preconnect: refuse }))
+      const { state } = await startState(alice, (model) => model.startInstall(platform))
+      const before = fake.commands.length
+      const query = new URLSearchParams({ error: "access_denied", state, error_description: "provider explanation" })
+      const response = await fetch(`${harness.origin}/api/${platform}/oauth?${query}`, { redirect: "manual" })
+      expect(response.status).toBe(303)
+      const location = response.headers.get("location")!
+      expect(location).toBe(`/everywhere#platform=${platform}&error=access_denied`)
+      expect(fake.commands).toHaveLength(before)
+      const page = standIn(location)
+      const back = takeOAuthReturn(page.place)
+      expect(back).toEqual({ platform, cancelled: true })
+      expect(page.replaced).toEqual(["/everywhere"])
+
+      const b = browser()
+      await b.model.finishOAuth(back!)
+      await b.model.setSession(as(alice))
+      expect(finishes(b.calls)).toEqual([])
+      expect(b.model.state().landing).toEqual({ kind: "failed", problem: "cancelled" })
+      expect(render(b.model)).toContain(EVERYWHERE_COPY.landing.problem.cancelled)
+      // The state was not used up: it simply expires.
+      expect(fake.read(everywhereKeys.state(state))?.kind).toBe("string")
+      expect(exchanged).toEqual([])
+    },
+  )
+
+  test("the sign-in link keeps only an install of Slack or Linear on the everywhere page", () => {
+    expect(signInPath("/everywhere", undefined, "slack")).toBe("/login?returnTo=%2Feverywhere%3Finstall%3Dslack")
+    expect(signInPath("/everywhere/?code=C0DE&state=S7A7E#platform=slack", undefined, "linear")).toBe(
+      "/login?returnTo=%2Feverywhere%2F%3Finstall%3Dlinear",
+    )
+    expect(signInPath("/everywhere/link", undefined, "linear")).toBe("/login?returnTo=%2Feverywhere%2Flink")
+    expect(signInPath("//evil.example/everywhere", undefined, "slack")).toBe("/login?returnTo=%2Feverywhere")
+    const job = forgedJob()
+    expect(
+      safeReturnPath(
+        new URL(signInPath("/everywhere", job.jid, "slack"), "https://vectordev.ai").searchParams.get("returnTo"),
+      ),
+    ).toBe(`/everywhere?job=${job.jid}&install=slack`)
+  })
+
+  test("takeInstallIntent strips ?install from the address and keeps the rest", () => {
+    const job = `vej_${"0".repeat(22)}`
+    const page = standIn(`/everywhere?install=slack&job=${job}`)
+    expect(takeInstallIntent(page.place)).toBe("slack")
+    expect(page.replaced).toEqual([`/everywhere?job=${job}`])
+    expect(page.states).toEqual([{ kept: true }])
+    // The reload finds nothing to start again.
+    expect(takeInstallIntent(page.place)).toBeUndefined()
+    expect(page.replaced).toHaveLength(1)
+    expect(takeInstallIntent(standIn("/everywhere?install=linear").place)).toBe("linear")
+    for (const url of ["/everywhere?install=jira", "/everywhere?install=slack&install=slack", "/everywhere?install="]) {
+      const odd = standIn(url)
+      expect(takeInstallIntent(odd.place)).toBeUndefined()
+      expect(odd.replaced).toEqual(["/everywhere"])
+    }
+    const plain = standIn(`/everywhere?job=${job}`)
+    expect(takeInstallIntent(plain.place)).toBeUndefined()
+    expect(plain.replaced).toEqual([])
+  })
+
+  test("an install intent starts once after the session is ready, never while signed out or off", async () => {
+    const b = browser()
+    b.model.installOnReady("slack")
+    await b.model.setSession(undefined)
+    expect(b.calls).toEqual([])
+    expect(b.navigations).toEqual([])
+    // Signed out, the sign-in link carries the intent and no landing problem is shown.
+    const html = render(b.model)
+    expect(html).toContain('href="/login?returnTo=%2Feverywhere%3Finstall%3Dslack"')
+    expect(b.model.state().landing).toBeUndefined()
+
+    await b.model.setSession(as(alice))
+    expect(b.calls.filter((call) => call.init.method === "POST").map((call) => call.path)).toEqual([
+      EVERYWHERE_ROUTES.installs,
+    ])
+    expect(b.navigations).toHaveLength(1)
+    expect(new URL(b.navigations[0]!).origin + new URL(b.navigations[0]!).pathname).toBe(EVERYWHERE_AUTHORIZE.slack)
+    // Not again for a renewed token, another account or a later refresh.
+    await b.model.setSession(as(aliceRefreshed))
+    await b.model.setSession(as(bob))
+    await b.model.refresh()
+    expect(b.navigations).toHaveLength(1)
+    expect(render(b.model)).not.toContain("install%3Dslack")
+
+    const ready = browser()
+    await ready.model.setSession(as(alice))
+    await ready.model.installOnReady("linear")
+    await ready.model.refresh()
+    expect(ready.navigations).toHaveLength(1)
+    expect(new URL(ready.navigations[0]!).origin + new URL(ready.navigations[0]!).pathname).toBe(
+      EVERYWHERE_AUTHORIZE.linear,
+    )
+
+    // A first load that failed holds the intent; Try again starts it once the lists load.
+    let failures = 1
+    const retried = browser((route, init) =>
+      route === EVERYWHERE_ROUTES.installs && init.method === "GET" && failures-- > 0
+        ? Promise.resolve(Response.json({ error: { code: "EVERYWHERE_UNAVAILABLE" } }, { status: 503 }))
+        : loopback(route, init),
+    )
+    retried.model.installOnReady("slack")
+    await retried.model.setSession(as(alice))
+    expect(retried.model.state()).toMatchObject({ kind: "ready", loaded: false, problem: "unavailable" })
+    expect(retried.navigations).toEqual([])
+    await retried.model.refresh()
+    await retried.model.refresh()
+    expect(retried.calls.filter((call) => call.init.method === "POST").map((call) => call.path)).toEqual([
+      EVERYWHERE_ROUTES.installs,
+    ])
+    expect(retried.navigations).toHaveLength(1)
+
+    env = {}
+    harness.use(createAccountApi(deps()))
+    const off = browser()
+    off.model.installOnReady("slack")
+    await off.model.setSession(as(alice))
+    expect(off.model.state().kind).toBe("off")
+    expect(off.calls.filter((call) => call.init.method === "POST")).toEqual([])
+    expect(off.navigations).toEqual([])
   })
 })
 

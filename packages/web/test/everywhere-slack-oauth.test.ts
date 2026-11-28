@@ -103,3 +103,40 @@ test("callback takes the OAuth code the landing page and finishOAuth take: 1 to 
   expect(OAUTH_CODE.source).toBe(OAUTH_CODE_PATTERN.source)
   expect(OAUTH_CODE.flags).toBe(OAUTH_CODE_PATTERN.flags)
 })
+
+test("a cancelled or refused sign-in lands on a fixed notice without the state, the platform's text or a platform call", async () => {
+  const f = await fixture()
+  harness.mount({ "/oauth": slackOAuthCallback(() => f.config) })
+  const answer = (query: string) => fetch(`${harness.origin}/oauth?${query}`, { redirect: "manual" })
+  const details = new URLSearchParams({ state: "generated-state-123456789", error_description: "provider explanation", error_uri: "https://example.invalid/leave" })
+  for (const [error, shown] of [["access_denied", "access_denied"], ["server_error", "other"], ["invalid_scope", "other"]]) {
+    const response = await answer(`error=${error}&${details}`)
+    expect(response.status).toBe(303)
+    expect(response.headers.get("location")).toBe(`/everywhere#platform=slack&error=${shown}`)
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+    expect(response.headers.get("cache-control")).toBe("no-store")
+  }
+  expect((await answer("error=access_denied")).headers.get("location")).toBe("/everywhere#platform=slack&error=access_denied")
+  for (const query of ["", "state=generated-state-123456789", "error=Access%20Denied&state=generated-state-123456789", `error=${"a".repeat(65)}`,
+    "error=access_denied&code=generated-code&state=generated-state-123456789", "error=access_denied&error=server_error",
+    "error=access_denied&state=generated-state-123456789&state=generated-state-123456789"]) {
+    const response = await answer(query)
+    expect({ query, status: response.status, location: response.headers.get("location") }).toEqual({ query, status: 400, location: null })
+  }
+  expect(native.calls).toHaveLength(0)
+})
+
+test("a code without a state Vector issued is never exchanged: the person starts the install again on /everywhere", async () => {
+  const f = await fixture()
+  harness.mount({ "/oauth": slackOAuthCallback(() => f.config) })
+  for (const query of ["code=directory-code", "code=directory-code&state="]) {
+    const response = await fetch(`${harness.origin}/oauth?${query}`, { redirect: "manual" })
+    expect(response.status).toBe(303)
+    expect(response.headers.get("location")).toBe("/everywhere?install=slack")
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+    expect(response.headers.get("cache-control")).toBe("no-store")
+  }
+  for (const query of ["code=directory-code&code=other", "code=a%20b", "code=generated-code&state=short"])
+    expect((await fetch(`${harness.origin}/oauth?${query}`, { redirect: "manual" })).status).toBe(400)
+  expect(native.calls).toHaveLength(0)
+})
