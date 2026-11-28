@@ -8,10 +8,10 @@ import { emitWindowsHolderCompanion, windowsHolderBundlePlugin } from "./windows
 import { windowsHolderCompanionName } from "../src/tool/shell/windows-holder-companion-name"
 
 const temporary = process.env.RUNNER_TEMP!
-const directory = await mkdtemp(path.join(temporary, "vector-holder-build-check-"))
 const entry = fileURLToPath(new URL("../test/fixture/windows-holder-bundle.ts", import.meta.url))
 const node = Bun.which("node")
 if (!node) throw new Error("Node is required to verify the Windows Desktop engine bundle.")
+const directory = await mkdtemp(path.join(temporary, "vector-holder-build-check-"))
 const run = promisify(execFile)
 const env = {
   CI: "true",
@@ -23,6 +23,7 @@ const env = {
   TMP: directory,
   VECTOR_WINDOWS_HOLDER_BUNDLE_CHECK: "direct",
 }
+let verificationFailed = false
 try {
   const asset = assets.x64
   if (!asset) throw new Error("The Windows bundle check is missing its x64 companion.")
@@ -61,8 +62,38 @@ try {
   await writeFile(companionFile, Buffer.alloc(companion.size), { flag: "wx" })
   await requireRejection(runStandalone())
   console.log("The verified native Windows companion ran through both the Node and standalone Bun bundles.")
+} catch (error) {
+  verificationFailed = true
+  throw error
 } finally {
-  await rm(directory, { recursive: true, force: true, maxRetries: 4, retryDelay: 50 })
+  try {
+    await removeTemporaryDirectory(directory)
+  } catch (error) {
+    if (!verificationFailed) throw error
+    console.error("The Windows holder bundle check also failed to remove its temporary directory.")
+  }
+}
+
+async function removeTemporaryDirectory(directory: string) {
+  // Keep rm's four linear retries explicit for transient Windows locks after the verified children have closed.
+  const retryable = ["EBUSY", "EMFILE", "ENFILE", "ENOTEMPTY", "EPERM"]
+  for (let retry = 0; ; retry++) {
+    try {
+      await rm(directory, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (
+        retry === 4 ||
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        typeof error.code !== "string" ||
+        !retryable.includes(error.code)
+      ) {
+        throw error
+      }
+      await Bun.sleep((retry + 1) * 50)
+    }
+  }
 }
 
 async function requireRejection(result: Promise<unknown>) {
