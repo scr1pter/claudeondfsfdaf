@@ -6498,7 +6498,7 @@ These are pointers only; nothing is fixed here.
   the conversation; that is for the lead.
   `sessionStop` spreads the payload before the path's `sessionID`, and the excess-field case is pinned to 200 with the
   extras dropped. The spread order is defensive: the schema already drops extras, so no test can turn red on it.
-  Refusing extras with 400 to match `additionalProperties: false` stays open for the lead. CI: pending, not pushed.
+  Refusing extras with 400 to match `additionalProperties: false` stays open for the lead. CI: PR #184's test.yml run 46109507403 passed at `cfc5333a8`.
 - H1c's D1 and D2 and H2a's two hosted API fields: accept them, or move them to H1a.
 - New from DZ:
   - the B11 shift recorded in the checkpoint, which is a decision on whether to re-measure both sources on one day;
