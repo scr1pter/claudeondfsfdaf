@@ -65,7 +65,7 @@ jobs:
           VITE_VECTOR_SERVER_PORT: "4096"
       - name: Run connected workspace owner and action regressions
         working-directory: packages/app
-        run: bunx playwright test e2e/regression/connected-tools.spec.ts e2e/regression/directory-review.spec.ts --project chromium --workers 1 --retries 0 --trace retain-on-failure
+        run: bunx playwright test e2e/regression/connected-tools.spec.ts e2e/regression/directory-review.spec.ts e2e/regression/remote-phone.spec.ts --project chromium --workers 1 --retries 0 --trace retain-on-failure
         env:
           CI: true
           PLAYWRIGHT_WORKERS: "1"

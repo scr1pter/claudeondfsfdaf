@@ -46,7 +46,10 @@ yieldLaunchScreen("app")
 const ORIGIN = location.origin
 const RELAY = `ws://${location.hostname}:8787/v1/connect`
 const relay = createMemoryRelay()
-const connections = new URLSearchParams(location.search).get("connect") === "1"
+const params = new URLSearchParams(location.search)
+const connections = params.get("connect") === "1"
+// CW-23c (remote-phone.spec.ts): an agent's finished VectorScope review in "Fix the login", as its message and its run.
+const card = params.get("card") === "1"
 
 const NOW = Date.now()
 const ROOT = {
@@ -58,6 +61,99 @@ const ROOT = {
 }
 const REVIEW_ID = "cr_phone_review"
 let review
+// A Connect.Finding (packages/schema/src/connect.ts), shaped as phone/remote/model.test.ts builds them but with a real
+// category and bucket. The phone shows only its severity, title and place, so its body and suggestion hold PRIVATE.
+const finding = (id, severity, status, title, path, line) => ({
+  id,
+  severity,
+  category: "bug",
+  path,
+  line,
+  side: "RIGHT",
+  title,
+  body: `PRIVATE body ${id}`,
+  suggestion: `PRIVATE suggestion ${id}`,
+  source: "review",
+  bucket: "inline",
+  status,
+})
+const CARD_ID = "cr_phone_card"
+// The agent's `connect` call as a Connect.Run, requested by the agent in this conversation. Seven findings are open:
+// the phone lists five by severity and counts the rest; the fixed and dismissed ones are not on it at all.
+const cardRequest = {
+  id: CARD_ID,
+  to: "vectorscope",
+  action: "review",
+  requester: { kind: "agent", sessionID: ROOT.id },
+  requestID: "msg_card",
+  directory: ROOT.directory,
+  background: false,
+  target: { kind: "uncommitted" },
+}
+const cardRun = {
+  id: CARD_ID,
+  request: cardRequest,
+  status: "done",
+  time: { created: NOW - 50_000, started: NOW - 50_000, ended: NOW - 40_000 },
+  result: {
+    state: "completed",
+    verdict: "blocking",
+    summary: "PRIVATE summary",
+    sendsTo: "provider:anthropic",
+    findings: [
+      finding("f_n1", "nit", "open", "Spacing in the header", "src/header.ts", 3),
+      finding("f_c1", "concern", "open", "Session token kept after sign-out", "src/session.ts", 40),
+      finding("f_c2", "concern", "still-open", "Password field allows paste of 10 MB", "src/login.ts", 30),
+      finding("f_b1", "blocking", "new", "Unescaped <b>name</b> in the login form", "src/login.ts", 12),
+      finding("f_c3", "concern", "open", "Retry loop has no upper bound", "src/retry.ts", 8),
+      finding("f_c4", "concern", "open", "Error text names the user", "src/login.ts", 55),
+      finding("f_c5", "concern", "open", "Cookie lacks SameSite", "src/session.ts", 61),
+      finding("f_x1", "blocking", "fixed", "Old token check", "src/session.ts", 9),
+      finding("f_x2", "concern", "dismissed", "Dead branch kept", "src/retry.ts", 20),
+    ],
+    sessions: [],
+    notes: [],
+  },
+}
+// One assistant message with a `connect` tool part, as `GET /session/:id/message` answers (MessageV2.WithParts). The
+// part keeps the copy saved when the call began, still running: the card must read the engine's run instead.
+const cardMessages = [
+  {
+    info: { id: "msg_card", sessionID: ROOT.id, role: "assistant", time: { created: NOW - 50_000 } },
+    parts: [
+      {
+        id: "prt_card_text",
+        sessionID: ROOT.id,
+        messageID: "msg_card",
+        type: "text",
+        text: "I asked VectorScope to review the login changes.",
+      },
+      {
+        id: "prt_card_tool",
+        sessionID: ROOT.id,
+        messageID: "msg_card",
+        type: "tool",
+        tool: "connect",
+        callID: "call_card",
+        state: {
+          status: "running",
+          title: "Review with VectorScope",
+          input: { to: "vectorscope", action: "review", prompt: "PRIVATE prompt" },
+          metadata: {
+            connect: {
+              id: CARD_ID,
+              request: cardRequest,
+              status: "running",
+              progress: { message: "PRIVATE progress", at: NOW - 45_000 },
+              time: { created: NOW - 50_000 },
+            },
+          },
+          time: { start: NOW - 50_000 },
+        },
+      },
+    ],
+  },
+]
 let stopped = false
 // A Task.Info as the engine sends it (packages/schema/src/task.ts), with private text in every field the phone drops.
 const helperTask = (id, title, status, extra) => ({
@@ -129,9 +225,11 @@ const engine = {
         body: { backgroundSubagents: true, sessionStop: true, ...(connections ? { connections } : {}) },
       }
     if (connections && request.method === "GET" && request.path === "/experimental/connect/runs")
-      return { status: 200, body: review ? [review] : [] }
+      return { status: 200, body: [...(review ? [review] : []), ...(card ? [cardRun] : [])] }
     if (connections && request.method === "GET" && request.path === `/experimental/connect/runs/${REVIEW_ID}`)
       return { status: 200, body: review }
+    if (card && request.method === "GET" && request.path === `/session/${ROOT.id}/message`)
+      return { status: 200, body: cardMessages }
     if (connections && request.method === "POST" && request.path === `/experimental/session/${ROOT.id}/connect`) {
       review = {
         id: REVIEW_ID,
@@ -345,6 +443,32 @@ window.remoteFixture = {
         properties: { id, sessionID: "ses_1", permission: "bash", patterns: [command], metadata: { command }, always: [] },
       },
     })
+    wake?.()
+  },
+  // A connect_write ask as the hub raises it (engine connect/hub.ts `asker`): the hub's sentence and the patch, with
+  // the paths it writes as patterns, which the phone does not show for a connected tool's question.
+  askFix: (id) => {
+    const ask = {
+      id,
+      sessionID: ROOT.id,
+      permission: "connect_write",
+      patterns: ["PRIVATE src/login.ts"],
+      always: [],
+      metadata: {
+        description: "Apply VectorScope's fix for 1 finding.",
+        runID: CARD_ID,
+        member: "vectorscope",
+        diff: [
+          "--- a/src/login.ts",
+          "+++ b/src/login.ts",
+          "@@ -12 +12 @@",
+          "-  greet.innerHTML = name",
+          "+  greet.textContent = name // <b>safe</b>",
+        ].join("\n"),
+      },
+    }
+    permissions.push(ask)
+    queue.push({ directory: ROOT.directory, payload: { type: "permission.asked", properties: ask } })
     wake?.()
   },
   replies: () => requests.filter((request) => /^\/permission\/[^/]+\/reply$/.test(request.path)).map((request) => ({ path: request.path, body: request.body })),
