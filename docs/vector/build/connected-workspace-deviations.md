@@ -2372,7 +2372,9 @@ Docs only. PR #38 merged as `7e440a27` on 16 Nov.
 ## 2026-11-27 — CW-24: result wording inside a cloud workspace, unpinned part (CN-15 Held, partly)
 
 - Built from `origin/main` `6349f042`. This is the part of CN-15's held "Wording inside a cloud workspace" that sits
-  outside the VectorScope review pin. Without the supervisor's marker every string below is unchanged, byte for byte.
+  outside the VectorScope review pin. Without the supervisor's marker the `frame.ts`, `tool/connect.ts` and Tasks pane
+  strings below are unchanged, byte for byte. The tool description (`connect.txt`) and Hands' guest reason are
+  place-neutral rewordings and change on every engine, marker or not.
 - **Core `connect/frame.ts`.** `describeSendsTo` and `describeCost` take an optional `Where` (`{ cloudWorkspace? }`),
   and `frame()` takes it in its options. In a cloud workspace `this-computer` reads "this Vector cloud workspace (on
   Vector's servers)", a model server reads "your model server X" with no "(local)", and a local-kind cost reads "no
@@ -2385,6 +2387,8 @@ Docs only. PR #38 merged as `7e440a27` on 16 Nov.
   run in a cloud workspace reads "This Vector cloud workspace" (a run's place follows its member, per CN-15). With
   `place: "local"`, or a member the registry does not know, it still reads "This computer", so
   connect-app-validation's Tasks pane case (`connected-tools.spec.ts`, member at `place: "local"`) is unaffected.
+  Open: that includes a cloud workspace whose member list could not be read (the list read failed, or it does not
+  name the run's member). The run carries no place, so there the row still says "This computer".
 - **Hands `computer/availability.ts` (Hands' file, the reword the plan allows).** The guest reason is now
   place-neutral: "A guest is in this conversation, and only the owner can let Vector Hands use their apps." It was
   "Only the owner of this computer can let Vector use it." The Hands spec row (`hands-build-spec.md` :198) follows.
@@ -2399,15 +2403,18 @@ Docs only. PR #38 merged as `7e440a27` on 16 Nov.
     place would add a member read each for no reachable case. If a cloud-workspace page ever shows them, they need
     the member's place first.
   - Pinned VectorScope review sources, left for the VectorScope owner (`REVIEW_PIPELINE_FILES`; open PRs #162, #163,
-    #167, #168 and #170 each change `adapters/vectorscope.ts` and the `REVIEW_PIPELINE_SOURCES` digest, so a repin
-    now would collide): core `connect/policy.ts` `place()`, the `connect` permission text, the `connect_cloud`
+    #167 and #170 each change `adapters/vectorscope.ts` and the `REVIEW_PIPELINE_SOURCES` digest, as does closed
+    #168's branch, so a repin now would collide): core `connect/policy.ts` `place()`, the `connect` permission text, the `connect_cloud`
     consent's "It leaves this computer" and `localGate`'s your-cloud reason; engine `adapters/vectorscope.ts`'s
     triage note ("which sent the diff to …"), which reaches a result's notes; and engine `connect/hub.ts`'s frame of
     a run and its background note (`ConnectNote`), so a background review's note still says "this computer
     (local)". They need `cloudWorkspace` threaded from the hub and one `REVIEW_PIPELINE_SOURCES` repin, after the
     VectorScope owner agrees whether `REVIEW_PIPELINE_REVISION` stays.
   - Engine `connect/owner.ts`'s frame of an owner-started review (it already holds `flags`) is not in the plan and
-    has no framed-output test; it is the next unpinned site.
+    has no framed-output test; it is the next unpinned site. In a cloud workspace it is reached only through the
+    supervisor's background review route (`protocol.ts`: `to: "vectorscope"`, `background: true`, no task target),
+    and there it frames only a run that ended before it started working. Such a run carries no destination or cost
+    (the hub records them only for an isolated task review), so it prints neither "this computer" nor "local".
 - **Tests.** Core `test/connect/frame.test.ts` "in a cloud workspace nothing says this computer or local, and
   without it nothing changes": 12 pass; red on the old `frame.ts` (11 pass, 1 fail). Engine
   `test/tool/connect.test.ts`: the registry case asserts the description never says "this computer", and "in a cloud

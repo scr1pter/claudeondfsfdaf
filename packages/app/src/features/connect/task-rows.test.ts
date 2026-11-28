@@ -385,7 +385,8 @@ test("in a Vector cloud workspace a run on the engine's own machine never reads 
     "Sends code to: This Vector cloud workspace",
     "Code sent to: This Vector cloud workspace",
   ])
-  // A member on this computer, or one the registry does not know, keeps the words it had.
+  // A member on this computer, or one the registry does not know, keeps the words it had. In a cloud workspace too:
+  // without the member the place is unknown (a known gap, recorded in the CW-24 deviations entry).
   expect(
     taskRows({ sessionID, members: [], runs: [ended("cr_unknown", { sendsTo: "this-computer" })] }).map(
       (row) => row.sendsTo,
