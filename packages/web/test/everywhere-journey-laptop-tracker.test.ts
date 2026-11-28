@@ -60,9 +60,8 @@ const jira = new NativeJira()
 const journey = installJourney([linear, jira])
 /**
  * Linear's own budget for the first activity after `created`: spec §3.2 step 6 ("Linear 5 s with a first activity
- * within 10 s"), §4.2 and VE-12. The webhook's 5 s is met by the 200 before any store command. The adapter declares a
- * stricter `ackMs` (4,000) that no production code reads; at STORE_LATENCY_MS the first thought comes after 44 store
- * commands (4,400 ms), past that target and inside this budget: EV-20 deviation (e), a finding for the lead.
+ * within 10 s"), §4.2 and VE-12. The webhook answers before any store command. The store-latency model also checks the
+ * adapter's stricter 4 s target. The first thought takes 29 modeled commands after batching the authority checks.
  */
 const LINEAR_FIRST_ACTIVITY_MS = 10_000
 
@@ -341,8 +340,9 @@ async function linearAdmit(w: LinearWorld) {
   await bounded(Promise.race([w.ack.promise, drainAfter()]))
   expect({ firstThought: w.timing.slow ? "not posted" : "posted" }).toEqual({ firstThought: "posted" })
   // Within Linear's budget on the server's clock, with every store command before it slow, and first of all calls.
-  expect(w.timing.signalAt - w.sentAt()).toBeLessThanOrEqual(LINEAR_FIRST_ACTIVITY_MS)
   expect(w.timing.commands).toBeGreaterThan(0)
+  expect(w.timing.commands).toBeLessThanOrEqual(29)
+  expect(w.timing.signalAt - w.sentAt()).toBeLessThanOrEqual(Math.min(LINEAR_FIRST_ACTIVITY_MS, w.adapter.ackMs))
   expect(linear.calls[0]?.operation).toBe("create")
   expect(input(linear.calls[0])).toMatchObject({
     agentSessionId: linear.session,
@@ -628,7 +628,11 @@ async function linearOfflineJourney(w: LinearWorld) {
   expect(ended[0]!.variables).toEqual({
     id: linear.session,
     input: {
-      plan: linearPlan("pushing", "completed"),
+      plan: [
+        { content: "Read the workspace", status: "canceled" },
+        { content: "Make the changes", status: "canceled" },
+        { content: "Prepare the result", status: "canceled" },
+      ],
       addedExternalUrls: [{ label: "Vector job", url: `https://vectordev.ai/everywhere?job=${waiting.jid}` }],
     },
   })
@@ -764,10 +768,10 @@ async function jiraJourney(w: JiraWorld) {
   expect(JSON.stringify(body)).not.toContain("Edited summary")
   expect(texts).not.toContain("Edited description")
   expect(JSON.stringify(body)).not.toContain(jira.token)
-  // Claimed but not started: the task is not terminal and still says it waits (deviation (h)).
+  // A claim confirms pickup. The task remains submitted until the computer reports that it started.
   expect(taskOf(await w.poll(task))).toEqual({
     state: "TASK_STATE_SUBMITTED",
-    text: "Received your request. Waiting for your computer.",
+    text: "Your computer picked up the request and is preparing to start.",
   })
   expect((await readJiraTask(w.f.store, task))?.record).toMatchObject({ state: "SUBMITTED", jid })
   await w.gates.mapping.entered.promise

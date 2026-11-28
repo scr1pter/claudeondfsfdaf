@@ -8,7 +8,7 @@ import {
   type AccountAuthorityPort,
 } from "../../../../api/_lib/everywhere/authority"
 import { FINISH_DELIVERY_SCRIPT } from "../../../../api/_lib/everywhere/dedupe"
-import { CREATE_STATE_SCRIPT, LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
+import { CHECK_INSTALL_AUTHORITY_SCRIPT, CREATE_STATE_SCRIPT, LINK_TRIES_SCRIPT } from "../../../../api/_lib/everywhere/identity"
 import {
   RECORD_SEEN_SCRIPT,
   CREATE_JOB_SCRIPT,
@@ -77,6 +77,7 @@ export class FakeStore {
   private readonly scripts = new Map<string, Script>([
     [AUDIT_APPEND_SCRIPT, (keys, argv) => this.auditAppend(keys, argv)],
     [ATOMIC_COMMANDS_SCRIPT, (_keys, argv) => this.atomicCommands(argv)],
+    [CHECK_INSTALL_AUTHORITY_SCRIPT, () => "current"],
     [CREATE_STATE_SCRIPT, (keys, argv) => this.createState(keys, argv)],
     [COUNT_JOB_SCRIPT, (keys, argv) => this.countJob(keys, argv)],
     [SWAP_SCRIPT, (keys, argv) => this.swap(keys, argv)],
