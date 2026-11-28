@@ -1,9 +1,16 @@
 import type { Event, PermissionRequest } from "@vectordevai/sdk/v2/client"
 import { base64Encode } from "@vectordevai/core/util/encode"
+import { helperOwnsAskPhoneAlert } from "../../context/helper-phone-alert"
 import { isInternalSession } from "../../utils/internal-sessions"
 import { rendererNotifies } from "../layout-computer-notify"
 
-type Session = { id: string; title?: string | null; parentID?: string; internal?: string }
+type Session = {
+  id: string
+  title?: string | null
+  parentID?: string
+  internal?: string
+  metadata?: Record<string, unknown>
+}
 type Kind = "permission" | "question"
 
 /** Shared by both visual layouts; only observed asks create alerts, never a re-read of a pending list. */
@@ -64,8 +71,9 @@ export function createAskNotificationController(input: {
       const href = `/${base64Encode(event.name)}/session/${detail.properties.sessionID}`
       const notifies = rendererNotifies(detail, input.desktopOwns())
       const preferences = input.preferences()
-      // The paired phones hear of every ask that alerts here, whoever owns the OS notification or is looking at it.
-      void input.phoneAlert?.(session)
+      // The paired phones hear of every ask that alerts here, whoever owns the OS notification or is looking at it. A
+      // running helper's ask reaches them from createHelperPhoneAlerts instead, titled with its conversation (B09).
+      if (!helperOwnsAskPhoneAlert(session)) void input.phoneAlert?.(session)
       if (kind === "permission" && preferences.permissionSound) void input.sound()
       if (notifies && (kind === "permission" ? preferences.permissions : preferences.agent))
         void input.notify(copy.title, copy.description, href)

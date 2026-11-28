@@ -112,9 +112,19 @@ describe("createHelperPhoneAlerts", () => {
     expect(sent).toEqual([{ event: "needsYou", title: "A helper was interrupted: Fix the login", route: "sessions" }])
   })
 
-  test("nothing goes for a conversation being looked at, one that is internal, a helper or unknown, or once disposed", async () => {
+  test("a wait reaches the phone whoever looks at its conversation here; an interruption does not", async () => {
+    // A helper's ask has no other phone push (ask-notification-controller.ts leaves it to this path), and an ask's push
+    // never depended on what this computer shows: the person may be driving the conversation from the phone.
+    const asked = fixture({ viewed: true })
+    await asked.alerts("/repo", waiting(NOW - 10))
+    expect(asked.sent).toEqual([{ event: "needsYou", title: "A helper needs you: Fix the login", route: "sessions" }])
+    const interrupted = fixture({ viewed: true })
+    await interrupted.alerts("/repo", helper({ status: "cancelled", interruption: { at: NOW - 30, cause: "crash" } }))
+    expect(interrupted.sent).toEqual([])
+  })
+
+  test("nothing goes for a conversation that is internal, a helper or unknown, or once disposed", async () => {
     for (const state of [
-      { viewed: true },
       { session: { ...ROOT, internal: "vectorscope" } },
       { session: { ...ROOT, parentID: "ses_above" } },
       { session: undefined },
