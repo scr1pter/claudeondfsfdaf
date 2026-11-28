@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process"
 import { untrustedChildEnvironment } from "@vectordevai/core/child-environment"
+import { Egress } from "@vectordevai/core/local-mode/egress"
+import { EgressGuard } from "@vectordevai/core/local-mode/guard"
 
 // GitHub's REST and GraphQL APIs, called with the user's own GitHub sign-in. The Pull Requests panel, Vectorscope
 // and the CI view use these instead of the GitHub CLI, so nothing has to be installed. This module stays free of
@@ -33,7 +35,7 @@ export async function githubFetch(
   path: string,
   init: { method?: string; body?: unknown; accept?: string; timeoutMs?: number } = {},
 ) {
-  const response = await fetch(`${access.apiUrl ?? API_URL}${path}`, {
+  const response = await Egress.fetch("github", `${access.apiUrl ?? API_URL}${path}`, {
     method: init.method ?? "GET",
     headers: {
       authorization: `Bearer ${access.token}`,
@@ -45,6 +47,7 @@ export async function githubFetch(
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
     signal: AbortSignal.timeout(init.timeoutMs ?? 30_000),
   }).catch((error: unknown) => {
+    if (error instanceof EgressGuard.EgressBlocked) throw new GithubRequestError(error.message, 0)
     if (error instanceof Error && error.name === "TimeoutError")
       throw new GithubRequestError("GitHub took too long to answer. Try again.", 0)
     throw new GithubRequestError(NETWORK_ERROR, 0)
