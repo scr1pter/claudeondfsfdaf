@@ -32,6 +32,7 @@ import { ComputerAvailability } from "@/computer/availability"
 import { ComputerPrune } from "@/computer/prune"
 import { ComputerProtection } from "@/computer/protection"
 import { Config } from "@/config/config"
+import { EverywherePreferences } from "@/config/everywhere-preferences"
 import { Workspace } from "@/control-plane/workspace"
 import { Env } from "@/env"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -365,6 +366,7 @@ const app = LayerNode.group([
 
 export function createRoutes(
   corsOptions?: CorsOptions & { readonly guardedHostname?: string },
+  everywherePreferencesPath?: string,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   const locationServiceMapV2 = buildLocationServiceMap([[Teams.node, VectorTeams.node]])
 
@@ -389,6 +391,7 @@ export function createRoutes(
       HttpServer.layerServices,
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
+    Layer.provide(Layer.succeed(EverywherePreferences.StatePath)(everywherePreferencesPath)),
     Layer.provideMerge(Observability.layer),
 
     Layer.provide(sessionLocationLayer),
