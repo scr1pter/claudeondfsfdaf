@@ -111,10 +111,12 @@ function taskRow(run: Connect.Run, member: Connect.Member | undefined): TaskRow 
       run.request.action === "review" && result && (result.state === "completed" || result.state === "partial")
         ? verdictLabel(result)
         : undefined,
-    // A finished run reports where its code went; it never borrows the member's current destination.
+    // A finished run reports where its code went; it never borrows the member's current destination. A run's place is
+    // its member's (CN-15), so a run whose member is in a Vector cloud workspace reads "This Vector cloud workspace".
+    // Without its member the place is unknown and the row keeps "This computer".
     sendsTo: result
-      ? `Code sent to: ${destinationLabel(result.sendsTo)}`
-      : `Sends code to: ${destinationLabel(member?.sendsTo)}`,
+      ? `Code sent to: ${destinationLabel(result.sendsTo, member?.place)}`
+      : `Sends code to: ${destinationLabel(member?.sendsTo, member?.place)}`,
     spend: spend(run, member),
     detail: detail(run),
     cancellable: run.status !== "done",

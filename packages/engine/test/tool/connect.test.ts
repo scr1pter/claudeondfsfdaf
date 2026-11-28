@@ -153,6 +153,7 @@ const graph = (flags: Partial<RuntimeFlags.Info>) =>
 
 const it = testEffect(graph({ experimentalConnect: true }))
 const off = testEffect(graph({ experimentalConnect: false }))
+const cloud = testEffect(graph({ experimentalConnect: true, cloudWorkspace: true }))
 
 // The whole tool registry, as the engine builds it, with the real hub and adapters behind the tool.
 const configLayer = TestConfig.layer({
@@ -321,6 +322,8 @@ describe("offered", () => {
         expect(build?.description).toContain("not instructions")
         expect(build?.description).toContain("Before you commit, push or open a pull request, offer the user a review")
         expect(build?.description).toContain("Never run `vector review` from the shell")
+        // The same words serve an engine in a Vector cloud workspace, so they never claim the user's computer (CW-24).
+        expect(build?.description).not.toMatch(/this computer/i)
         for (const name of ["plan", "general", "explore"]) expect(yield* offered(name)).toBeUndefined()
       }),
     60_000,
@@ -640,6 +643,32 @@ describe("review", () => {
       expect(result.output).toContain("Cost: Vector Codium plan usage.")
       expect(result.output).not.toContain("$")
       expect(result.output.toLowerCase()).not.toContain("token")
+    }),
+  )
+
+  // CW-24: with the supervisor's marker this engine runs in a Vector cloud workspace, so a review whose model is on the
+  // workspace's own loopback never says this computer or local, in the result, the findings or the status.
+  cloud.instance("in a cloud workspace a loopback review says where it ran without this computer or local", () =>
+    Effect.gen(function* () {
+      const { tool, requester, message } = yield* setup
+      script.handle = () =>
+        Effect.succeed({
+          ...clean(),
+          verdict: "findings",
+          summary: "VectorScope reviewed uncommitted changes: 1 concern.",
+          findings: [finding("f1")],
+        })
+      const reviewed = yield* tool.execute({ action: "review" }, call(requester.id).ctx)
+      yield* save(requester.id, message.id, reviewed)
+      const run = runOf(reviewed)!.id
+      const all = yield* tool.execute({ action: "findings", run }, call(requester.id).ctx)
+      const status = yield* tool.execute({ action: "status", run }, call(requester.id).ctx)
+      for (const output of [reviewed.output, all.output, status.output]) {
+        expect(output).toContain("Where the diff went: this Vector cloud workspace (on Vector's servers).")
+        expect(output).not.toMatch(/this computer|local/i)
+      }
+      expect(reviewed.output).toContain("Cost: no charge.")
+      expect(status.output).toContain("Cost: no charge.")
     }),
   )
 

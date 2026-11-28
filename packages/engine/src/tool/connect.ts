@@ -237,7 +237,10 @@ export const ConnectTool = Tool.define(
       const comparable = result.state === "completed" || result.state === "partial"
       return {
         title: titleOf(run),
-        output: ConnectFrame.frame(result, comparable ? { run: run.id } : {}),
+        output: ConnectFrame.frame(result, {
+          ...(comparable ? { run: run.id } : {}),
+          cloudWorkspace: flags.cloudWorkspace,
+        }),
         metadata: ConnectHub.metadata(run),
       }
     })
@@ -311,7 +314,7 @@ export const ConnectTool = Tool.define(
       const lines = [
         `${found.id}: ${ConnectFindings.targetWords(found.result.target ?? found.request.target)}, verdict ${ConnectFrame.shownVerdict(found.result)}.`,
         ...(found.result.sendsTo
-          ? [`Where the diff went: ${ConnectFrame.describeSendsTo(found.result.sendsTo)}.`]
+          ? [`Where the diff went: ${ConnectFrame.describeSendsTo(found.result.sendsTo, flags)}.`]
           : []),
         ...(missing.length
           ? [`This review has no finding ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? " …" : ""}.`]
@@ -334,7 +337,7 @@ export const ConnectTool = Tool.define(
       if (params.run !== undefined) {
         const found = yield* hub.get(params.run, ctx.sessionID)
         if (!found) return plain(params, "No run", `There is no run ${params.run} in this conversation.`)
-        return plain(params, titleOf(found), describe(found).join("\n"))
+        return plain(params, titleOf(found), describe(found, flags).join("\n"))
       }
       const list = (yield* hub.runs({ sessionID: ctx.sessionID })).slice(0, STATUS_RUNS)
       if (list.length === 0) return plain(params, "No runs", "This conversation has no connect runs yet.")
@@ -449,13 +452,13 @@ function line(run: Connect.Run): string {
 }
 
 /** A run in a few lines, for `status` with a run id. Only Vector's own words: no finding text. */
-function describe(run: Connect.Run): string[] {
+function describe(run: Connect.Run, where: ConnectFrame.Where): string[] {
   const lines = [line(run)]
   const result = run.result
   if (!result) return lines
   if (result.summary) lines.push(result.summary)
-  if (result.sendsTo) lines.push(`Where the diff went: ${ConnectFrame.describeSendsTo(result.sendsTo)}.`)
-  const cost = ConnectFrame.describeCost(result.cost, result.sendsTo)
+  if (result.sendsTo) lines.push(`Where the diff went: ${ConnectFrame.describeSendsTo(result.sendsTo, where)}.`)
+  const cost = ConnectFrame.describeCost(result.cost, result.sendsTo, where)
   if (cost) lines.push(`Cost: ${cost}.`)
   if (result.findings.length) lines.push(`Call connect with action findings and run ${run.id} to read the findings.`)
   return lines

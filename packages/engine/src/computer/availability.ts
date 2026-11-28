@@ -31,7 +31,8 @@ const MESSAGES: Record<Reason, string> = {
   "macos-version": `${Hands.NAME} needs macOS 14 or later.`,
   policy: `Your company turned off ${Hands.NAME}.`,
   offline: `Vector Local's Web access is None, and apps ${Hands.NAME} uses could reach the network without Vector seeing it, so ${Hands.NAME} is off. Change Web access in Vector Local to use it.`,
-  guest: "Only the owner of this computer can let Vector use it.",
+  // Place-neutral: the engine may run in a Vector cloud workspace, where its machine is not the owner's computer.
+  guest: `A guest is in this conversation, and only the owner can let ${Hands.NAME} use their apps.`,
   wsl: `${Hands.NAME} needs Vector's engine to run on Windows, not inside WSL.`,
   elevated: `Vector is running as administrator, so ${Hands.NAME} is off. Restart Vector normally to use it.`,
   "may-train": `${Hands.NAME} can't send your screen to a model that may train on it.`,

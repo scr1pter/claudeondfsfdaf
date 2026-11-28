@@ -145,6 +145,48 @@ describe("framing a result for the model", () => {
     expect(ConnectFrame.describeCost({ kind: "local" }, "provider:ollama")).toBe("no charge")
   })
 
+  // CW-24: a Vector cloud workspace's engine runs on Vector's servers, so what it ran on is never "this computer" or
+  // "local"; without the marker every line keeps its words.
+  test("in a cloud workspace nothing says this computer or local, and without it nothing changes", () => {
+    const loopback = result({ sendsTo: "this-computer", cost: { kind: "local" } })
+    const cloud = ConnectFrame.frame(loopback, { run: "cr_1", cloudWorkspace: true })
+    expect(cloud).toContain("Where the diff went: this Vector cloud workspace (on Vector's servers).")
+    expect(cloud).toContain("Cost: no charge.")
+    expect(cloud).not.toMatch(/this computer|local/i)
+    const server = ConnectFrame.frame(result({ sendsTo: "model-server:gpu.lan:11434" }), { cloudWorkspace: true })
+    expect(server).toContain("Where the diff went: your model server gpu.lan:11434.")
+    expect(server).toContain("Cost: no charge.")
+    expect(server).not.toMatch(/this computer|local/i)
+    expect(ConnectFrame.describeSendsTo("this-computer", { cloudWorkspace: true })).toBe(
+      "this Vector cloud workspace (on Vector's servers)",
+    )
+    expect(ConnectFrame.describeSendsTo("model-server:gpu.lan:11434", { cloudWorkspace: true })).toBe(
+      "your model server gpu.lan:11434",
+    )
+    expect(ConnectFrame.describeCost({ kind: "local" }, "this-computer", { cloudWorkspace: true })).toBe("no charge")
+    // The other destinations and costs read the same either way.
+    for (const sendsTo of ["vector-codium", "provider:anthropic"] as const)
+      expect(ConnectFrame.describeSendsTo(sendsTo, { cloudWorkspace: true })).toBe(
+        ConnectFrame.describeSendsTo(sendsTo),
+      )
+    expect(ConnectFrame.describeCost({ kind: "free" }, "provider:openrouter", { cloudWorkspace: true })).toBe(
+      "no charge (free model)",
+    )
+    // Unset, or false, the words are the ones an engine on the user's computer writes, byte for byte.
+    for (const where of [{}, { cloudWorkspace: false }]) {
+      expect(ConnectFrame.frame(loopback, { run: "cr_1", ...where })).toBe(
+        ConnectFrame.frame(loopback, { run: "cr_1" }),
+      )
+      expect(ConnectFrame.describeSendsTo("this-computer", where)).toBe("this computer (local)")
+      expect(ConnectFrame.describeSendsTo("model-server:gpu.lan:11434", where)).toBe(
+        "your model server gpu.lan:11434 (local)",
+      )
+      expect(ConnectFrame.describeCost({ kind: "local" }, "this-computer", where)).toBe("no charge (local model)")
+    }
+    expect(ConnectFrame.frame(loopback)).toContain("Where the diff went: this computer (local).")
+    expect(ConnectFrame.frame(loopback)).toContain("Cost: no charge (local model).")
+  })
+
   test("refused, failed and cancelled runs say so", () => {
     expect(
       ConnectFrame.frame(

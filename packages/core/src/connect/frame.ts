@@ -35,22 +35,36 @@ export function escapeUntrusted(text: string): string {
   return text.replace(FORMAT, "").replace(LESS, "&lt;")
 }
 
+/**
+ * Where the engine writing the words runs. In a Vector cloud workspace (the supervisor's runtime marker) the engine's
+ * own machine is on Vector's servers, so nothing it ran on is "this computer" or "local". Omitted, the words are the
+ * ones for an engine on the user's computer, unchanged.
+ */
+export type Where = { readonly cloudWorkspace?: boolean }
+
 /** Where code went, in plain words. "local" is said only for this computer or a model server the user lists. */
-export function describeSendsTo(sendsTo: Connect.SendsTo): string {
-  if (sendsTo === "this-computer") return "this computer (local)"
+export function describeSendsTo(sendsTo: Connect.SendsTo, where: Where = {}): string {
+  if (sendsTo === "this-computer")
+    return where.cloudWorkspace ? "this Vector cloud workspace (on Vector's servers)" : "this computer (local)"
   if (sendsTo === "vector-codium") return "Vector Codium"
-  if (sendsTo.startsWith("model-server:")) return `your model server ${sendsTo.slice("model-server:".length)} (local)`
+  if (sendsTo.startsWith("model-server:"))
+    return `your model server ${sendsTo.slice("model-server:".length)}${where.cloudWorkspace ? "" : " (local)"}`
   return `${sendsTo.slice("provider:".length)}, a model provider you configured`
 }
 
 /** What a run cost, in plain words. Vector Codium is plan usage, never dollars or tokens. */
-export function describeCost(cost: Connect.Cost | undefined, sendsTo?: Connect.SendsTo): string | undefined {
+export function describeCost(
+  cost: Connect.Cost | undefined,
+  sendsTo?: Connect.SendsTo,
+  where: Where = {},
+): string | undefined {
   if (!cost) return undefined
   if (cost.kind === "plan" || sendsTo === "vector-codium") return "Vector Codium plan usage"
   if (cost.kind === "priced")
     return cost.usd !== undefined ? `$${cost.usd.toFixed(2)}` : "priced; the amount is not known"
   if (cost.kind === "free") return "no charge (free model)"
-  if (cost.kind === "local") return Connect.isLocal(sendsTo) ? "no charge (local model)" : "no charge"
+  if (cost.kind === "local")
+    return Connect.isLocal(sendsTo) && !where.cloudWorkspace ? "no charge (local model)" : "no charge"
   return "not known"
 }
 
@@ -171,7 +185,7 @@ export function briefBlock(findings: readonly Connect.Finding[], options: { read
  */
 export function frame(
   result: Connect.Result,
-  options: { readonly run?: string; readonly maxChars?: number } = {},
+  options: { readonly run?: string; readonly maxChars?: number } & Where = {},
 ): string {
   const lines: string[] = []
   const shown = shownVerdict(result)
@@ -184,8 +198,8 @@ export function frame(
     if (result.summary) lines.push(result.summary)
     lines.push(`Verdict: ${VERDICT_WORDS[shown]}.`)
   }
-  if (result.sendsTo) lines.push(`Where the diff went: ${describeSendsTo(result.sendsTo)}.`)
-  const cost = describeCost(result.cost, result.sendsTo)
+  if (result.sendsTo) lines.push(`Where the diff went: ${describeSendsTo(result.sendsTo, options)}.`)
+  const cost = describeCost(result.cost, result.sendsTo, options)
   if (cost) lines.push(`Cost: ${cost}.`)
   if (result.cached) lines.push("VectorScope returned its stored review of this commit.")
   if (result.notes.length) lines.push("Notes:", ...result.notes.map((note) => `- ${note}`))

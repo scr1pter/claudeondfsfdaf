@@ -374,6 +374,26 @@ test("a finished row names only where its result says the code went", () => {
   ])
 })
 
+test("in a Vector cloud workspace a run on the engine's own machine never reads this computer (CW-24)", () => {
+  const cloud: Connect.Member = { ...vectorscope, place: "vector-cloud" }
+  const rows = taskRows({
+    sessionID,
+    members: [cloud],
+    runs: [going("cr_going"), ended("cr_here", { sendsTo: "this-computer" })],
+  })
+  expect(rows.map((row) => row.sendsTo)).toEqual([
+    "Sends code to: This Vector cloud workspace",
+    "Code sent to: This Vector cloud workspace",
+  ])
+  // A member on this computer, or one the registry does not know, keeps the words it had. In a cloud workspace too:
+  // without the member the place is unknown (a known gap, recorded in the CW-24 deviations entry).
+  expect(
+    taskRows({ sessionID, members: [], runs: [ended("cr_unknown", { sendsTo: "this-computer" })] }).map(
+      (row) => row.sendsTo,
+    ),
+  ).toEqual(["Code sent to: This computer"])
+})
+
 test("a Codium member's runs show plan usage, never dollars or tokens", () => {
   const rows = taskRows({
     sessionID,

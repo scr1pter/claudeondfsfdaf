@@ -336,7 +336,30 @@ test("session gates preserve attended reader models and withhold unreviewed free
   expect(ComputerAvailability.sessionReason({ freeModel: { dataPolicy: "may-train" } })).toBe("may-train")
   expect(ComputerAvailability.sessionReason({ freeModel: {} })).toBe("may-train")
   expect(ComputerAvailability.message("desktop")).toContain(`${Hands.NAME} works in the Vector desktop app`)
-  expect(ComputerAvailability.message("guest")).toBe("Only the owner of this computer can let Vector use it.")
+  expect(ComputerAvailability.message("guest")).toBe(
+    `A guest is in this conversation, and only the owner can let ${Hands.NAME} use their apps.`,
+  )
+})
+
+// CW-24: an engine in a Vector cloud workspace runs on Vector's servers, and the connect list shows these reasons
+// there, so none of them calls the engine's machine "this computer".
+test("no reason calls the engine's machine this computer", () => {
+  // Every reason, which the type checks.
+  const reasons = Object.keys({
+    desktop: true,
+    platform: true,
+    "macos-version": true,
+    policy: true,
+    offline: true,
+    guest: true,
+    wsl: true,
+    elevated: true,
+    "may-train": true,
+    unattended: true,
+    disabled: true,
+    "cloud-workspace": true,
+  } satisfies Record<ComputerAvailability.Reason, true>) as ComputerAvailability.Reason[]
+  expect(reasons.filter((reason) => /this computer/i.test(ComputerAvailability.message(reason)))).toEqual([])
 })
 
 test("the offered schema and decoder follow the bridge action list, including batches", () => {
