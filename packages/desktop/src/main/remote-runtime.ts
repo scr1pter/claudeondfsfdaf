@@ -13,6 +13,7 @@ import { getStore } from "./store"
 import { vaultSecrets } from "./vault-secrets"
 import { onVectorAccountChanged, vectorAccount } from "./vector-account-runtime"
 import { broadcastRendererStatus } from "./renderer-status"
+import type { EverywhereJobsDeps } from "./everywhere-wiring"
 
 // Vector Remote in the running app (WP A41): the link (remote-link.ts) and the phone-alert sender (remote-notify.ts)
 // with Electron's pieces. The identity and the paired phones are sealed in-process with the key the OS credential store
@@ -31,6 +32,7 @@ function broadcast(status: RemoteStatus) {
 /** Starts Remote once the local engine is up. Safe to call once per launch. */
 export function startRemote(input: {
   engine: { url: string; password: string }
+  preferences?: EverywhereJobsDeps["preferences"]
   packaged: boolean
   watchingChanged: () => void
   log: (message: string, meta?: Record<string, unknown>) => void
@@ -42,6 +44,7 @@ export function startRemote(input: {
   // Vector everywhere's jobs (R-C3): the link takes them as its subscriber, and they read the link back once started.
   const jobs = createEverywhereJobs({
     engine: input.engine,
+    preferences: input.preferences,
     token: () => vectorAccount.token(),
     events: (signal) => events.events(signal),
     ledgerPath: path.join(app.getPath("userData"), "everywhere", "runner.json"),
@@ -130,6 +133,10 @@ export function stopRemote() {
 
 export const remoteLink = () => state.link
 export const remoteNotify = () => state.notify
+export const refreshEverywhereJobs = async () => {
+  await state.jobs?.refresh()
+}
+export const waitingForEverywhereJobs = () => state.jobs?.want() === true
 
 /** What the renderer sees before the engine is up and Remote has started. */
 export const REMOTE_STARTING: RemoteStatus = {
