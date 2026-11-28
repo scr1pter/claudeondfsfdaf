@@ -1056,9 +1056,13 @@ export async function installGuards(ctx: Pick<IdentityContext, "store" | "accoun
     { key: everywhereKeys.install(installation), value: snapshot.raw },
     { key: everywhereKeys.installHold(installation, installationAuthority(snapshot)) }]
 }
+export const CHECK_INSTALL_AUTHORITY_SCRIPT = "return 'current'"
+
 export async function checkInstallAuthority(ctx: Pick<IdentityContext, "store" | "accountAuthority">, installation: string, snapshot: { readonly record: InstallRecord; readonly raw: string }) {
-  for (const guard of await installGuards(ctx, installation, snapshot))
-    if (await getValue(ctx.store, guard.key) !== guard.value) throw authorityChanged()
+  // The guard wrapper uses GET for each key in the same atomic read, so wrong-type keys still fail closed.
+  const guards = await installGuards(ctx, installation, snapshot)
+  const verdict = await authorizedScript(ctx.store, guards, CHECK_INSTALL_AUTHORITY_SCRIPT, [], [])
+  if (verdict !== "current") throw storeUnavailable()
 }
 
 /** Erasure/owner retry only: retains the exact closing generation instead of recapturing a new active grant. */
