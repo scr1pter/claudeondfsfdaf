@@ -1029,6 +1029,48 @@ it.instance(
 )
 
 it.instance(
+  "incomplete batched Git metadata falls back to individual worktree reads",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture
+      yield* f.start
+      yield* write(f.workPath, "child.txt", "captured\n")
+      const real = yield* Git.Service
+      const fields = ["--git-dir", "--git-common-dir", "--show-toplevel", "--git-path index"]
+      const batch = fields.join(" ")
+      const reads: string[] = []
+      const directory = path.resolve(f.workPath)
+      const isolation = yield* TaskIsolation.make.pipe(
+        Effect.provideService(Git.Service, {
+          ...real,
+          run(args, options) {
+            const revParse = args.indexOf("rev-parse")
+            if (revParse < 0 || path.resolve(options.cwd) !== directory) return real.run(args, options)
+            const query = args.slice(revParse + 1).join(" ")
+            if (query === batch || fields.includes(query)) reads.push(query)
+            if (query !== batch) return real.run(args, options)
+            const stdout = Buffer.from("first\nsecond\nthird\n")
+            return Effect.succeed({
+              exitCode: 0,
+              stdout,
+              stderr: Buffer.alloc(0),
+              text: () => stdout.toString(),
+              truncated: false,
+            })
+          },
+        }),
+      )
+      const saved = yield* isolation.settle({ taskID: f.child.id, attempt: 1 })
+      expect(saved.state).toBe("changed")
+      const firstBatch = reads.indexOf(batch)
+      expect(firstBatch).toBeGreaterThanOrEqual(0)
+      expect(reads.slice(firstBatch + 1, firstBatch + 1 + fields.length).sort()).toEqual([...fields].sort())
+      expect(yield* git(f.workPath, ["show", `${saved.tip}:child.txt`])).toBe("captured")
+    }).pipe(Effect.provideService(TaskIsolation.Limits, smallCapture)),
+  { git: true },
+)
+
+it.instance(
   "corrupt retired registries refuse direct child and descendant admission",
   () =>
     Effect.gen(function* () {
